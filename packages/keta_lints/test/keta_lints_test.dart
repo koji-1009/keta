@@ -194,6 +194,68 @@ class Bad {
     });
   });
 
+  group('applyCanonicalFix', () {
+    test('materializes missing mappers', () {
+      const source = '''
+class UserDto {
+  final String id;
+  final int? age;
+  UserDto({required this.id, this.age});
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("factory UserDto.fromJson(Map<String, Object?> json)"));
+      expect(fixed, contains("id: json['id'] as String,"));
+      expect(fixed, contains("age: json['age'] as int?,"));
+      expect(fixed, contains("if (age != null) 'age': age,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+
+    test('reconciles drift across fromJson, toJson, and the schema (M4 gate)',
+        () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+
+class UserDto {
+  final String id;
+  final String name;
+  final String? email;
+  UserDto({required this.id, required this.name, this.email});
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id, 'name': name};
+}
+
+const userDtoSchema = Schema('UserDto', {
+  'type': 'object',
+  'required': ['id', 'name'],
+  'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}},
+});
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("email: json['email'] as String?,"));
+      expect(fixed, contains("if (email != null) 'email': email,"));
+      // The schema constant gained the field so OpenAPI reflects it.
+      expect(fixed, contains("'email': {'type': 'string'}"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('leaves a hand-modified toJson untouched', () {
+      const source = '''
+class Weird {
+  final String id;
+  Weird(this.id);
+  factory Weird.fromJson(Map<String, Object?> json) => Weird(json['id'] as String);
+  Map<String, Object?> toJson() => _custom();
+  Map<String, Object?> _custom() => {'id': id};
+}
+''';
+      expect(applyCanonicalFix(source), source);
+    });
+  });
+
   group('diagnosticId', () {
     test('is stable and 16 hex chars', () {
       final a = diagnosticId('lib/x.dart', 'GET /x', 'keta_route_conflict');
