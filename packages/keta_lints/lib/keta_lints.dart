@@ -2,6 +2,7 @@
 /// contract-drift document diff, and the scaffold code generator.
 library;
 
+export 'src/canonical.dart' show canonicalDiagnostics;
 export 'src/diagnostic.dart' show Diagnostic, diagnosticId;
 export 'src/drift.dart' show contractDrift;
 export 'src/generate.dart' show Scaffold, ScaffoldError, generateScaffold;

@@ -142,6 +142,58 @@ void main() {
     });
   });
 
+  group('canonicalDiagnostics', () {
+    test('a well-formed DTO is clean', () {
+      const source = '''
+class UserDto {
+  final String id;
+  final int? age;
+  UserDto({required this.id, this.age});
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, age: json['age'] as int?);
+  Map<String, Object?> toJson() => {'id': id, if (age != null) 'age': age};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+    });
+
+    test('a DTO without mappers is keta_canonical_missing', () {
+      const source = '''
+class Point {
+  final int x;
+  final int y;
+  Point(this.x, this.y);
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('Point'));
+    });
+
+    test('a mismatched toJson is keta_canonical_drift', () {
+      const source = '''
+class Bad {
+  final String id;
+  final String name;
+  Bad({required this.id, required this.name});
+  factory Bad.fromJson(Map<String, Object?> j) =>
+      Bad(id: j['id'] as String, name: j['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_drift');
+      expect(d.single.message, contains('name'));
+    });
+
+    test('a non-DTO class is ignored', () {
+      const source = 'class Service { void doThing() {} }';
+      expect(canonicalDiagnostics(source), isEmpty);
+    });
+  });
+
   group('diagnosticId', () {
     test('is stable and 16 hex chars', () {
       final a = diagnosticId('lib/x.dart', 'GET /x', 'keta_route_conflict');
