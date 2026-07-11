@@ -91,6 +91,36 @@ void main() {
     });
   });
 
+  group('group prefix captures and path decoding', () {
+    test('a captured group prefix is readable via c.param (string form)',
+        () async {
+      final app = App<Env>();
+      app.group('/tenants/:tid').get('/users/:uid',
+          (c) => c.json({'tid': c.param<String>('tid'), 'uid': c.param<String>('uid')}));
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/tenants/acme/users/42')).json(),
+          {'tid': 'acme', 'uid': '42'});
+    });
+
+    test('a captured group prefix aligns with the typed tuple', () async {
+      final app = App<Env>();
+      app.group('/t/:tid').on(root.lit('p').cap(integer)).get(
+          (c, p) => c.json({'tid': c.param<String>('tid'), 'p': p.$1}));
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/t/acme/p/42')).json(), {'tid': 'acme', 'p': 42});
+    });
+
+    test('captured segments are percent-decoded', () async {
+      final app = App<Env>();
+      app.get('/u/:id', (c) => c.text(c.param<String>('id')));
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/u/john%40doe.com')).text(), 'john@doe.com');
+    });
+  });
+
   group('match precedence and errors', () {
     test('literal beats capture, with backtracking', () async {
       final app = App<Env>();
@@ -176,6 +206,29 @@ void main() {
 
       final denied = await client.get('/x', headers: {'origin': 'https://evil'});
       expect(denied.headers.containsKey('access-control-allow-origin'), isFalse);
+    });
+
+    test('app-level middleware wraps 404/405 (CORS preflight + access log)',
+        () async {
+      final env = newEnv();
+      final app = App<Env>()
+        ..use(accessLog())
+        ..use(cors(allowOrigins: ['https://a.example']));
+      app.get('/x', (c) => c.text('ok'));
+      final client = TestClient(app, env);
+
+      // Preflight to an unregistered method is answered by cors, not 405.
+      final pre =
+          await client.options('/x', headers: {'origin': 'https://a.example'});
+      expect(pre.status, 204);
+      expect(pre.headers['access-control-allow-origin'], 'https://a.example');
+
+      // A 404 still flows through accessLog.
+      final missing = await client.get('/missing');
+      expect(missing.status, 404);
+      final lines = (env.log as MemLog).lines;
+      expect(lines.any((l) => l['msg'] == 'request' && l['status'] == 404),
+          isTrue);
     });
 
     test('tracing extracts a valid traceparent', () async {

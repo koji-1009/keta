@@ -69,6 +69,12 @@ class TestClient<E> {
           {Object? json, Map<String, String>? headers}) =>
       _send('PATCH', path, json, headers);
 
+  Future<TestResponse> options(String path, {Map<String, String>? headers}) =>
+      _send('OPTIONS', path, null, headers);
+
+  Future<TestResponse> head(String path, {Map<String, String>? headers}) =>
+      _send('HEAD', path, null, headers);
+
   Future<TestResponse> _send(String method, String path, Object? json,
       Map<String, String>? headers) async {
     final request = _TestRequest(

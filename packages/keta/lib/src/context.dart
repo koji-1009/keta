@@ -54,6 +54,13 @@ class RequestCtx<E> {
   bool _jsonDecoded = false;
   bool _streamTaken = false;
 
+  /// The matched route's composed handler, or null when nothing matched — set
+  /// by dispatch so app-level middleware can wrap the 404/405 synthesis too.
+  FutureOr<Response> Function(Context<E>)? matched;
+
+  /// Whether some route shares this path (distinguishes 405 from 404).
+  bool pathMatched = false;
+
   RequestCtx({
     required this.env,
     required this.method,

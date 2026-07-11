@@ -99,7 +99,9 @@ class App<E> {
       List<Segment> prefixSegments, List<Middleware<E>> groupMiddleware) {
     final base = _basePath(path);
     final segments = [...prefixSegments, ...base.segments];
-    _register(method, segments, base.captures.toList(), handler, doc,
+    // Captures from the whole path — a captured group prefix must be readable
+    // via c.param too.
+    _register(method, segments, _capturesOf(segments), handler, doc,
         groupMiddleware);
   }
 
@@ -107,10 +109,22 @@ class App<E> {
       Object? doc, List<Segment> prefixSegments,
       List<Middleware<E>> groupMiddleware) {
     final segments = [...prefixSegments, ...path.segments];
-    final captures = path.captures.toList();
-    _register(method, segments, captures,
-        _typedAdapter(path, captures, handler), doc, groupMiddleware);
+    // The tuple carries only the base path's captures; any group-prefix
+    // captures precede them in match order, so the adapter reads the base
+    // captures starting past the prefix ones.
+    final prefixCaptureCount = prefixSegments.whereType<CaptureSegment>().length;
+    _register(
+      method,
+      segments,
+      _capturesOf(segments),
+      _typedAdapter(path, path.captures.toList(), prefixCaptureCount, handler),
+      doc,
+      groupMiddleware,
+    );
   }
+
+  static List<Capture<Object?>> _capturesOf(List<Segment> segments) =>
+      [for (final s in segments.whereType<CaptureSegment>()) s.capture];
 
   void _register(String method, List<Segment> segments,
       List<Capture<Object?>> captures, Handler<E> handler, Object? doc,
@@ -133,15 +147,15 @@ class App<E> {
   /// parsed at the boundary (a [FormatException] becomes 400) and delivered as
   /// the path's typed tuple.
   Handler<E> _typedAdapter<T>(Path<T> path, List<Capture<Object?>> captures,
-      TypedHandler<E, T> handler) {
+      int offset, TypedHandler<E, T> handler) {
     return (Context<E> c) {
       final raw = ctxOf(c).orderedCaptures;
       final parsed = List<Object?>.filled(captures.length, null);
       for (var i = 0; i < captures.length; i++) {
         try {
-          parsed[i] = captures[i].parse(raw[i]);
+          parsed[i] = captures[i].parse(raw[offset + i]);
         } on FormatException {
-          throw KetaException(400, 'invalid path parameter "${raw[i]}"');
+          throw KetaException(400, 'invalid path parameter "${raw[offset + i]}"');
         }
       }
       return handler(c, path.buildTuple(parsed));
@@ -163,15 +177,16 @@ class App<E> {
         throw StateError(
             'route conflict: ${reg.method} ${reg.template} registered twice');
       }
-      final middleware = [..._middleware, ...reg.groupMiddleware];
-      final composed = _compose(middleware, reg.handler);
-      _insert(root, reg, composed);
+      // Only group middleware wraps the leaf; app-level middleware wraps the
+      // whole dispatch (below) so it also covers 404/405 — e.g. CORS preflight.
+      _insert(root, reg, _compose(reg.groupMiddleware, reg.handler));
     }
     final baseLog = log ??
         (env is HasLog
             ? (env as HasLog).log
             : StdoutLog(flushInterval: Duration.zero));
-    return Router<E>._(root, env, baseLog, maxBodyBytes);
+    return Router<E>._(
+        root, env, baseLog, maxBodyBytes, [..._middleware]);
   }
 
   /// Starts the server, booting one env per isolate, and returns a [Server]
@@ -331,39 +346,61 @@ class Router<E> {
   final int maxBodyBytes;
   final Random _random = Random.secure();
 
-  Router._(this._root, this.env, this.baseLog, this.maxBodyBytes);
+  /// App-level middleware composed around the whole dispatch, including the
+  /// 404/405 synthesis, so a cross-cutting concern (CORS preflight, access log)
+  /// covers unmatched requests too.
+  late final Handler<E> _appHandler;
+
+  Router._(this._root, this.env, this.baseLog, this.maxBodyBytes,
+      List<Middleware<E>> appMiddleware) {
+    var handler = _terminal;
+    for (final m in appMiddleware.reversed) {
+      final next = handler;
+      handler = (c) => m(c, next);
+    }
+    _appHandler = handler;
+  }
 
   FutureOr<Response> dispatch(TransportRequest request) {
-    final segments = _splitPath(request.uri.path);
+    final segments = _decodedSegments(request.uri);
     final captured = <String>[];
     final (compiled, pathMatched) =
         _walk(_root, segments, 0, request.method, captured);
-    if (compiled == null) {
-      return Response.json(
-        {'error': pathMatched ? 'method not allowed' : 'not found'},
-        pathMatched ? 405 : 404,
-      );
-    }
     final reqId = _reqId();
+    final route = compiled?.template ?? request.uri.path;
     final params = <String, String>{
-      for (var i = 0; i < compiled.captureNames.length; i++)
-        compiled.captureNames[i]: captured[i],
+      if (compiled != null)
+        for (var i = 0; i < compiled.captureNames.length; i++)
+          compiled.captureNames[i]: captured[i],
     };
     final ctx = RequestCtx<E>(
       env: env,
       method: request.method,
       uri: request.uri,
-      route: compiled.template,
+      route: route,
       headers: request.headers,
       remoteAddress: request.remoteAddress,
       params: params,
       orderedCaptures: captured,
-      log: baseLog.withFields({'reqId': reqId, 'route': compiled.template}),
+      log: baseLog.withFields({'reqId': reqId, 'route': route}),
       maxBodyBytes: maxBodyBytes,
       body: request.bodyStream,
-    );
+    )
+      ..matched = compiled?.handler
+      ..pathMatched = pathMatched;
     final c = Context<E>(ctx);
-    return guard(() => compiled.handler(c), (e, st) => _fallback(e, st, ctx));
+    return guard(() => _appHandler(c), (e, st) => _fallback(e, st, ctx));
+  }
+
+  /// The innermost handler: the matched route, or the 404/405 response.
+  FutureOr<Response> _terminal(Context<E> c) {
+    final handler = ctxOf(c).matched;
+    if (handler != null) return handler(c);
+    final pathMatched = ctxOf(c).pathMatched;
+    return Response.json(
+      {'error': pathMatched ? 'method not allowed' : 'not found'},
+      pathMatched ? 405 : 404,
+    );
   }
 
   /// The last-resort fallback, always applied: `KetaException` maps to its
@@ -413,8 +450,11 @@ class Router<E> {
   return (null, pathMatched);
 }
 
-List<String> _splitPath(String path) =>
-    [for (final s in path.split('/')) if (s.isNotEmpty) s];
+/// Matchable path segments, percent-decoded, with empty segments dropped so a
+/// trailing slash and interior `//` stay tolerant. `uri.pathSegments` decodes
+/// each segment and keeps `%2F` inside a single segment.
+List<String> _decodedSegments(Uri uri) =>
+    [for (final s in uri.pathSegments) if (s.isNotEmpty) s];
 
 /// A running server.
 abstract interface class Server {
