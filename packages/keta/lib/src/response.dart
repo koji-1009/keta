@@ -17,11 +17,12 @@ class Response {
 
   Response(this.status, {Map<String, String>? headers, this.body = ''})
       : headers = _lowerCased(headers) {
-    assert(
-      body is String || body is List<int> || body is Stream<List<int>>,
-      'Response body must be String | List<int> | Stream<List<int>>, '
-      'got ${body.runtimeType}',
-    );
+    // Enforced unconditionally (not via assert): in a release binary an invalid
+    // body would otherwise be written as a silent empty 200.
+    if (body is! String && body is! List<int> && body is! Stream<List<int>>) {
+      throw ArgumentError.value(body, 'body',
+          'must be String, List<int>, or Stream<List<int>>');
+    }
   }
 
   static Map<String, String> _lowerCased(Map<String, String>? headers) {

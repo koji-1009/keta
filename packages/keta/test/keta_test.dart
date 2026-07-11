@@ -218,6 +218,15 @@ void main() {
     });
   });
 
+  group('Response', () {
+    test('rejects an invalid body type unconditionally (not assert-only)', () {
+      expect(() => Response(200, body: {'a': 1}),
+          throwsA(isA<ArgumentError>()));
+      expect(Response(200, body: 'ok').body, 'ok');
+      expect(Response(200, body: const [1, 2]).body, const [1, 2]);
+    });
+  });
+
   group('testContext', () {
     test('builds a usable context for a handler', () async {
       final c = testContext(newEnv(), path: '/x', headers: {'X-A': 'b'});

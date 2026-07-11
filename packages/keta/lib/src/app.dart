@@ -150,7 +150,11 @@ class App<E> {
 
   /// Compiles the routing table into a dispatcher, failing fast on conflicts.
   /// Shared by [serve] and the test client so both enforce the same checks.
-  Router<E> compile(E env, {int maxBodyBytes = 1 << 20}) {
+  ///
+  /// [log] overrides the base logger; without it, the logger comes from a
+  /// [HasLog] env, or a timer-free [StdoutLog] fallback (so a test client
+  /// leaves no periodic timer pinning the isolate).
+  Router<E> compile(E env, {int maxBodyBytes = 1 << 20, Log? log}) {
     final root = _TrieNode<E>();
     final seen = <String>{};
     for (final reg in _regs) {
@@ -163,7 +167,10 @@ class App<E> {
       final composed = _compose(middleware, reg.handler);
       _insert(root, reg, composed);
     }
-    final baseLog = env is HasLog ? (env as HasLog).log : StdoutLog();
+    final baseLog = log ??
+        (env is HasLog
+            ? (env as HasLog).log
+            : StdoutLog(flushInterval: Duration.zero));
     return Router<E>._(root, env, baseLog, maxBodyBytes);
   }
 
@@ -195,9 +202,14 @@ class App<E> {
     // Worker 0 runs on the current isolate; bind it first so a configuration
     // error surfaces here before any child is spawned.
     final env = await boot();
-    final router = compile(env, maxBodyBytes: maxBodyBytes);
-    final server =
-        await (transport ?? const H1Transport()).bind(port, router.dispatch);
+    // A running server flushes periodically; only the env-less fallback needs a
+    // timer here (a HasLog env owns its own).
+    final fallbackLog = env is HasLog ? null : StdoutLog();
+    final router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
+    final t = transport ??
+        H1Transport(
+            onError: (e, st) => router.baseLog.error('transport error', e, st));
+    final server = await t.bind(port, router.dispatch);
     if (isolates == 1) {
       return _Server<E>(env, router.baseLog, server);
     }
@@ -448,11 +460,13 @@ class _MultiServer<E> implements Server {
 
   @override
   Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
+    final ports = <ReceivePort>[];
     final acks = <Future<void>>[];
     for (final worker in _workers) {
       final ack = ReceivePort();
+      ports.add(ack);
       worker.control.send((ack.sendPort, grace.inMilliseconds));
-      acks.add(ack.first.then((_) => ack.close()));
+      acks.add(ack.first.then((_) {}));
     }
     await _transport.close(grace: grace);
     if (_env is Disposable) await (_env as Disposable).close();
@@ -460,6 +474,11 @@ class _MultiServer<E> implements Server {
     if (_baseLog is StdoutLog) _baseLog.dispose();
     await Future.wait(acks)
         .timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
+    // Close every ack port whether or not the ack arrived — an un-closed
+    // ReceivePort keeps this isolate alive and hangs the process.
+    for (final port in ports) {
+      port.close();
+    }
     for (final worker in _workers) {
       worker.isolate.kill(priority: Isolate.immediate);
     }
@@ -497,8 +516,11 @@ Future<void> _workerEntry<E>(
     (App<E>, Future<E> Function(), int, int, SendPort) args) async {
   final (app, boot, port, maxBodyBytes, ready) = args;
   final env = await boot();
-  final router = app.compile(env, maxBodyBytes: maxBodyBytes);
-  final transport = await const H1Transport().bind(port, router.dispatch);
+  final fallbackLog = env is HasLog ? null : StdoutLog();
+  final router = app.compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
+  final transport = await H1Transport(
+          onError: (e, st) => router.baseLog.error('transport error', e, st))
+      .bind(port, router.dispatch);
 
   final control = ReceivePort();
   ready.send(control.sendPort);
@@ -506,6 +528,7 @@ Future<void> _workerEntry<E>(
   await transport.close(grace: Duration(milliseconds: graceMs));
   if (env is Disposable) await (env as Disposable).close();
   await router.baseLog.flush();
+  if (router.baseLog is StdoutLog) (router.baseLog as StdoutLog).dispose();
   control.close();
   ack.send(null);
 }

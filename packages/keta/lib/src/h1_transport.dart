@@ -9,11 +9,19 @@ import 'transport.dart';
 
 /// The default HTTP/1.1 transport, built on `dart:io`. Uses only the SDK, so
 /// the core's zero-dependency rule holds even with a transport bundled.
+///
+/// No path lets an error escape to the root zone: request handling, response
+/// writing, and connection acceptance all report failures through [onError]
+/// instead of terminating the isolate.
 class H1Transport implements Transport {
   /// The bind address; defaults to all IPv4 interfaces when null.
   final Object? address;
 
-  const H1Transport({this.address});
+  /// Reports transport-level failures (write errors, accept errors) instead of
+  /// letting them reach the root zone. Falls back to stderr when null.
+  final void Function(Object error, StackTrace stack)? onError;
+
+  const H1Transport({this.address, this.onError});
 
   @override
   Future<TransportServer> bind(
@@ -25,35 +33,49 @@ class H1Transport implements Transport {
     final server = await HttpServer.bind(
         address ?? InternetAddress.anyIPv4, port,
         shared: true);
-    return _H1Server(server, onRequest);
+    return _H1Server(server, onRequest, onError ?? _toStderr);
   }
+}
+
+void _toStderr(Object error, StackTrace stack) {
+  stderr.writeln('keta H1 transport error: $error');
 }
 
 class _H1Server implements TransportServer {
   final HttpServer _server;
   final FutureOr<Response> Function(TransportRequest) _onRequest;
+  final void Function(Object, StackTrace) _onError;
   final Set<Future<void>> _inFlight = {};
 
-  _H1Server(this._server, this._onRequest) {
-    _server.listen(_accept);
+  _H1Server(this._server, this._onRequest, this._onError) {
+    _server.listen(_accept, onError: _onError);
   }
 
   void _accept(HttpRequest request) {
-    final done = _handle(request);
+    // _handle never throws (it catches internally), but guard the derived
+    // future so no rejection can reach the root zone.
+    final done = _handle(request).catchError(_onError);
     _inFlight.add(done);
     done.whenComplete(() => _inFlight.remove(done));
   }
 
   Future<void> _handle(HttpRequest request) async {
-    final response = await _onRequest(_H1Request(request));
+    Response response;
+    try {
+      response = await _onRequest(_H1Request(request));
+    } catch (error, stack) {
+      // The app applies a last-resort fallback, so this is defensive only.
+      _onError(error, stack);
+      response = Response(500, body: '');
+    }
     await _write(request.response, response);
   }
 
   Future<void> _write(HttpResponse out, Response response) async {
-    out.statusCode = response.status;
-    response.headers.forEach(out.headers.set);
-    final body = response.body;
     try {
+      out.statusCode = response.status;
+      response.headers.forEach(out.headers.set);
+      final body = response.body;
       switch (body) {
         case String():
           out.add(utf8.encode(body));
@@ -63,20 +85,27 @@ class _H1Server implements TransportServer {
           await out.addStream(body);
       }
       await out.close();
-    } catch (_) {
-      // The client vanished mid-write; abandon the response quietly.
-      await out.close().catchError((_) {});
+    } catch (error, stack) {
+      // Header/framing errors and mid-stream body failures land here. Log
+      // rather than swallow, and destroy the connection so a partially-written
+      // body is never framed as a complete response.
+      _onError(error, stack);
+      try {
+        await out.close();
+      } catch (_) {}
     }
   }
 
   @override
   Future<void> close({Duration grace = const Duration(seconds: 30)}) async {
-    // Stop accepting, then let in-flight requests finish within the grace
-    // window before closing connections by force.
-    await _server.close();
+    // Stop accepting, wait out in-flight requests within the grace window, then
+    // force-close anything still lingering.
+    final stopped = _server.close();
     if (_inFlight.isNotEmpty) {
       await Future.wait(_inFlight).timeout(grace, onTimeout: () => const []);
     }
+    await _server.close(force: true).catchError((_) {});
+    await stopped.catchError((_) {});
   }
 }
 

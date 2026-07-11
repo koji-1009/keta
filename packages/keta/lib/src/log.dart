@@ -29,6 +29,7 @@ class StdoutLog implements Log {
   final Map<String, Object?> _baked;
   final List<String> _buffer;
   Timer? _timer;
+  Future<void> _flushing = Future<void>.value();
 
   StdoutLog({IOSink? sink, Duration flushInterval = const Duration(seconds: 1)})
       : _sink = sink ?? stdout,
@@ -83,7 +84,17 @@ class StdoutLog implements Log {
       _emit('error', msg, fields, error: error, st: st);
 
   @override
-  Future<void> flush() async {
+  Future<void> flush() {
+    // Chain onto any in-flight flush: overlapping IOSink.flush() calls (the
+    // background timer racing a shutdown flush, or a slow sink) would throw
+    // "StreamSink is bound to a stream". Serializing them keeps the error off
+    // the root zone.
+    final result = _flushing.then((_) => _drain());
+    _flushing = result.catchError((_) {});
+    return result;
+  }
+
+  Future<void> _drain() async {
     if (_buffer.isEmpty) return;
     // Snapshot then clear before awaiting, so lines enqueued during the flush
     // are retained for the next drain rather than dropped.
