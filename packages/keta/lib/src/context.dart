@@ -168,6 +168,9 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// The header named [name] (case-insensitive), or null.
   String? header(String name) => _raw.headers[name.toLowerCase()];
 
+  /// All request headers, with lower-cased names. Read-only.
+  Map<String, String> get headers => Map.unmodifiable(_raw.headers);
+
   /// The path parameter [name] parsed as `T` (String, int, double, or bool).
   /// An unsupported `T` is an `ArgumentError`; a parse failure is a
   /// `KetaException(400)`.

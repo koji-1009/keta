@@ -14,4 +14,5 @@ workspace:
   - packages/keta_sqlite
   - packages/keta_openapi
   - packages/keta_lints
+  - packages/keta_shelf
   - example
