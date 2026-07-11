@@ -6,23 +6,30 @@ import 'package:keta_lints/keta_lints.dart';
 ///
 ///   dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
 ///   dart run keta_lints:check canonical <file-or-dir> ...
+///   dart run keta_lints:check routes <file-or-dir> ...
+///   dart run keta_lints:check internal-await <file-or-dir> ...
 ///
 /// `drift` is the contract-drift document diff between the externally-supplied
-/// contract (oracle) and the OpenAPI the code emits (shadow, from
-/// `dart run tool/openapi.dart`). `canonical` reports DTOs whose mappers are
-/// missing or drifted.
+/// contract (oracle) and the OpenAPI the code emits. `canonical` reports DTOs
+/// whose mappers are missing or drifted. `routes` reports unknown params and
+/// unused captures. `internal-await` guards the framework's synchronous path.
 void main(List<String> args) {
   if (args.isEmpty) {
-    stderr.writeln('usage: check <drift|canonical> ...');
+    stderr.writeln('usage: check <drift|canonical|routes|internal-await> ...');
     exit(64);
   }
   switch (args.first) {
     case 'drift':
       _drift(args.sublist(1));
     case 'canonical':
-      _canonical(args.sublist(1));
+      _sourceCheck(args.sublist(1), canonicalDiagnostics, 'no canonical issues');
+    case 'routes':
+      _sourceCheck(args.sublist(1), routeDiagnostics, 'no route issues');
+    case 'internal-await':
+      _sourceCheck(
+          args.sublist(1), internalAwaitDiagnostics, 'no internal awaits');
     default:
-      stderr.writeln('unknown check "${args.first}" (expected drift|canonical)');
+      stderr.writeln('unknown check "${args.first}"');
       exit(64);
   }
 }
@@ -37,16 +44,19 @@ void _drift(List<String> args) {
   _report(contractDrift(oracle, shadow, file: args[0]), 'no contract drift');
 }
 
-void _canonical(List<String> args) {
+void _sourceCheck(
+    List<String> args,
+    List<Diagnostic> Function(String source, {String file}) analyze,
+    String cleanMessage) {
   if (args.isEmpty) {
-    stderr.writeln('usage: check canonical <file-or-dir> ...');
+    stderr.writeln('usage: check <kind> <file-or-dir> ...');
     exit(64);
   }
   final diagnostics = [
     for (final file in _dartFiles(args))
-      ...canonicalDiagnostics(File(file).readAsStringSync(), file: file),
+      ...analyze(File(file).readAsStringSync(), file: file),
   ];
-  _report(diagnostics, 'no canonical issues');
+  _report(diagnostics, cleanMessage);
 }
 
 Iterable<String> _dartFiles(List<String> paths) sync* {

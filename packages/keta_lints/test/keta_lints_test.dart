@@ -256,6 +256,64 @@ class Weird {
     });
   });
 
+  group('routeDiagnostics', () {
+    test('a matched capture is clean', () {
+      const source = '''
+void register(app) {
+  app.get('/users/:id', (c) => c.text(c.param('id')));
+}
+''';
+      expect(routeDiagnostics(source), isEmpty);
+    });
+
+    test('an unused capture is keta_capture_unused', () {
+      const source = '''
+void register(app) {
+  app.get('/users/:id', (c) => c.text('x'));
+}
+''';
+      final d = routeDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_capture_unused');
+      expect(d.single.message, contains(':id'));
+    });
+
+    test('an unknown param is keta_param_unknown', () {
+      const source = '''
+void register(app) {
+  app.get('/users/:id', (c) => c.text(c.param('name')));
+}
+''';
+      final rules = routeDiagnostics(source).map((d) => d.rule).toSet();
+      expect(rules, containsAll(['keta_param_unknown', 'keta_capture_unused']));
+    });
+  });
+
+  group('internalAwaitDiagnostics', () {
+    test('await-free code is clean', () {
+      const source = 'int add(int a, int b) => a + b;';
+      expect(internalAwaitDiagnostics(source), isEmpty);
+    });
+
+    test('an await is flagged', () {
+      const source = 'Future<void> f() async { await g(); }\nFuture<void> g() async {}';
+      final d = internalAwaitDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_internal_await');
+    });
+
+    test('a justified await is suppressed', () {
+      const source = '''
+Future<void> f() async {
+  // keta:allow-await
+  await g();
+}
+Future<void> g() async {}
+''';
+      expect(internalAwaitDiagnostics(source), isEmpty);
+    });
+  });
+
   group('diagnosticId', () {
     test('is stable and 16 hex chars', () {
       final a = diagnosticId('lib/x.dart', 'GET /x', 'keta_route_conflict');
