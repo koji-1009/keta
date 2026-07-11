@@ -49,7 +49,7 @@ class SqliteDb implements Db {
   }
 
   @override
-  Future<void> close() async => _db.dispose();
+  Future<void> close() async => _db.close();
 }
 
 class _SqliteConn implements DbConn {
