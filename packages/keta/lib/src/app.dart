@@ -1,6 +1,7 @@
 library;
 
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'chain.dart';
@@ -166,28 +167,45 @@ class App<E> {
     return Router<E>._(root, env, baseLog, maxBodyBytes);
   }
 
-  /// Starts the server on the current isolate and returns a [Server] that shuts
-  /// down gracefully.
+  /// Starts the server, booting one env per isolate, and returns a [Server]
+  /// that shuts every isolate down gracefully.
   ///
-  /// [isolates] must be 1 here: an already-booted [env] instance cannot be
-  /// replicated across isolates (its connections do not cross the boundary). To
-  /// run several listeners, use [serveIsolates], which boots one env per
-  /// isolate.
+  /// [boot] runs once on this isolate and once inside each of the
+  /// [isolates] − 1 spawned isolates; every isolate owns and later closes its
+  /// own env — the signature makes "boots N times" visible rather than passing
+  /// one instance that cannot cross an isolate boundary. With [isolates] > 1,
+  /// [boot] and this app's handlers must be sendable (top-level or static
+  /// tear-offs, or closures over sendable state); a non-sendable one fails fast
+  /// with a [StateError] when the isolate is spawned. A custom [transport] is
+  /// only supported with a single isolate.
   Future<Server> serve(
-    E env, {
+    Future<E> Function() boot, {
     int port = 8080,
     int isolates = 1,
     Transport? transport,
     int maxBodyBytes = 1 << 20,
   }) async {
-    if (isolates != 1) {
-      throw ArgumentError.value(isolates, 'isolates',
-          'serve() runs a single isolate; use serveIsolates() for more');
+    if (isolates < 1) {
+      throw ArgumentError.value(isolates, 'isolates', 'must be >= 1');
     }
+    if (isolates > 1 && transport != null) {
+      throw ArgumentError.value(
+          transport, 'transport', 'not supported with isolates > 1');
+    }
+    // Worker 0 runs on the current isolate; bind it first so a configuration
+    // error surfaces here before any child is spawned.
+    final env = await boot();
     final router = compile(env, maxBodyBytes: maxBodyBytes);
-    final t = transport ?? const H1Transport();
-    final server = await t.bind(port, router.dispatch);
-    return _Server<E>(env, router.baseLog, server);
+    final server =
+        await (transport ?? const H1Transport()).bind(port, router.dispatch);
+    if (isolates == 1) {
+      return _Server<E>(env, router.baseLog, server);
+    }
+    final workers = <_Worker>[];
+    for (var i = 1; i < isolates; i++) {
+      workers.add(await _spawnWorker<E>(this, boot, port, maxBodyBytes));
+    }
+    return _MultiServer<E>(env, router.baseLog, server, workers);
   }
 
   void _insert(_TrieNode<E> root, _Reg<E> reg, Handler<E> composed) {
@@ -408,6 +426,88 @@ class _Server<E> implements Server {
     await _baseLog.flush();
     if (_baseLog is StdoutLog) _baseLog.dispose();
   }
+}
+
+/// A handle to a spawned worker isolate and its shutdown control port.
+class _Worker {
+  final Isolate isolate;
+  final SendPort control;
+
+  _Worker(this.isolate, this.control);
+}
+
+/// The server for [App.serve] with `isolates > 1`: worker 0 runs here, the rest
+/// in spawned isolates driven over control ports.
+class _MultiServer<E> implements Server {
+  final E _env;
+  final Log _baseLog;
+  final TransportServer _transport;
+  final List<_Worker> _workers;
+
+  _MultiServer(this._env, this._baseLog, this._transport, this._workers);
+
+  @override
+  Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
+    final acks = <Future<void>>[];
+    for (final worker in _workers) {
+      final ack = ReceivePort();
+      worker.control.send((ack.sendPort, grace.inMilliseconds));
+      acks.add(ack.first.then((_) => ack.close()));
+    }
+    await _transport.close(grace: grace);
+    if (_env is Disposable) await (_env as Disposable).close();
+    await _baseLog.flush();
+    if (_baseLog is StdoutLog) _baseLog.dispose();
+    await Future.wait(acks)
+        .timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
+    for (final worker in _workers) {
+      worker.isolate.kill(priority: Isolate.immediate);
+    }
+  }
+}
+
+Future<_Worker> _spawnWorker<E>(
+    App<E> app, Future<E> Function() boot, int port, int maxBodyBytes) async {
+  final ready = ReceivePort();
+  final errors = ReceivePort();
+  try {
+    final isolate = await Isolate.spawn(
+      _workerEntry<E>,
+      (app, boot, port, maxBodyBytes, ready.sendPort),
+      onError: errors.sendPort,
+      errorsAreFatal: true,
+    );
+    // Whichever comes first: the child's control port (bound) or an error.
+    final control = await Future.any([
+      ready.first,
+      errors.first.then<Object?>(
+          (e) => throw StateError('worker failed to start: $e')),
+    ]);
+    return _Worker(isolate, control as SendPort);
+  } on ArgumentError catch (e) {
+    throw StateError(
+        'serve(isolates > 1) requires a sendable boot and handlers: $e');
+  } finally {
+    ready.close();
+    errors.close();
+  }
+}
+
+Future<void> _workerEntry<E>(
+    (App<E>, Future<E> Function(), int, int, SendPort) args) async {
+  final (app, boot, port, maxBodyBytes, ready) = args;
+  final env = await boot();
+  final router = app.compile(env, maxBodyBytes: maxBodyBytes);
+  final transport = await const H1Transport().bind(port, router.dispatch);
+
+  final control = ReceivePort();
+  ready.send(control.sendPort);
+  final (SendPort ack, int graceMs) = await control.first as (SendPort, int);
+  await transport.close(grace: Duration(milliseconds: graceMs));
+  if (env is Disposable) await (env as Disposable).close();
+  await router.baseLog.flush();
+  control.close();
+  ack.send(null);
 }
 
 /// An environment that exposes a [Log]. When `E` implements this, per-request

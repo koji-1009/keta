@@ -25,7 +25,7 @@ void main() {
     app.get('/hello/:who',
         (c) => c.json({'hello': c.param<String>('who')}));
 
-    final server = await app.serve(env, port: 8091);
+    final server = await app.serve(() async => env, port: 8091);
 
     final client = HttpClient();
     final req = await client.getUrl(Uri.parse('http://127.0.0.1:8091/hello/keta'));

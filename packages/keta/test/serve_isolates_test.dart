@@ -18,16 +18,19 @@ class IsoEnv implements HasLog, Disposable {
 }
 
 // Top-level so it is sendable to spawned isolates. Runs once per isolate.
-(App<IsoEnv>, IsoEnv) isoSetup() {
+Future<IsoEnv> bootIso() async =>
+    IsoEnv(StdoutLog(flushInterval: Duration.zero));
+
+App<IsoEnv> buildIsoApp() {
   final app = App<IsoEnv>()..use(recover());
   app.get('/ping', (c) => c.json({'pong': true}));
-  return (app, IsoEnv(StdoutLog(flushInterval: Duration.zero)));
+  return app;
 }
 
 void main() {
-  test('serveIsolates runs multiple listeners and shuts them all down',
+  test('serve(isolates: n) runs multiple listeners and shuts them all down',
       () async {
-    final server = await serveIsolates(isoSetup, isolates: 3, port: 8092);
+    final server = await buildIsoApp().serve(bootIso, isolates: 3, port: 8092);
 
     final client = HttpClient();
     for (var i = 0; i < 6; i++) {
