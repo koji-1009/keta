@@ -89,6 +89,37 @@ void main() {
       expect(scaffold.contractTest, contains('userDtoSchema.validate'));
     });
 
+    test('escapes newlines and \$ in generated strings', () {
+      final doc = {
+        'openapi': '3.1.0',
+        'info': {'title': 't', 'version': '1'},
+        'paths': {
+          '/x': {
+            'get': {
+              'summary': 'Charge \$5\nnow',
+              'responses': {'200': <String, Object?>{}},
+            },
+          },
+        },
+        'components': {
+          'schemas': {
+            'D': {
+              'type': 'object',
+              'required': ['n'],
+              'properties': {
+                'n': {'type': 'string', 'description': 'line1\nline2'},
+              },
+            },
+          },
+        },
+      };
+      final s = generateScaffold(doc);
+      expect(s.routes, contains(r'\$'));
+      expect(s.routes, contains(r'\n'));
+      expect(s.dtos, contains(r'line1\nline2'));
+      expect(s.dtos, isNot(contains('line1\nline2'))); // no raw newline
+    });
+
     test('rejects out-of-canonical constructs', () {
       expect(
         () => generateScaffold({

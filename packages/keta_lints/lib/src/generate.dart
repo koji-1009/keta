@@ -287,7 +287,7 @@ String _generateRoutes(
 String? _routeDoc(Map<String, Object?> op) {
   final parts = <String>[];
   final summary = op['summary'];
-  if (summary is String) parts.add("summary: '${summary.replaceAll("'", r"\'")}'");
+  if (summary is String) parts.add('summary: ${dartStringLiteral(summary)}');
   final request = _schemaRefName(((op['requestBody'] as Map?)?['content']));
   if (request != null) parts.add('requestBody: ${_lowerFirst(request)}Schema');
   final ok = (op['responses'] as Map?)?['200'];

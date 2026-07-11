@@ -40,13 +40,27 @@ void _write(StringBuffer buffer, Object? value) {
   }
 }
 
-/// A single-quoted Dart string, using a raw literal when the value contains a
-/// `$` (as JSON Schema `$ref` keys do) so no escaping is needed.
+/// A single-quoted Dart string literal. Uses a raw literal for a single-line
+/// value containing `$` (as JSON Schema `$ref` keys do); otherwise escapes
+/// backslash, quote, `$`, and control characters (newlines, `\r`, `\t`) — a raw
+/// string can't span lines, so multi-line values must go through the escape
+/// path.
+String dartStringLiteral(String value) => _string(value);
+
 String _string(String value) {
-  if (value.contains(r'$') && !value.contains("'") && !value.contains(r'\')) {
+  final singleLine = !value.contains('\n') && !value.contains('\r');
+  if (singleLine &&
+      value.contains(r'$') &&
+      !value.contains("'") &&
+      !value.contains(r'\')) {
     return "r'$value'";
   }
-  final escaped =
-      value.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll(r'$', r'\$');
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll("'", r"\'")
+      .replaceAll(r'$', r'\$')
+      .replaceAll('\n', r'\n')
+      .replaceAll('\r', r'\r')
+      .replaceAll('\t', r'\t');
   return "'$escaped'";
 }
