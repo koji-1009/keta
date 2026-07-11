@@ -1,0 +1,16 @@
+# keta monorepo — pub workspace root.
+# All keta_* packages resolve together so cross-package changes stay atomic
+# and a single CI (performance budget, dependency budget, quality gates) runs
+# across the whole tree (§1 "Repository layout").
+name: keta_workspace
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+workspace:
+  - packages/keta
+  - packages/keta_db
+  - packages/keta_sqlite
+  - packages/keta_openapi
+  - packages/keta_lints
