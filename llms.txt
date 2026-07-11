@@ -1,0 +1,166 @@
+# keta — agent guide
+
+keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK
+^3.12). Routing, middleware, transactions, lifecycle, and OpenAPI output are
+carried by a constructor graph and routes-as-values. User code reads as plain
+Dart. This file is enough to write handlers, DTOs, mappers, schema constants,
+and tests by hand.
+
+Packages: `keta` (core), `keta_db` + `keta_sqlite` (database), `keta_openapi`
+(Schema + OpenAPI). Dependencies flow inward; `keta` has none beyond the SDK.
+
+## Routing
+
+Two syntaxes converge on one `Path` value.
+
+String syntax — plain handler, parameters read via `c.param`:
+
+```dart
+app.get('/health', (c) => c.text('ok'));
+app.get('/users/:id', (c) => c.text(c.param<String>('id')));
+```
+
+Typed DSL — `app.on(path)` opens the same verbs; the handler receives the
+captured tuple. Build paths from `root` with `.lit()` and `.cap()`; captures
+are `str`, `integer`, `dbl`, `boolean`, named with `named(base, 'x')`:
+
+```dart
+app.on(root.lit('users').cap(named(str, 'uid')).lit('posts').cap(named(integer, 'postId')))
+   .post((c, (String, int) p) async {
+     return c.text('${p.$1}/${p.$2}');
+   });
+```
+
+Verbs: `get post put delete patch head options`. Registering the same
+method+template twice is a boot-time `StateError`. Match precedence is literal
+over capture. `app.group('/prefix')..use(m)` scopes middleware to a subtree.
+
+## Context
+
+`c.env` (your environment), `c.method`, `c.uri`, `c.header('name')` (lower-cased),
+`c.remoteAddress`. `c.param<T>('name')` parses String/int/double/bool (bad input
+→ 400). `c.get<T>(key)` / `c.tryGet` / `c.set` use identity `Key<T>('name')`
+(never const). `c.body()` decodes JSON (cached; bad JSON → 400; over the size
+limit → 413); `c.bodyBytes()` / `c.bodyStream()` for raw. `c.aborted` completes
+on timeout or disconnect (cooperative). Responses: `c.json(value, [status])`,
+`c.text(str, [status])`. `c.log` is `env.log` with reqId and route baked in.
+
+## Errors & middleware
+
+Throw `KetaException(status, message, [detail])` for a controlled response. A
+non-removable last-resort fallback converts any uncaught error just before the
+transport: `KetaException` → its status + `{"error": message}`, anything else →
+500 + empty body + logged. `recover()` is the customizable form of the same.
+Built-in middleware: `accessLog()`, `recover()`, `cors(allowOrigins: [...])`,
+`timeout(Duration)`, `tracing()`. Apply with `app.use(...)`; they run in
+registration order, app-wide before group.
+
+## Canonical forms (write these exactly)
+
+Scope: primitives (String/int/double/bool), `T?` (optional, omitted from
+`required` and from `toJson` when null), `List<T>`, nested DTOs (`$ref` + deps),
+enums (values are `name` strings), and sealed types (oneOf + discriminator).
+Generics are out of scope.
+
+The complete DTO shape — hand-written, agent-written, and lint-materialized code
+must be identical:
+
+```dart
+enum Role { admin, member }
+
+class UserDto {
+  final String id;
+  final String name;
+  final int? age;
+  final Role role;
+  final List<String> tags;
+  UserDto({required this.id, required this.name, this.age,
+      required this.role, required this.tags});
+
+  factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        age: json['age'] as int?,
+        role: Role.values.byName(json['role'] as String),
+        tags: (json['tags'] as List).cast<String>(),
+      );
+
+  Map<String, Object?> toJson() => {
+        'id': id,
+        'name': name,
+        if (age != null) 'age': age,
+        'role': role.name,
+        'tags': tags,
+      };
+}
+
+const userDtoSchema = Schema('UserDto', {
+  'type': 'object',
+  'required': ['id', 'name', 'role', 'tags'],
+  'properties': {
+    'id': {'type': 'string'},
+    'name': {'type': 'string'},
+    'age': {'type': 'integer'},
+    'role': {'type': 'string', 'enum': ['admin', 'member']},
+    'tags': {'type': 'array', 'items': {'type': 'string'}},
+  },
+});
+```
+
+Nested DTO: in `fromJson`, `Other.fromJson(json['x'] as Map<String, Object?>)`;
+in the schema, `'x': {'\$ref': '#/components/schemas/Other'}` and
+`deps: [otherSchema]`.
+
+Optional `factory X.fromRow(Map<String, Object?> row)` builds from a DB row —
+same shape as `fromJson`, but numeric-origin values are converted explicitly.
+
+Sealed with a discriminator — `switch` on the `type` field (lowerCamel variant
+names); schema is `oneOf` + `discriminator`, each variant an ordinary DTO:
+
+```dart
+sealed class Event {
+  factory Event.fromJson(Map<String, Object?> json) => switch (json['type']) {
+        'created' => Created.fromJson(json),
+        'deleted' => Deleted.fromJson(json),
+        _ => throw const KetaException(400, 'unknown event type'),
+      };
+  Map<String, Object?> toJson();
+}
+```
+
+A single `Schema` constant is one source of truth: OpenAPI output,
+`schema.validate(value)` (list of violations) and `schema.require<T>(value)`
+(throws `KetaException(400)` on any violation), and contract tests.
+
+Usage: `final dto = UserDto.fromJson(userDtoSchema.require(await c.body()));`
+
+## OpenAPI
+
+Attach `doc: RouteDoc(response: schema, requestBody: schema, summary: ...,
+responses: {code: schema})` to a route. Emit the document (the code's shadow):
+
+```dart
+final spec = OpenApi.fromRoutes(app.routes, title: 'API', version: '0.1.0');
+stdout.write(spec.toYaml()); // or spec.toJson()
+```
+
+## Database
+
+`c.env.db.reader` / `.writer` expose `query(sql, [params])` (rows as
+column-name maps) and `execute(sql, [params])` (affected rows). Wrap writes in a
+transaction with the `tx()` middleware and read the connection via
+`c.get(txConn)`; a thrown error rolls back. Type contract: integers `int`,
+floats `double`, booleans `bool`, timestamps ISO 8601 strings, numeric/decimal
+as `String`.
+
+## Testing
+
+`TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/
+delete/patch`, returning a `TestResponse` with `status`, `headers`, `text()`,
+`json()`. `testContext(env, ...)` builds a `Context` for a single handler.
+`testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation
+against both the synchronous-throw and rejected-Future failure shapes.
+
+Contract-green means the *shape* conforms (round-trips, schema validation,
+response conformance, invalid body → 400) — not that behavior is correct.
+Business correctness lives in `examples` and hand-written tests above that floor.

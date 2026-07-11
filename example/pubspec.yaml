@@ -1,0 +1,17 @@
+name: keta_example
+description: A runnable keta app — routes in both syntaxes, SQLite, OpenAPI.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+  keta_db: ^0.1.0
+  keta_sqlite: ^0.1.0
+  keta_openapi: ^0.1.0
+
+dev_dependencies:
+  test: ^1.25.0
