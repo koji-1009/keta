@@ -15,4 +15,5 @@ workspace:
   - packages/keta_openapi
   - packages/keta_lints
   - packages/keta_shelf
+  - packages/keta_files
   - example
