@@ -1,0 +1,17 @@
+name: keta_db
+description: >-
+  Ring 1 Pillar for keta: the Db reader/writer abstraction, transaction vessel,
+  Env contract, and migration runner.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+
+dev_dependencies:
+  test: ^1.25.0
