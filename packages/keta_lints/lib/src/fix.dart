@@ -22,26 +22,42 @@ import 'dart_literal.dart';
 String applyCanonicalFix(String source) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
 
+  final schemas = _schemaInitializers(unit);
   final enums = <String, List<String>>{};
-  final classes = <String>{};
+  // A class is a DTO by signal: it has a Schema constant, a fromJson factory,
+  // or a toJson method — never by the shape of its fields (which is a guess).
+  final dtoNames = <String>{...schemas.keys};
   for (final declaration in unit.declarations) {
     if (declaration is EnumDeclaration) {
       enums[declaration.namePart.typeName.lexeme] =
           declaration.body.constants.map((c) => c.name.lexeme).toList();
-    } else if (declaration is ClassDeclaration) {
-      classes.add(declaration.namePart.typeName.lexeme);
+    } else if (declaration is ClassDeclaration && _hasMapper(declaration)) {
+      dtoNames.add(declaration.namePart.typeName.lexeme);
     }
   }
-  final resolver = _TypeResolver(enums, classes);
-  final schemas = _schemaInitializers(unit);
+  final resolver = _TypeResolver(enums, dtoNames);
 
   final edits = <_Edit>[];
   for (final declaration in unit.declarations) {
     if (declaration is ClassDeclaration) {
-      _fixClass(declaration, resolver, schemas, source, edits);
+      _fixClass(declaration, resolver, dtoNames, schemas, source, edits);
     }
   }
   return _applyEdits(source, edits);
+}
+
+bool _hasMapper(ClassDeclaration node) {
+  for (final member in node.body.members) {
+    if (member is ConstructorDeclaration &&
+        member.factoryKeyword != null &&
+        member.name?.lexeme == 'fromJson') {
+      return true;
+    }
+    if (member is MethodDeclaration && member.name.lexeme == 'toJson') {
+      return true;
+    }
+  }
+  return false;
 }
 
 class _Edit {
@@ -68,10 +84,17 @@ String _applyEdits(String source, List<_Edit> edits) {
 }
 
 void _fixClass(ClassDeclaration node, _TypeResolver resolver,
-    Map<String, Expression> schemas, String source, List<_Edit> edits) {
+    Set<String> dtoNames, Map<String, Expression> schemas, String source,
+    List<_Edit> edits) {
   final className = node.namePart.typeName.lexeme;
+  // Only touch classes with a canonical signal, and never an abstract/sealed
+  // one (a factory can't instantiate it).
+  if (!dtoNames.contains(className)) return;
+  if (node.abstractKeyword != null || node.sealedKeyword != null) return;
+
   final fields = <_Field>[];
   var hasGenerativeCtor = false;
+  var unresolvable = false;
   ConstructorDeclaration? fromJson;
   MethodDeclaration? toJson;
 
@@ -80,7 +103,12 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
       // Skip fields with initializers / late — not constructor parameters.
       for (final v in member.fields.variables) {
         if (v.initializer == null) {
-          fields.add(_Field(v.name.lexeme, resolver.resolve(member.fields.type)));
+          final type = resolver.resolve(member.fields.type);
+          if (type == null) {
+            unresolvable = true; // a field type outside the canonical subset
+          } else {
+            fields.add(_Field(v.name.lexeme, type));
+          }
         }
       }
     } else if (member is ConstructorDeclaration) {
@@ -93,7 +121,10 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
       toJson = member;
     }
   }
-  if (fields.isEmpty || !hasGenerativeCtor) return;
+  // A field type we can't resolve within the file (a cross-file enum, or a
+  // non-canonical type like DateTime) is out of scope — regenerating would
+  // guess, so leave the class untouched.
+  if (unresolvable || fields.isEmpty || !hasGenerativeCtor) return;
   if (toJson != null && !_isCanonicalMap(toJson)) return; // hand-modified.
 
   final fieldNames = {for (final f in fields) f.name};
@@ -387,7 +418,7 @@ class _ListType extends _FieldType {
           '($access as List).map((e) => $name.values.byName(e as String)).toList()',
         _DtoType(:final name) =>
           '($access as List).map((e) => $name.fromJson(e as Map<String, Object?>)).toList()',
-        _ListType() => '$access as List',
+        _ => '$access as List',
       };
   @override
   String toJson(String field, {required bool nullable}) {
@@ -396,7 +427,7 @@ class _ListType extends _FieldType {
       _Prim() => field,
       _EnumType() => '$f.map((e) => e.name).toList()',
       _DtoType() => '$f.map((e) => e.toJson()).toList()',
-      _ListType() => field,
+      _ => field,
     };
   }
 
@@ -406,21 +437,65 @@ class _ListType extends _FieldType {
   void collectDtoRefs(Set<String> into) => item.collectDtoRefs(into);
 }
 
+class _MapType extends _FieldType {
+  final _FieldType value;
+  const _MapType(this.value, super.nullable);
+
+  @override
+  String fromJson(String access) => switch (value) {
+        _Prim(dart: 'double') =>
+          '($access as Map).map((k, v) => MapEntry(k as String, (v as num).toDouble()))',
+        _Prim(:final dart) => '($access as Map).cast<String, $dart>()',
+        _EnumType(:final name) =>
+          '($access as Map).map((k, v) => MapEntry(k as String, $name.values.byName(v as String)))',
+        _DtoType(:final name) =>
+          '($access as Map).map((k, v) => MapEntry(k as String, $name.fromJson(v as Map<String, Object?>)))',
+        _ => '($access as Map).cast<String, Object?>()',
+      };
+  @override
+  String toJson(String field, {required bool nullable}) {
+    final f = nullable ? '$field!' : field;
+    return switch (value) {
+      _Prim() => field,
+      _EnumType() => '$f.map((k, v) => MapEntry(k, v.name))',
+      _DtoType() => '$f.map((k, v) => MapEntry(k, v.toJson()))',
+      _ => field,
+    };
+  }
+
+  @override
+  Object? schemaJson() =>
+      {'type': 'object', 'additionalProperties': value.schemaJson()};
+  @override
+  void collectDtoRefs(Set<String> into) => value.collectDtoRefs(into);
+}
+
 class _TypeResolver {
   final Map<String, List<String>> enums;
-  final Set<String> classes;
+  final Set<String> dtoNames;
 
-  _TypeResolver(this.enums, this.classes);
+  _TypeResolver(this.enums, this.dtoNames);
 
-  _FieldType resolve(TypeAnnotation? annotation) =>
+  /// Resolves a field's type within the canonical subset, or null when it can't
+  /// be resolved from this file (a cross-file enum, or a non-canonical type).
+  _FieldType? resolve(TypeAnnotation? annotation) =>
       _resolveString(annotation?.toSource() ?? 'Object?');
 
-  _FieldType _resolveString(String raw) {
+  _FieldType? _resolveString(String raw) {
     final nullable = raw.endsWith('?');
     final base = nullable ? raw.substring(0, raw.length - 1).trim() : raw.trim();
     if (base.startsWith('List<') && base.endsWith('>')) {
-      return _ListType(
-          _resolveString(base.substring(5, base.length - 1).trim()), nullable);
+      final item = _resolveString(base.substring(5, base.length - 1).trim());
+      return item == null ? null : _ListType(item, nullable);
+    }
+    if (base.startsWith('Map<') && base.endsWith('>')) {
+      final inner = base.substring(4, base.length - 1);
+      final comma = inner.indexOf(',');
+      if (comma > 0 && inner.substring(0, comma).trim() == 'String') {
+        final value = _resolveString(inner.substring(comma + 1).trim());
+        return value == null ? null : _MapType(value, nullable);
+      }
+      return null;
     }
     switch (base) {
       case 'String':
@@ -430,7 +505,8 @@ class _TypeResolver {
         return _Prim(base, nullable);
     }
     if (enums.containsKey(base)) return _EnumType(base, enums[base], nullable);
-    return _DtoType(base, nullable);
+    if (dtoNames.contains(base)) return _DtoType(base, nullable);
+    return null; // unknown/cross-file/non-canonical
   }
 }
 

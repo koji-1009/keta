@@ -157,13 +157,16 @@ class UserDto {
       expect(canonicalDiagnostics(source), isEmpty);
     });
 
-    test('a DTO without mappers is keta_canonical_missing', () {
+    test('a DTO (by Schema signal) without mappers is keta_canonical_missing',
+        () {
       const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
 class Point {
   final int x;
   final int y;
   Point(this.x, this.y);
 }
+const pointSchema = Schema('Point', {'type': 'object', 'required': ['x', 'y'], 'properties': {'x': {'type': 'integer'}, 'y': {'type': 'integer'}}});
 ''';
       final d = canonicalDiagnostics(source);
       expect(d, hasLength(1));
@@ -197,11 +200,13 @@ class Bad {
   group('applyCanonicalFix', () {
     test('materializes missing mappers', () {
       const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
 class UserDto {
   final String id;
   final int? age;
   UserDto({required this.id, this.age});
 }
+const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'age': {'type': 'integer'}}});
 ''';
       final fixed = applyCanonicalFix(source);
       expect(fixed, contains("factory UserDto.fromJson(Map<String, Object?> json)"));
@@ -307,9 +312,43 @@ class Dto {
       expect(canonicalDiagnostics(fixed), isEmpty);
     });
 
+    test('a class with final fields but no canonical signal is ignored', () {
+      const source = '''
+class UserRepo {
+  final int db;
+  UserRepo(this.db);
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a Map<String,T> field generates valid canonical code', () {
+      const source = '''
+class Dto {
+  final String id;
+  final Map<String, int> meta;
+  Dto({required this.id, required this.meta});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String, meta: const {});
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("meta: (json['meta'] as Map).cast<String, int>()"));
+      expect(fixed, contains("'meta': meta,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+
     test('preserves an enum property refinement and adds nested-DTO deps', () {
       const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
+
+class Address {
+  final String city;
+  Address({required this.city});
+  factory Address.fromJson(Map<String, Object?> json) => Address(city: json['city'] as String);
+  Map<String, Object?> toJson() => {'city': city};
+}
 
 class Dto {
   final String role;

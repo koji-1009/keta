@@ -5,29 +5,55 @@ import 'package:analyzer/dart/ast/ast.dart';
 
 import 'diagnostic.dart';
 
-/// Analyzes DTO-shaped classes in [source] and reports canonical-form problems:
+/// Reports canonical-form problems on DTO-shaped classes in [source]:
 ///
-/// - `keta_canonical_missing`: a class with final fields and a generative
-///   constructor that lacks a `fromJson` factory or a `toJson` method.
-/// - `keta_canonical_drift`: a class whose `toJson` map keys do not match its
+/// - `keta_canonical_missing`: a DTO that lacks a `fromJson` factory or a
+///   `toJson` method.
+/// - `keta_canonical_drift`: a DTO whose `toJson` map keys do not match its
 ///   final field names.
 ///
-/// Purely syntactic — it parses [source], so it needs no resolution.
+/// A class is a DTO by signal — it has a `Schema` constant, a `fromJson`, or a
+/// `toJson` — never by the shape of its fields, so plain service/value classes
+/// are never flagged. Purely syntactic; no resolution needed.
 List<Diagnostic> canonicalDiagnostics(String source, {String file = '<memory>'}) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
+  final schemaNames = _schemaNames(unit);
   final diagnostics = <Diagnostic>[];
   for (final declaration in unit.declarations) {
     if (declaration is ClassDeclaration) {
-      _checkClass(declaration, file, diagnostics);
+      _checkClass(declaration, schemaNames, file, diagnostics);
     }
   }
   return diagnostics;
 }
 
-void _checkClass(
-    ClassDeclaration node, String file, List<Diagnostic> diagnostics) {
+Set<String> _schemaNames(CompilationUnit unit) {
+  final names = <String>{};
+  for (final declaration in unit.declarations) {
+    if (declaration is! TopLevelVariableDeclaration) continue;
+    for (final variable in declaration.variables.variables) {
+      final init = variable.initializer;
+      final (name, isSchema) = switch (init) {
+        InstanceCreationExpression(:final constructorName, :final argumentList) =>
+          (_firstStringArg(argumentList), constructorName.type.name.lexeme == 'Schema'),
+        MethodInvocation(:final methodName, :final argumentList) =>
+          (_firstStringArg(argumentList), methodName.name == 'Schema'),
+        _ => (null, false),
+      };
+      if (isSchema && name != null) names.add(name);
+    }
+  }
+  return names;
+}
+
+String? _firstStringArg(ArgumentList args) {
+  final first = args.arguments.isEmpty ? null : args.arguments.first;
+  return first is SimpleStringLiteral ? first.value : null;
+}
+
+void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
+    List<Diagnostic> diagnostics) {
   final finalFields = <String>[];
-  var hasGenerativeCtor = false;
   var hasFromJson = false;
   MethodDeclaration? toJson;
 
@@ -35,13 +61,11 @@ void _checkClass(
     if (member is FieldDeclaration && !member.isStatic) {
       if (member.fields.isFinal) {
         for (final v in member.fields.variables) {
-          finalFields.add(v.name.lexeme);
+          if (v.initializer == null) finalFields.add(v.name.lexeme);
         }
       }
     } else if (member is ConstructorDeclaration) {
-      if (member.factoryKeyword == null) {
-        hasGenerativeCtor = true;
-      } else if (member.name?.lexeme == 'fromJson') {
+      if (member.factoryKeyword != null && member.name?.lexeme == 'fromJson') {
         hasFromJson = true;
       }
     } else if (member is MethodDeclaration && member.name.lexeme == 'toJson') {
@@ -49,10 +73,13 @@ void _checkClass(
     }
   }
 
-  // Not DTO-shaped: skip classes with no final fields or no constructor.
-  if (finalFields.isEmpty || !hasGenerativeCtor) return;
-
   final className = node.namePart.typeName.lexeme;
+  // A DTO by signal only; abstract/sealed carriers are never canonical DTOs.
+  final isDto = schemaNames.contains(className) || hasFromJson || toJson != null;
+  if (!isDto || node.abstractKeyword != null || node.sealedKeyword != null) {
+    return;
+  }
+
   if (!hasFromJson || toJson == null) {
     diagnostics.add(Diagnostic(
       rule: 'keta_canonical_missing',
