@@ -49,9 +49,9 @@ Future<MigrationResult> applyMigrations(
       continue;
     }
     await db.transaction((conn) async {
-      for (final statement in splitStatements(m.sql)) {
-        await conn.execute(statement);
-      }
+      // Delegate multi-statement parsing to the driver — a hand-rolled splitter
+      // breaks on triggers and on `;`/`--` inside string literals.
+      await conn.execute(m.sql);
       await conn.execute(
         'insert into _keta_migrations (version, applied_at) values (?, ?)',
         [m.version, DateTime.now().toUtc().toIso8601String()],
@@ -91,21 +91,4 @@ List<Migration> loadMigrations(String directory) {
   }
   migrations.sort((a, b) => int.parse(a.version).compareTo(int.parse(b.version)));
   return migrations;
-}
-
-/// Splits a SQL script into individual statements, dropping `--` line comments
-/// and blank statements. It splits on `;` and does not account for semicolons
-/// inside string literals, which migration DDL does not use.
-List<String> splitStatements(String sql) {
-  final withoutComments = sql
-      .split('\n')
-      .map((line) {
-        final comment = line.indexOf('--');
-        return comment == -1 ? line : line.substring(0, comment);
-      })
-      .join('\n');
-  return [
-    for (final part in withoutComments.split(';'))
-      if (part.trim().isNotEmpty) part.trim(),
-  ];
 }

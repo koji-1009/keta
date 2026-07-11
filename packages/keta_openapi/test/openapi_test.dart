@@ -130,13 +130,36 @@ void main() {
     });
 
     test('require returns the value or throws KetaException(400)', () {
-      final ok = userDtoSchema
-          .require<Map<String, Object?>>({'id': 'a', 'name': 'b', 'role': 'admin', 'tags': <String>[]});
-      expect(ok['id'], 'a');
+      final ok = userDtoSchema.require(
+          {'id': 'a', 'name': 'b', 'role': 'admin', 'tags': <String>[]});
+      expect((ok as Map)['id'], 'a');
       expect(
-        () => userDtoSchema.require<Map<String, Object?>>({'id': 'a'}),
+        () => userDtoSchema.require({'id': 'a'}),
         throwsA(isA<KetaException>().having((e) => e.status, 'status', 400)),
       );
+    });
+
+    test('accepts an explicit null for an optional field', () {
+      expect(
+        userDtoSchema.validate({
+          'id': 'a',
+          'name': 'b',
+          'age': null,
+          'role': 'admin',
+          'tags': <String>[],
+        }),
+        isEmpty,
+      );
+    });
+
+    test('validates Map<String,T> via additionalProperties', () {
+      const counts = Schema('Counts', {
+        'type': 'object',
+        'additionalProperties': {'type': 'integer'},
+      });
+      expect(counts.validate({'a': 1, 'b': 2}), isEmpty);
+      expect(counts.validate({'a': 1, 'b': 'x'}),
+          contains(matches(r'b: expected integer')));
     });
   });
 

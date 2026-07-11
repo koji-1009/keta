@@ -26,7 +26,8 @@ void register(App<Env> app) {
 
   app.on(root.lit('users')).post(
     (c, _) async {
-      final dto = UserDto.fromJson(userDtoSchema.require(await c.body()));
+      final dto = UserDto.fromJson(
+          userDtoSchema.require(await c.body()) as Map<String, Object?>);
       await c.get(txConn).execute(
         'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
         [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],

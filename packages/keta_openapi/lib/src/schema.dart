@@ -25,14 +25,16 @@ final class Schema {
     return errors;
   }
 
-  /// Validates [value] and returns it as `T`, throwing `KetaException(400)`
-  /// with the violation list as detail on any problem.
-  T require<T>(Object? value) {
+  /// Validates [value] and returns it unchanged, throwing `KetaException(400)`
+  /// with the violation list as detail on any problem. Validation is the gate;
+  /// typing the result is the mapper's job (`Dto.fromJson(schema.require(body)
+  /// as Map<String, Object?>)`).
+  Object? require(Object? value) {
     final errors = validate(value);
     if (errors.isNotEmpty) {
       throw KetaException(400, 'validation failed', errors);
     }
-    return value as T;
+    return value;
   }
 
   /// Indexes this schema and its transitive [deps] by their `$ref` target.
@@ -110,8 +112,22 @@ void _validateObject(Map<String, Object?> schema, Object? value, String path,
       (schema['properties'] as Map?)?.cast<String, Object?>() ?? const {};
   for (final entry in properties.entries) {
     if (value.containsKey(entry.key)) {
-      _validate(entry.value as Map<String, Object?>, value[entry.key],
-          '$path.${entry.key}', errors, refs);
+      final v = value[entry.key];
+      // A null for an optional property is accepted — the canonical toJson
+      // omits nulls, so an explicit null means "absent".
+      if (v == null && !required.contains(entry.key)) continue;
+      _validate(entry.value as Map<String, Object?>, v, '$path.${entry.key}',
+          errors, refs);
+    }
+  }
+  // Map<String, T> is expressed as additionalProperties; validate every
+  // non-declared entry against it.
+  final additional = schema['additionalProperties'];
+  if (additional is Map<String, Object?>) {
+    for (final entry in value.entries) {
+      if (!properties.containsKey(entry.key)) {
+        _validate(additional, entry.value, '$path.${entry.key}', errors, refs);
+      }
     }
   }
 }

@@ -131,5 +131,25 @@ void main() {
       expect(second.applied, isEmpty);
       expect(second.alreadyApplied, ['0001', '0002']);
     });
+
+    test('applies a migration containing a trigger (multi-statement)', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_trig');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      File('${dir.path}/0001_trigger.sql').writeAsStringSync('''
+create table t (id integer primary key, n integer);
+create table audit (n integer);
+create trigger t_ins after insert on t begin
+  insert into audit (n) values (new.n);
+end;
+''');
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+
+      final result = await applyMigrations(db, directory: dir.path);
+      expect(result.applied, ['0001']);
+
+      await db.writer.execute('insert into t (n) values (5)');
+      expect((await db.reader.query('select n from audit')).single['n'], 5);
+    });
   });
 }

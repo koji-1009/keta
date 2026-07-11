@@ -132,7 +132,8 @@ A single `Schema` constant is one source of truth: OpenAPI output,
 `schema.validate(value)` (list of violations) and `schema.require<T>(value)`
 (throws `KetaException(400)` on any violation), and contract tests.
 
-Usage: `final dto = UserDto.fromJson(userDtoSchema.require(await c.body()));`
+Usage: `final dto = UserDto.fromJson(userDtoSchema.require(await c.body()) as Map<String, Object?>);`
+(`require` validates and returns its input unchanged — `Object? require(Object?)`; the mapper does the typing.)
 
 ## OpenAPI
 
