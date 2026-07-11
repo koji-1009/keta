@@ -64,10 +64,13 @@ Future<MigrationResult> applyMigrations(
 }
 
 /// Reads and parses `NNNN_name.sql` files under [directory], sorted ascending
-/// by numeric version. A missing directory yields no migrations.
+/// by numeric version. A missing directory is an error (usually a typo or wrong
+/// cwd), not a silent success; duplicate numeric versions are rejected.
 List<Migration> loadMigrations(String directory) {
   final dir = Directory(directory);
-  if (!dir.existsSync()) return const [];
+  if (!dir.existsSync()) {
+    throw FileSystemException('migrations directory not found', directory);
+  }
   final files = dir
       .listSync()
       .whereType<File>()
@@ -90,5 +93,12 @@ List<Migration> loadMigrations(String directory) {
         Migration(version, stem.substring(underscore + 1), file.readAsStringSync()));
   }
   migrations.sort((a, b) => int.parse(a.version).compareTo(int.parse(b.version)));
+  for (var i = 1; i < migrations.length; i++) {
+    if (int.parse(migrations[i].version) ==
+        int.parse(migrations[i - 1].version)) {
+      throw FormatException(
+          'duplicate migration version', migrations[i].version);
+    }
+  }
   return migrations;
 }
