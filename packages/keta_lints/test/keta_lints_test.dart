@@ -242,6 +242,98 @@ const userDtoSchema = Schema('UserDto', {
       expect(applyCanonicalFix(fixed), fixed);
     });
 
+    test('removing two adjacent fields does not corrupt source', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+
+class Dto {
+  final String a;
+  final String d;
+  Dto({required this.a, required this.d});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(a: json['a'] as String, b: json['b'] as String, c: json['c'] as String, d: json['d'] as String);
+  Map<String, Object?> toJson() => {'a': a, 'b': b, 'c': c, 'd': d};
+}
+
+const dtoSchema = Schema('Dto', {
+  'type': 'object',
+  'required': ['a', 'b', 'c', 'd'],
+  'properties': {'a': {'type': 'string'}, 'b': {'type': 'string'}, 'c': {'type': 'string'}, 'd': {'type': 'string'}},
+});
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(fixed, isNot(contains("'b':")));
+      expect(fixed, isNot(contains("'c':")));
+      expect(fixed, contains("'a': a,"));
+      expect(fixed, contains("'d': d,"));
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('renaming the sole field yields valid source', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+
+class One {
+  final String uuid;
+  One({required this.uuid});
+  factory One.fromJson(Map<String, Object?> json) => One(id: json['id'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+
+const oneSchema = Schema('One', {
+  'type': 'object',
+  'required': ['id'],
+  'properties': {'id': {'type': 'string'}},
+});
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("uuid: json['uuid'] as String,"));
+      expect(fixed, contains("'uuid': uuid,"));
+      expect(fixed, isNot(contains("'id'")));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+
+    test('materializes a half-missing mapper pair', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+
+    test('preserves an enum property refinement and adds nested-DTO deps', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+
+class Dto {
+  final String role;
+  final Address address;
+  Dto({required this.role, required this.address});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(role: json['role'] as String);
+  Map<String, Object?> toJson() => {'role': role};
+}
+
+const dtoSchema = Schema('Dto', {
+  'type': 'object',
+  'required': ['role'],
+  'properties': {'role': {'type': 'string', 'enum': ['admin', 'member']}},
+});
+''';
+      final fixed = applyCanonicalFix(source);
+      // enum refinement preserved verbatim
+      expect(fixed, contains("'enum': ['admin', 'member']"));
+      // nested DTO gets a \$ref AND deps (from one model)
+      expect(fixed, contains("'address':"));
+      expect(fixed, contains('#/components/schemas/Address'));
+      expect(fixed, contains('deps: [addressSchema]'));
+    });
+
     test('leaves a hand-modified toJson untouched', () {
       const source = '''
 class Weird {

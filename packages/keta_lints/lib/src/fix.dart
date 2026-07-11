@@ -5,13 +5,20 @@ import 'package:analyzer/dart/ast/ast.dart';
 
 import 'dart_literal.dart';
 
-/// Applies the canonical-form repair to [source]: for every DTO-shaped class
-/// (final fields + a generative constructor) it materializes a missing
-/// `fromJson`/`toJson`, reconciles a drifted pair to the field set, and updates
-/// the matching `Schema` constant so OpenAPI reflects the change — all headless.
+/// Applies the canonical-form repair to [source].
 ///
-/// A class whose existing `toJson` is not a recognizable canonical map literal
-/// is treated as hand-modified and left untouched.
+/// For every DTO-shaped class it regenerates the canonical members — `fromJson`,
+/// `toJson`, and the matching `Schema` constant — **whole**, from the desired
+/// state (the field set), and atomically replaces each member's source range.
+/// Whole-member regeneration (rather than per-field surgery) makes the edits
+/// non-overlapping by construction, so removing several fields, renaming the
+/// sole field, or repairing a half-missing pair can't corrupt the source.
+///
+/// A leading `///` doc comment on a regenerated member is preserved. The
+/// `Schema` constant keeps every existing per-property definition (enums,
+/// formats) verbatim and re-derives `$ref`/`deps` from one model. A class whose
+/// `toJson` is not a recognizable canonical map literal is treated as
+/// hand-modified and left untouched.
 String applyCanonicalFix(String source) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
 
@@ -26,12 +33,13 @@ String applyCanonicalFix(String source) {
     }
   }
   final resolver = _TypeResolver(enums, classes);
-  final schemaInitializers = _schemaInitializers(unit);
+  final schemas = _schemaInitializers(unit);
 
   final edits = <_Edit>[];
   for (final declaration in unit.declarations) {
-    if (declaration is! ClassDeclaration) continue;
-    _fixClass(declaration, resolver, schemaInitializers, edits);
+    if (declaration is ClassDeclaration) {
+      _fixClass(declaration, resolver, schemas, source, edits);
+    }
   }
   return _applyEdits(source, edits);
 }
@@ -46,6 +54,12 @@ class _Edit {
 
 String _applyEdits(String source, List<_Edit> edits) {
   edits.sort((a, b) => b.start.compareTo(a.start));
+  // Invariant: edits never overlap (whole-member/whole-initializer ranges).
+  for (var i = 0; i + 1 < edits.length; i++) {
+    if (edits[i].start < edits[i + 1].end) {
+      throw StateError('overlapping canonical fix edits');
+    }
+  }
   var result = source;
   for (final edit in edits) {
     result = result.replaceRange(edit.start, edit.end, edit.replacement);
@@ -54,7 +68,7 @@ String _applyEdits(String source, List<_Edit> edits) {
 }
 
 void _fixClass(ClassDeclaration node, _TypeResolver resolver,
-    Map<String, Expression> schemaInitializers, List<_Edit> edits) {
+    Map<String, Expression> schemas, String source, List<_Edit> edits) {
   final className = node.namePart.typeName.lexeme;
   final fields = <_Field>[];
   var hasGenerativeCtor = false;
@@ -63,9 +77,11 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
 
   for (final member in node.body.members) {
     if (member is FieldDeclaration && !member.isStatic && member.fields.isFinal) {
-      final type = member.fields.type;
+      // Skip fields with initializers / late — not constructor parameters.
       for (final v in member.fields.variables) {
-        fields.add(_Field(v.name.lexeme, resolver.resolve(type)));
+        if (v.initializer == null) {
+          fields.add(_Field(v.name.lexeme, resolver.resolve(member.fields.type)));
+        }
       }
     } else if (member is ConstructorDeclaration) {
       if (member.factoryKeyword == null) {
@@ -78,129 +94,41 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
     }
   }
   if (fields.isEmpty || !hasGenerativeCtor) return;
-
-  // A recognizable-but-drifted (or absent) pair is repairable; an
-  // unrecognizable toJson is hand-modified and left alone.
-  if (toJson != null && !_isCanonicalMap(toJson)) return;
-
-  final newFromJson = _fromJsonSource(className, fields);
-  final newToJson = _toJsonSource(fields);
-
-  if (fromJson == null && toJson == null) {
-    final insertAt = node.body.end - 1; // just before the closing brace
-    edits.add(_Edit(insertAt, insertAt, '\n$newFromJson\n\n$newToJson\n'));
-  } else {
-    if (fromJson != null) {
-      edits.add(_Edit(fromJson.offset, fromJson.end, newFromJson.trimLeft()));
-    }
-    if (toJson != null) {
-      edits.add(_Edit(toJson.offset, toJson.end, newToJson.trimLeft()));
-    }
-  }
-
-  final schema = schemaInitializers[className];
-  if (schema != null) {
-    _schemaEdits(schema, fields, edits);
-  }
-}
-
-/// Reconciles the `Schema` map to [fields] surgically: it inserts properties
-/// for new fields and removes properties for deleted ones, leaving every
-/// existing property definition (enums, formats, descriptions) untouched, so a
-/// repair never destroys a hand-refined schema.
-void _schemaEdits(
-    Expression init, List<_Field> fields, List<_Edit> edits) {
-  final args = switch (init) {
-    InstanceCreationExpression(:final argumentList) => argumentList.arguments,
-    MethodInvocation(:final argumentList) => argumentList.arguments,
-    _ => null,
-  };
-  if (args == null) return;
-  final mapArg = args.length >= 2 ? args[1] : null;
-  if (mapArg is! SetOrMapLiteral) return;
-
-  SetOrMapLiteral? properties;
-  ListLiteral? required;
-  for (final element in mapArg.elements) {
-    if (element is MapLiteralEntry && element.key is SimpleStringLiteral) {
-      final key = (element.key as SimpleStringLiteral).value;
-      final value = element.value;
-      if (key == 'properties' && value is SetOrMapLiteral) properties = value;
-      if (key == 'required' && value is ListLiteral) required = value;
-    }
-  }
-  if (properties == null) return; // not a canonical schema shape.
+  if (toJson != null && !_isCanonicalMap(toJson)) return; // hand-modified.
 
   final fieldNames = {for (final f in fields) f.name};
-  final existing = <String, MapLiteralEntry>{};
-  for (final element in properties.elements) {
-    if (element is MapLiteralEntry && element.key is SimpleStringLiteral) {
-      existing[(element.key as SimpleStringLiteral).value] = element;
+  final schema = schemas[className];
+  final mapperDrifted = fromJson == null ||
+      toJson == null ||
+      !_setEquals(_toJsonKeys(toJson)!, fieldNames);
+  final schemaDrifted =
+      schema != null && !_setEquals(_schemaPropertyNames(schema), fieldNames);
+  if (!mapperDrifted && !schemaDrifted) return; // already canonical.
+
+  final insertions = <String>[];
+  void member(Declaration? existing, String generated) {
+    if (existing == null) {
+      insertions.add(generated);
+    } else {
+      final start = existing.firstTokenAfterCommentAndMetadata.offset;
+      edits.add(_Edit(start, existing.end, generated.trimLeft()));
     }
   }
 
-  final additions = [
-    for (final f in fields)
-      if (!existing.containsKey(f.name))
-        "'${f.name}': ${dartLiteral(f.type.schemaJson())}",
-  ];
-  _insertInto(properties, additions, edits);
-  for (final entry in existing.entries) {
-    if (!fieldNames.contains(entry.key)) {
-      edits.add(_removeElement(properties.elements, entry.value));
-    }
+  member(fromJson, _fromJsonSource(className, fields));
+  member(toJson, _toJsonSource(fields));
+  if (insertions.isNotEmpty) {
+    final at = node.body.end - 1; // before the class's closing brace
+    edits.add(_Edit(at, at, '\n${insertions.join('\n\n')}\n'));
   }
-
-  if (required != null) {
-    final existingRequired = <String, SimpleStringLiteral>{
-      for (final e in required.elements)
-        if (e is SimpleStringLiteral) e.value: e,
-    };
-    final desired = {for (final f in fields) if (!f.type.nullable) f.name};
-    _insertInto(
-      required,
-      [for (final f in fields) if (!f.type.nullable && !existingRequired.containsKey(f.name)) "'${f.name}'"],
-      edits,
-    );
-    for (final e in existingRequired.entries) {
-      if (!desired.contains(e.key)) {
-        edits.add(_removeElement(required.elements, e.value));
-      }
-    }
+  if (schema != null) {
+    edits.add(
+        _Edit(schema.offset, schema.end, _schemaSource(className, fields, schema, source)));
   }
 }
 
-/// Inserts [additions] into a list/map literal after its last element (so a
-/// trailing comma, if any, stays valid) or, when empty, before its bracket.
-void _insertInto(
-    TypedLiteral literal, List<String> additions, List<_Edit> edits) {
-  if (additions.isEmpty) return;
-  final elements = literal is SetOrMapLiteral
-      ? literal.elements
-      : (literal as ListLiteral).elements;
-  if (elements.isEmpty) {
-    final at = literal.end - 1;
-    edits.add(_Edit(at, at, additions.join(', ')));
-  } else {
-    final at = elements.last.end;
-    edits.add(_Edit(at, at, ', ${additions.join(', ')}'));
-  }
-}
+// --- schema constant ------------------------------------------------------
 
-/// Removes [node] from a comma-separated literal, taking a trailing comma when
-/// there's a following element, otherwise a leading one.
-_Edit _removeElement(List<AstNode> elements, AstNode node) {
-  final index = elements.indexOf(node);
-  if (index + 1 < elements.length) {
-    return _Edit(node.offset, elements[index + 1].offset, '');
-  }
-  if (index > 0) {
-    return _Edit(elements[index - 1].end, node.end, '');
-  }
-  return _Edit(node.offset, node.end, '');
-}
-
-/// Top-level `Schema('Name', ...)` initializers, keyed by the schema name.
 Map<String, Expression> _schemaInitializers(CompilationUnit unit) {
   final result = <String, Expression>{};
   for (final declaration in unit.declarations) {
@@ -225,7 +153,104 @@ String? _firstStringArg(ArgumentList args) {
   return first is SimpleStringLiteral ? first.value : null;
 }
 
-bool _isCanonicalMap(MethodDeclaration toJson) {
+SetOrMapLiteral? _schemaMap(Expression init) {
+  final args = switch (init) {
+    InstanceCreationExpression(:final argumentList) => argumentList.arguments,
+    MethodInvocation(:final argumentList) => argumentList.arguments,
+    _ => null,
+  };
+  if (args == null || args.length < 2) return null;
+  final map = args[1];
+  return map is SetOrMapLiteral ? map : null;
+}
+
+SetOrMapLiteral? _propertiesLiteral(SetOrMapLiteral map) {
+  for (final element in map.elements) {
+    if (element is MapLiteralEntry &&
+        element.key is SimpleStringLiteral &&
+        (element.key as SimpleStringLiteral).value == 'properties' &&
+        element.value is SetOrMapLiteral) {
+      return element.value as SetOrMapLiteral;
+    }
+  }
+  return null;
+}
+
+Set<String> _schemaPropertyNames(Expression init) {
+  final map = _schemaMap(init);
+  final props = map == null ? null : _propertiesLiteral(map);
+  if (props == null) return const {};
+  return {
+    for (final e in props.elements)
+      if (e is MapLiteralEntry && e.key is SimpleStringLiteral)
+        (e.key as SimpleStringLiteral).value,
+  };
+}
+
+/// Regenerates the whole `Schema(...)` initializer, preserving each existing
+/// property definition verbatim (so enums/formats survive) and re-deriving
+/// `required` and `deps` from the field model.
+String _schemaSource(
+    String className, List<_Field> fields, Expression init, String source) {
+  final map = _schemaMap(init);
+  final props = map == null ? null : _propertiesLiteral(map);
+  final existing = <String, String>{};
+  if (props != null) {
+    for (final e in props.elements) {
+      if (e is MapLiteralEntry && e.key is SimpleStringLiteral) {
+        existing[(e.key as SimpleStringLiteral).value] =
+            source.substring(e.value.offset, e.value.end);
+      }
+    }
+  }
+
+  final properties = [
+    for (final f in fields)
+      "'${f.name}': ${existing[f.name] ?? dartLiteral(f.type.schemaJson())}",
+  ];
+  final required = [for (final f in fields) if (!f.type.nullable) "'${f.name}'"];
+  final deps = <String>{};
+  for (final f in fields) {
+    f.type.collectDtoRefs(deps);
+  }
+
+  final buffer = StringBuffer("Schema('$className', {'type': 'object'");
+  if (required.isNotEmpty) buffer.write(", 'required': [${required.join(', ')}]");
+  buffer.write(", 'properties': {${properties.join(', ')}}}");
+  final depList = deps.toList()..sort();
+  if (depList.isNotEmpty) {
+    buffer.write(
+        ', deps: [${depList.map((d) => '${_lowerFirst(d)}Schema').join(', ')}]');
+  }
+  buffer.write(')');
+  return buffer.toString();
+}
+
+bool _isCanonicalMap(MethodDeclaration toJson) => _returnedMap(toJson) != null;
+
+Set<String>? _toJsonKeys(MethodDeclaration toJson) {
+  final returned = _returnedMap(toJson);
+  if (returned == null) return null;
+  final keys = <String>{};
+  void collect(Iterable<CollectionElement> elements) {
+    for (final element in elements) {
+      switch (element) {
+        case MapLiteralEntry(:final key) when key is SimpleStringLiteral:
+          keys.add(key.value);
+        case IfElement():
+          collect([element.thenElement]);
+          if (element.elseElement != null) collect([element.elseElement!]);
+        default:
+          break;
+      }
+    }
+  }
+
+  collect(returned.elements);
+  return keys;
+}
+
+SetOrMapLiteral? _returnedMap(MethodDeclaration toJson) {
   final body = toJson.body;
   Expression? returned;
   if (body is ExpressionFunctionBody) {
@@ -235,8 +260,11 @@ bool _isCanonicalMap(MethodDeclaration toJson) {
       if (statement is ReturnStatement) returned = statement.expression;
     }
   }
-  return returned is SetOrMapLiteral;
+  return returned is SetOrMapLiteral ? returned : null;
 }
+
+bool _setEquals(Set<String> a, Set<String> b) =>
+    a.length == b.length && a.containsAll(b);
 
 // --- mapper generation ----------------------------------------------------
 
@@ -268,12 +296,14 @@ class _Field {
   _Field(this.name, this.type);
 
   String fromJsonExpr() {
-    final expr = type.fromJson("json['$name']");
-    if (!type.nullable) return expr;
-    if (type is _Prim && (type as _Prim).dart != 'double') {
-      return "json['$name'] as ${(type as _Prim).dart}?";
+    final t = type;
+    if (t is _Prim && t.dart != 'double') {
+      return t.nullable
+          ? "json['$name'] as ${t.dart}?"
+          : "json['$name'] as ${t.dart}";
     }
-    return "json['$name'] == null ? null : $expr";
+    final expr = t.fromJson("json['$name']");
+    return t.nullable ? "json['$name'] == null ? null : $expr" : expr;
   }
 
   String toJsonEntry() {
@@ -294,7 +324,7 @@ sealed class _FieldType {
 }
 
 class _Prim extends _FieldType {
-  final String dart; // String | int | double | bool
+  final String dart;
   const _Prim(this.dart, super.nullable);
 
   @override
@@ -382,10 +412,8 @@ class _TypeResolver {
 
   _TypeResolver(this.enums, this.classes);
 
-  _FieldType resolve(TypeAnnotation? annotation) {
-    final raw = annotation?.toSource() ?? 'Object?';
-    return _resolveString(raw);
-  }
+  _FieldType resolve(TypeAnnotation? annotation) =>
+      _resolveString(annotation?.toSource() ?? 'Object?');
 
   _FieldType _resolveString(String raw) {
     final nullable = raw.endsWith('?');
@@ -402,7 +430,9 @@ class _TypeResolver {
         return _Prim(base, nullable);
     }
     if (enums.containsKey(base)) return _EnumType(base, enums[base], nullable);
-    // Unknown custom types follow the DTO convention (fromJson/toJson).
     return _DtoType(base, nullable);
   }
 }
+
+String _lowerFirst(String s) =>
+    s.isEmpty ? s : '${s[0].toLowerCase()}${s.substring(1)}';
