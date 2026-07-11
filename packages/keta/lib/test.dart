@@ -27,6 +27,7 @@ Context<E> testContext<E>(
     env: env,
     method: method,
     uri: Uri.parse(path),
+    route: path,
     headers: {
       for (final e in headers.entries) e.key.toLowerCase(): e.value,
     },

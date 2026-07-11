@@ -323,6 +323,7 @@ class Router<E> {
       env: env,
       method: request.method,
       uri: request.uri,
+      route: compiled.template,
       headers: request.headers,
       remoteAddress: request.remoteAddress,
       params: params,

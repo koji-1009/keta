@@ -26,6 +26,11 @@ class RequestCtx<E> {
   final E env;
   final String method;
   final Uri uri;
+
+  /// The matched route template (e.g. `/users/:id`), for low-cardinality logs,
+  /// metrics, and span names.
+  final String route;
+
   final Map<String, String> headers;
   final String remoteAddress;
 
@@ -53,6 +58,7 @@ class RequestCtx<E> {
     required this.env,
     required this.method,
     required this.uri,
+    required this.route,
     required this.headers,
     required this.remoteAddress,
     required this.params,
@@ -154,6 +160,9 @@ extension type Context<E>(RequestCtx<E> _raw) {
   E get env => _raw.env;
   String get method => _raw.method;
   Uri get uri => _raw.uri;
+
+  /// The matched route template (e.g. `/users/:id`).
+  String get route => _raw.route;
 
   /// The peer address as seen by the Transport. Resolving the real client
   /// behind a proxy (X-Forwarded-For) is the application's responsibility.
