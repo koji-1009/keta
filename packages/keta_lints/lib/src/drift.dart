@@ -79,6 +79,13 @@ void _schemaDrift(Map<String, Object?> oracle, Map<String, Object?> shadow,
           'the code has field "$name.$field" but the contract omits it; document it or remove it');
     }
   }
+  // Schemas the code defines but the contract omits.
+  for (final name in shadowSchemas.keys) {
+    if (!oracleSchemas.containsKey(name)) {
+      report('schema $name',
+          'the code defines schema "$name" but the contract omits it; document it or remove the DTO');
+    }
+  }
 }
 
 Map<String, Set<String>> _paths(Map<String, Object?> document) {

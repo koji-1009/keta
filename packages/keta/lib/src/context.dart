@@ -141,10 +141,14 @@ class RequestCtx<E> {
   Future<Object?> body() async {
     if (_jsonDecoded) return _json;
     final bytes = await bodyBytes();
-    _jsonDecoded = true;
-    if (bytes.isEmpty) return _json = null;
+    if (bytes.isEmpty) {
+      _jsonDecoded = true;
+      return _json = null;
+    }
     try {
-      return _json = jsonDecode(utf8.decode(bytes));
+      final decoded = jsonDecode(utf8.decode(bytes));
+      _jsonDecoded = true; // cache only on success, so a retry still throws 400
+      return _json = decoded;
     } on FormatException catch (e) {
       throw KetaException(400, 'invalid JSON body', e.message);
     }

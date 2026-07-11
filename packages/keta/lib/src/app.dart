@@ -132,8 +132,27 @@ class App<E> {
     final names = [
       for (var i = 0; i < captures.length; i++) captures[i].name ?? 'p$i',
     ];
-    _regs.add(_Reg<E>(method, segments, captures, names, handler,
-        groupMiddleware, doc, templateOf(segments)));
+    // Duplicate capture names would make the first unreadable via c.param —
+    // fail fast at registration.
+    final seen = <String>{};
+    for (final name in names) {
+      if (!seen.add(name)) {
+        throw StateError(
+            'duplicate capture name ":$name" in ${templateOf(segments)}');
+      }
+    }
+    _regs.add(_Reg<E>(
+      method,
+      segments,
+      captures,
+      names,
+      handler,
+      // Snapshot the group middleware at registration, so a later `..use()`
+      // affects only subsequently-registered routes (order-deterministic).
+      [...groupMiddleware],
+      doc,
+      templateOf(segments),
+    ));
   }
 
   Path<dynamic> _basePath(Object path) => switch (path) {

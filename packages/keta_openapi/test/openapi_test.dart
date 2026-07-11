@@ -218,6 +218,18 @@ void main() {
       expect(schemas.keys, contains('UserDto'));
     });
 
+    test('does not fabricate a 200 when only other statuses are documented',
+        () {
+      final app = App<Ignored>();
+      app.on(root.lit('users')).post((c, _) => c.text('x', 201),
+          doc: const RouteDoc(responses: {201: userDtoSchema}));
+      final op = ((OpenApi.fromRoutes(app.routes).toJson()['paths']
+          as Map)['/users'] as Map)['post'] as Map;
+      final responses = op['responses'] as Map;
+      expect(responses.keys, ['201']);
+      expect(responses.containsKey('200'), isFalse);
+    });
+
     test('toYaml emits a document that parses back to the same structure', () {
       final spec = OpenApi.fromRoutes(buildApp().routes);
       final parsed = loadYaml(spec.toYaml());

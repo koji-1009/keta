@@ -33,24 +33,26 @@ Middleware<E> otel<E>({OtlpExporter? exporter, MetricsRegistry? metrics}) {
         status: status,
         durationMs: watch.elapsedMilliseconds,
       );
-      exporter
-          ?.export([
-            OtelSpan(
-              traceId: traceId,
-              spanId: spanId,
-              parentSpanId: parent?.parentId,
-              name: '${c.method} ${c.route}',
-              startUnixNano: startNano,
-              endUnixNano: _unixNano(),
-              attributes: {
-                'http.request.method': c.method,
-                'http.route': c.route,
-                'http.response.status_code': status,
-              },
-              status: status >= 500 ? SpanStatus.error : SpanStatus.ok,
-            ),
-          ])
-          .catchError((Object _) {});
+      final export = exporter;
+      if (export != null) {
+        final span = OtelSpan(
+          traceId: traceId,
+          spanId: spanId,
+          parentSpanId: parent?.parentId,
+          name: '${c.method} ${c.route}',
+          startUnixNano: startNano,
+          endUnixNano: _unixNano(),
+          attributes: {
+            'http.request.method': c.method,
+            'http.route': c.route,
+            'http.response.status_code': status,
+          },
+          status: status >= 500 ? SpanStatus.error : SpanStatus.ok,
+        );
+        // Future.sync so a synchronously-throwing sender is caught too and
+        // never fails the request.
+        Future.sync(() => export.export([span])).catchError((Object _) {});
+      }
     }
 
     return guard<Response>(

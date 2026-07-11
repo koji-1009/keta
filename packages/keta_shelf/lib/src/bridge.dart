@@ -65,7 +65,13 @@ class _ShelfRequest implements TransportRequest {
 
   @override
   String get remoteAddress {
+    // shelf_io stores an HttpConnectionInfo object (not a Map) under this key.
     final info = _request.context['shelf.io.connection_info'];
-    return info is Map ? (info['remoteAddress']?.toString() ?? '') : '';
+    if (info == null) return '';
+    try {
+      return (info as dynamic).remoteAddress.address as String? ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 }

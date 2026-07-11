@@ -146,6 +146,12 @@ void main() {
       expect((await client.post('/only')).status, 405);
     });
 
+    test('duplicate capture names in one path fail fast', () {
+      final app = App<Env>();
+      expect(() => app.get('/u/:id/p/:id', (c) => c.text('x')),
+          throwsStateError);
+    });
+
     test('duplicate method+template fails fast at compile', () {
       final app = App<Env>();
       app.get('/dup/:a', (c) => c.text('1'));

@@ -64,19 +64,18 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
         'schema': {'type': param.$2},
       },
   ];
-  final responses = <String, Object?>{
-    '200': {
-      'description': 'OK',
-      if (doc?.response != null) ..._jsonBody(doc!.response!),
-    },
-  };
+  final responses = <String, Object?>{};
+  if (doc?.response != null) {
+    responses['200'] = {'description': 'OK', ..._jsonBody(doc!.response!)};
+  }
   if (doc?.responses != null) {
     for (final entry in doc!.responses!.entries) {
-      responses['${entry.key}'] = {
-        'description': '',
-        ..._jsonBody(entry.value),
-      };
+      responses['${entry.key}'] = {'description': '', ..._jsonBody(entry.value)};
     }
+  }
+  // Only fabricate a 200 when the route documents no response at all.
+  if (responses.isEmpty) {
+    responses['200'] = {'description': 'OK'};
   }
   return {
     if (doc?.summary != null) 'summary': doc!.summary,

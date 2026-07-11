@@ -59,6 +59,8 @@ String _pad(int indent) => '  ' * indent;
 String _scalar(Object? value) => switch (value) {
       null => 'null',
       bool() => value.toString(),
+      double() when !value.isFinite =>
+        value.isNaN ? '.nan' : (value.isNegative ? '-.inf' : '.inf'),
       num() => value.toString(),
       String() => _quoteIfNeeded(value),
       _ => _quoteIfNeeded(value.toString()),
@@ -70,13 +72,20 @@ const Set<String> _reserved = {
   'true', 'false', 'null', 'yes', 'no', 'on', 'off', '~',
 };
 
+final RegExp _control = RegExp(r'[\x00-\x1f]');
+
 String _quoteIfNeeded(String value) {
   final needsQuote = value.isEmpty ||
       !_plainSafe.hasMatch(value) ||
       _numberLike.hasMatch(value) ||
+      _control.hasMatch(value) ||
       _reserved.contains(value.toLowerCase());
   if (!needsQuote) return value;
-  final escaped =
-      value.replaceAll(r'\', r'\\').replaceAll('"', r'\"').replaceAll('\n', r'\n');
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll('"', r'\"')
+      .replaceAll('\n', r'\n')
+      .replaceAll('\r', r'\r')
+      .replaceAll('\t', r'\t');
   return '"$escaped"';
 }
