@@ -166,8 +166,13 @@ class App<E> {
     return Router<E>._(root, env, baseLog, maxBodyBytes);
   }
 
-  /// Starts the server. With [isolates] == 1 the current isolate listens; the
-  /// returned [Server] shuts down gracefully.
+  /// Starts the server on the current isolate and returns a [Server] that shuts
+  /// down gracefully.
+  ///
+  /// [isolates] must be 1 here: an already-booted [env] instance cannot be
+  /// replicated across isolates (its connections do not cross the boundary). To
+  /// run several listeners, use [serveIsolates], which boots one env per
+  /// isolate.
   Future<Server> serve(
     E env, {
     int port = 8080,
@@ -175,12 +180,9 @@ class App<E> {
     Transport? transport,
     int maxBodyBytes = 1 << 20,
   }) async {
-    if (isolates < 1) {
-      throw ArgumentError.value(isolates, 'isolates', 'must be >= 1');
-    }
-    if (isolates > 1) {
-      throw UnimplementedError(
-          'multi-isolate serve is not yet wired; use isolates: 1');
+    if (isolates != 1) {
+      throw ArgumentError.value(isolates, 'isolates',
+          'serve() runs a single isolate; use serveIsolates() for more');
     }
     final router = compile(env, maxBodyBytes: maxBodyBytes);
     final t = transport ?? const H1Transport();

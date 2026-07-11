@@ -18,6 +18,7 @@ export 'src/app.dart'
         HasLog,
         Disposable;
 export 'src/chain.dart' show chain, guard;
+export 'src/serve_isolates.dart' show serveIsolates;
 export 'src/context.dart' show Context, Key;
 export 'src/h1_transport.dart' show H1Transport;
 export 'src/log.dart' show Log, StdoutLog;
