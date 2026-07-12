@@ -16,6 +16,19 @@ import 'package:sqlite3/sqlite3.dart';
 /// (no interleaving into an open transaction, no spurious "nesting" error) —
 /// serialization matches SQLite's semantics rather than compromising them.
 class SqliteDb implements Db {
+  SqliteDb._(this._db, this._lockTimeout);
+
+  /// Opens (creating if absent) the database at [path]. [lockTimeout] bounds how
+  /// long a statement waits to acquire the single-writer lock (default 30s).
+  factory SqliteDb.open(
+    String path, {
+    Duration lockTimeout = const Duration(seconds: 30),
+  }) => SqliteDb._(sqlite3.open(path), lockTimeout);
+
+  /// Opens a private in-memory database. See [open] for [lockTimeout].
+  factory SqliteDb.memory({
+    Duration lockTimeout = const Duration(seconds: 30),
+  }) => SqliteDb._(sqlite3.openInMemory(), lockTimeout);
   final Database _db;
   final Object _txZoneKey = Object();
   // The token of the transaction currently executing, or null between them. Each
@@ -32,19 +45,6 @@ class SqliteDb implements Db {
   late final _Conn _conn = _Conn(this);
   Future<void> _tail = Future<void>.value();
 
-  SqliteDb._(this._db, this._lockTimeout);
-
-  /// Opens (creating if absent) the database at [path]. [lockTimeout] bounds how
-  /// long a statement waits to acquire the single-writer lock (default 30s).
-  factory SqliteDb.open(String path,
-          {Duration lockTimeout = const Duration(seconds: 30)}) =>
-      SqliteDb._(sqlite3.open(path), lockTimeout);
-
-  /// Opens a private in-memory database. See [open] for [lockTimeout].
-  factory SqliteDb.memory(
-          {Duration lockTimeout = const Duration(seconds: 30)}) =>
-      SqliteDb._(sqlite3.openInMemory(), lockTimeout);
-
   @override
   DbConn get reader => _conn;
 
@@ -57,24 +57,26 @@ class SqliteDb implements Db {
       throw StateError('transactions do not nest');
     }
     final token = Object();
-    return _synchronized(() => runZoned(() async {
-          _currentTx = token;
-          _db.execute('BEGIN');
+    return _synchronized(
+      () => runZoned(() async {
+        _currentTx = token;
+        _db.execute('BEGIN');
+        try {
+          final result = await f(_conn);
+          _db.execute('COMMIT');
+          return result;
+        } catch (_) {
+          // Never let a ROLLBACK failure (e.g. the txn was already closed)
+          // mask the original error.
           try {
-            final result = await f(_conn);
-            _db.execute('COMMIT');
-            return result;
-          } catch (_) {
-            // Never let a ROLLBACK failure (e.g. the txn was already closed)
-            // mask the original error.
-            try {
-              _db.execute('ROLLBACK');
-            } catch (_) {}
-            rethrow;
-          } finally {
-            _currentTx = null;
-          }
-        }, zoneValues: {_txZoneKey: token}));
+            _db.execute('ROLLBACK');
+          } catch (_) {}
+          rethrow;
+        } finally {
+          _currentTx = null;
+        }
+      }, zoneValues: {_txZoneKey: token}),
+    );
   }
 
   @override
@@ -100,16 +102,21 @@ class SqliteDb implements Db {
     return _acquireThenRun(previous, done, action);
   }
 
-  Future<T> _acquireThenRun<T>(Future<void> previous, Completer<void> done,
-      FutureOr<T> Function() action) async {
+  Future<T> _acquireThenRun<T>(
+    Future<void> previous,
+    Completer<void> done,
+    FutureOr<T> Function() action,
+  ) async {
     try {
       await previous.timeout(_lockTimeout);
     } on TimeoutException {
       // Give up our slot without jumping the queue: successors still wait for
       // the holder that is actually running, then run in order.
-      previous.whenComplete(done.complete);
+      unawaited(previous.whenComplete(done.complete));
       throw const KetaException(
-          503, 'database busy: could not acquire the lock in time');
+        503,
+        'database busy: could not acquire the lock in time',
+      );
     }
     try {
       return await action();
@@ -134,14 +141,14 @@ class SqliteDb implements Db {
 }
 
 class _Conn implements DbConn {
+  _Conn(this._db);
   final SqliteDb _db;
 
-  _Conn(this._db);
-
   @override
-  Future<List<Map<String, Object?>>> query(String sql,
-          [List<Object?> params = const []]) =>
-      _db.run(() => _db.rawQuery(sql, params));
+  Future<List<Map<String, Object?>>> query(
+    String sql, [
+    List<Object?> params = const [],
+  ]) => _db.run(() => _db.rawQuery(sql, params));
 
   @override
   Future<int> execute(String sql, [List<Object?> params = const []]) =>

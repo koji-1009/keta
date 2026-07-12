@@ -16,12 +16,14 @@ List<Diagnostic> contractDrift(
   String file = 'openapi.yaml',
 }) {
   final diagnostics = <Diagnostic>[];
-  void report(String scope, String message) => diagnostics.add(Diagnostic(
-        rule: 'keta_contract_drift',
-        message: message,
-        file: file,
-        scope: scope,
-      ));
+  void report(String scope, String message) => diagnostics.add(
+    Diagnostic(
+      rule: 'keta_contract_drift',
+      message: message,
+      file: file,
+      scope: scope,
+    ),
+  );
 
   final oraclePaths = _paths(oracle);
   final shadowPaths = _paths(shadow);
@@ -30,26 +32,34 @@ List<Diagnostic> contractDrift(
     final oracleOps = oraclePaths[path]!;
     final shadowOps = shadowPaths[path];
     if (shadowOps == null) {
-      report(path,
-          'contract has "$path" but the code does not; materialize the route skeleton');
+      report(
+        path,
+        'contract has "$path" but the code does not; materialize the route skeleton',
+      );
       continue;
     }
     for (final method in oracleOps.difference(shadowOps)) {
-      report('$method $path',
-          'contract has "$method $path" but the code does not; add the handler');
+      report(
+        '$method $path',
+        'contract has "$method $path" but the code does not; add the handler',
+      );
     }
   }
   for (final path in shadowPaths.keys) {
     final shadowOps = shadowPaths[path]!;
     final oracleOps = oraclePaths[path];
     if (oracleOps == null) {
-      report(path,
-          'the code serves "$path" but the contract omits it; document it or remove the route');
+      report(
+        path,
+        'the code serves "$path" but the contract omits it; document it or remove the route',
+      );
       continue;
     }
     for (final method in shadowOps.difference(oracleOps)) {
-      report('$method $path',
-          'the code serves "$method $path" but the contract omits it; document it or remove the route');
+      report(
+        '$method $path',
+        'the code serves "$method $path" but the contract omits it; document it or remove the route',
+      );
     }
   }
 
@@ -57,26 +67,35 @@ List<Diagnostic> contractDrift(
   return diagnostics;
 }
 
-void _schemaDrift(Map<String, Object?> oracle, Map<String, Object?> shadow,
-    void Function(String scope, String message) report) {
+void _schemaDrift(
+  Map<String, Object?> oracle,
+  Map<String, Object?> shadow,
+  void Function(String scope, String message) report,
+) {
   final oracleSchemas = _schemas(oracle);
   final shadowSchemas = _schemas(shadow);
   for (final name in oracleSchemas.keys) {
     final oracleProps = _propertyNames(oracleSchemas[name]!);
     final shadowSchema = shadowSchemas[name];
     if (shadowSchema == null) {
-      report('schema $name',
-          'contract defines schema "$name" but the code does not; materialize the DTO');
+      report(
+        'schema $name',
+        'contract defines schema "$name" but the code does not; materialize the DTO',
+      );
       continue;
     }
     final shadowProps = _propertyNames(shadowSchema);
     for (final field in oracleProps.difference(shadowProps)) {
-      report('$name.$field',
-          'contract field "$name.$field" is missing from the code; add it to the DTO');
+      report(
+        '$name.$field',
+        'contract field "$name.$field" is missing from the code; add it to the DTO',
+      );
     }
     for (final field in shadowProps.difference(oracleProps)) {
-      report('$name.$field',
-          'the code has field "$name.$field" but the contract omits it; document it or remove it');
+      report(
+        '$name.$field',
+        'the code has field "$name.$field" but the contract omits it; document it or remove it',
+      );
     }
     // A field present on both sides can still have drifted in TYPE — a wire-
     // breaking change a name-only diff misses.
@@ -86,27 +105,35 @@ void _schemaDrift(Map<String, Object?> oracle, Map<String, Object?> shadow,
       final o = _typeSignature(oracleFields[field]!);
       final s = _typeSignature(shadowFields[field]!);
       if (o != s) {
-        report('$name.$field',
-            'contract field "$name.$field" is $o but the code has $s; reconcile the type');
+        report(
+          '$name.$field',
+          'contract field "$name.$field" is $o but the code has $s; reconcile the type',
+        );
       }
     }
     // required-set drift is likewise wire-relevant (optional vs required).
     final oracleReq = _requiredNames(oracleSchemas[name]!);
     final shadowReq = _requiredNames(shadowSchema);
     for (final field in oracleReq.difference(shadowReq)) {
-      report('$name.$field',
-          'contract requires "$name.$field" but the code makes it optional');
+      report(
+        '$name.$field',
+        'contract requires "$name.$field" but the code makes it optional',
+      );
     }
     for (final field in shadowReq.difference(oracleReq)) {
-      report('$name.$field',
-          'the code requires "$name.$field" but the contract makes it optional');
+      report(
+        '$name.$field',
+        'the code requires "$name.$field" but the contract makes it optional',
+      );
     }
   }
   // Schemas the code defines but the contract omits.
   for (final name in shadowSchemas.keys) {
     if (!oracleSchemas.containsKey(name)) {
-      report('schema $name',
-          'the code defines schema "$name" but the contract omits it; document it or remove the DTO');
+      report(
+        'schema $name',
+        'the code defines schema "$name" but the contract omits it; document it or remove the DTO',
+      );
     }
   }
 }
@@ -170,4 +197,12 @@ String _typeSignature(Map<String, Object?> prop) {
   return type;
 }
 
-const _httpMethods = {'get', 'post', 'put', 'delete', 'patch', 'head', 'options'};
+const _httpMethods = {
+  'get',
+  'post',
+  'put',
+  'delete',
+  'patch',
+  'head',
+  'options',
+};

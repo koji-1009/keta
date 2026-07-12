@@ -14,14 +14,14 @@ import 'transport.dart';
 /// writing, and connection acceptance all report failures through [onError]
 /// instead of terminating the isolate.
 class H1Transport implements Transport {
+  const H1Transport({this.address, this.onError});
+
   /// The bind address; defaults to all IPv4 interfaces when null.
   final Object? address;
 
   /// Reports transport-level failures (write errors, accept errors) instead of
   /// letting them reach the root zone. Falls back to stderr when null.
   final void Function(Object error, StackTrace stack)? onError;
-
-  const H1Transport({this.address, this.onError});
 
   @override
   Future<TransportServer> bind(
@@ -31,8 +31,10 @@ class H1Transport implements Transport {
     // shared: true lets every isolate bind the same port and share the accept
     // queue, so serve(isolates: n) needs no extra coordination.
     final server = await HttpServer.bind(
-        address ?? InternetAddress.anyIPv4, port,
-        shared: true);
+      address ?? InternetAddress.anyIPv4,
+      port,
+      shared: true,
+    );
     return _H1Server(server, onRequest, onError ?? _toStderr);
   }
 }
@@ -42,14 +44,13 @@ void _toStderr(Object error, StackTrace stack) {
 }
 
 class _H1Server implements TransportServer {
+  _H1Server(this._server, this._onRequest, this._onError) {
+    _server.listen(_accept, onError: _onError);
+  }
   final HttpServer _server;
   final FutureOr<Response> Function(TransportRequest) _onRequest;
   final void Function(Object, StackTrace) _onError;
   final Set<Future<void>> _inFlight = {};
-
-  _H1Server(this._server, this._onRequest, this._onError) {
-    _server.listen(_accept, onError: _onError);
-  }
 
   void _accept(HttpRequest request) {
     // _handle never throws (it catches internally), but guard the derived
@@ -110,17 +111,19 @@ class _H1Server implements TransportServer {
 }
 
 class _H1Request implements TransportRequest {
-  final HttpRequest _request;
-  final Completer<void> _closed = Completer<void>();
-
   _H1Request(this._request) {
     // A client dropping the connection surfaces as an error on response.done;
     // signal cancellation then. A normal completion leaves `closed` pending
     // (the request finished on its own — nothing to cancel).
-    _request.response.done.then((_) {}, onError: (Object _) {
-      if (!_closed.isCompleted) _closed.complete();
-    });
+    _request.response.done.then(
+      (_) {},
+      onError: (Object _) {
+        if (!_closed.isCompleted) _closed.complete();
+      },
+    );
   }
+  final HttpRequest _request;
+  final Completer<void> _closed = Completer<void>();
 
   @override
   Future<void> get closed => _closed.future;
@@ -135,7 +138,8 @@ class _H1Request implements TransportRequest {
   Stream<List<int>> get bodyStream => _request;
 
   @override
-  String get remoteAddress => _request.connectionInfo?.remoteAddress.address ?? '';
+  String get remoteAddress =>
+      _request.connectionInfo?.remoteAddress.address ?? '';
 
   @override
   Map<String, String> get headers {

@@ -13,8 +13,10 @@ library;
 /// round-tripping.
 abstract interface class DbConn {
   /// Runs a query and returns its rows as column-name maps.
-  Future<List<Map<String, Object?>>> query(String sql,
-      [List<Object?> params = const []]);
+  Future<List<Map<String, Object?>>> query(
+    String sql, [
+    List<Object?> params = const [],
+  ]);
 
   /// Runs a statement and returns the number of rows it changed
   /// (`sqlite3_changes`). Meaningful only for `INSERT`/`UPDATE`/`DELETE`; for

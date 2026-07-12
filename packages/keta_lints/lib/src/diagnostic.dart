@@ -15,17 +15,16 @@ String diagnosticId(String file, String scope, String rule) {
 /// One diagnostic: a stable [id], its [rule], a [message] that includes the fix
 /// instructions, and the [file] it concerns.
 class Diagnostic {
-  final String id;
-  final String rule;
-  final String message;
-  final String file;
-
   Diagnostic({
     required this.rule,
     required this.message,
     required this.file,
     required String scope,
   }) : id = diagnosticId(file, scope, rule);
+  final String id;
+  final String rule;
+  final String message;
+  final String file;
 
   @override
   String toString() => '[$id] $rule: $message ($file)';

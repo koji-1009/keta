@@ -18,8 +18,8 @@ final Key<DbConn> txConn = Key<DbConn>('tx');
 /// COMMITS the writes of a request that actually failed. Correct order:
 /// `app..use(recover())..use(tx())`.
 Middleware<E> tx<E extends HasDb>() => (Context<E> c, Handler<E> next) {
-      return c.env.db.transaction((conn) async {
-        c.set(txConn, conn);
-        return next(c);
-      });
-    };
+  return c.env.db.transaction((conn) async {
+    c.set(txConn, conn);
+    return next(c);
+  });
+};

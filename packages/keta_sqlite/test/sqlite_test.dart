@@ -7,12 +7,11 @@ import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 
 class Env implements HasLog, HasDb, Disposable {
+  Env(this.log, this.db);
   @override
   final Log log;
   @override
   final Db db;
-
-  Env(this.log, this.db);
 
   @override
   Future<void> close() => db.close();
@@ -21,7 +20,8 @@ class Env implements HasLog, HasDb, Disposable {
 Future<Env> bootMemory() async {
   final db = SqliteDb.memory();
   await db.writer.execute(
-      'create table users (id integer primary key, name text not null)');
+    'create table users (id integer primary key, name text not null)',
+  );
   return Env(StdoutLog(flushInterval: Duration.zero), db);
 }
 
@@ -30,11 +30,18 @@ void main() {
     test('execute and query round-trip with the type contract', () async {
       final db = SqliteDb.memory();
       addTearDown(db.close);
-      await db.writer
-          .execute('create table t (i integer, r real, s text, b blob)');
+      await db.writer.execute(
+        'create table t (i integer, r real, s text, b blob)',
+      );
       final affected = await db.writer.execute(
-          'insert into t values (?, ?, ?, ?)',
-          [7, 1.5, 'hi', [1, 2, 3]]);
+        'insert into t values (?, ?, ?, ?)',
+        [
+          7,
+          1.5,
+          'hi',
+          [1, 2, 3],
+        ],
+      );
       expect(affected, 1);
 
       final rows = await db.reader.query('select * from t');
@@ -53,8 +60,10 @@ void main() {
         await c.execute('insert into users (name) values (?)', ['ada']);
         return 0;
       });
-      expect((await db.reader.query('select count(*) n from users')).single['n'],
-          1);
+      expect(
+        (await db.reader.query('select count(*) n from users')).single['n'],
+        1,
+      );
 
       await expectLater(
         db.transaction((c) async {
@@ -63,8 +72,10 @@ void main() {
         }),
         throwsStateError,
       );
-      expect((await db.reader.query('select count(*) n from users')).single['n'],
-          1);
+      expect(
+        (await db.reader.query('select count(*) n from users')).single['n'],
+        1,
+      );
     });
 
     test('nested transaction is a StateError', () async {
@@ -78,30 +89,37 @@ void main() {
   });
 
   group('tx() middleware', () {
-    testBothModes('rolls back the transaction when the handler fails',
-        (mode) async {
+    testBothModes('rolls back the transaction when the handler fails', (
+      mode,
+    ) async {
       final env = await bootMemory();
       addTearDown(env.close);
       final app = App<Env>()
         ..use(recover())
         ..use(tx());
       app.post('/ok', (c) async {
-        await c.get(txConn).execute('insert into users (name) values (?)', ['ok']);
+        await c.get(txConn).execute('insert into users (name) values (?)', [
+          'ok',
+        ]);
         return c.text('done', 201);
       });
-      app.post('/fail', (Context<Env> c) => mode.wrap(() async {
-            await c
-                .get(txConn)
-                .execute('insert into users (name) values (?)', ['nope']);
-            throw const KetaException(400, 'rejected');
-          })());
+      app.post(
+        '/fail',
+        (Context<Env> c) => mode.wrap(() async {
+          await c.get(txConn).execute('insert into users (name) values (?)', [
+            'nope',
+          ]);
+          throw const KetaException(400, 'rejected');
+        })(),
+      );
       final client = TestClient(app, env);
 
       expect((await client.post('/ok')).status, 201);
       expect((await client.post('/fail')).status, 400);
 
-      final n = (await env.db.reader.query('select count(*) n from users'))
-          .single['n'];
+      final n = (await env.db.reader.query(
+        'select count(*) n from users',
+      )).single['n'];
       expect(n, 1); // only the committed /ok insert survives
     });
   });
@@ -110,10 +128,12 @@ void main() {
     test('apply in order, record, and stay idempotent', () async {
       final dir = Directory.systemTemp.createTempSync('keta_mig');
       addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/0002_add_email.sql')
-          .writeAsStringSync('alter table users add column email text;');
+      File(
+        '${dir.path}/0002_add_email.sql',
+      ).writeAsStringSync('alter table users add column email text;');
       File('${dir.path}/0001_create_users.sql').writeAsStringSync(
-          'create table users (id integer primary key, name text);');
+        'create table users (id integer primary key, name text);',
+      );
 
       final db = SqliteDb.memory();
       addTearDown(db.close);
@@ -122,8 +142,9 @@ void main() {
       expect(first.applied, ['0001', '0002']);
 
       // The email column exists only if 0002 ran after 0001.
-      await db.writer
-          .execute("insert into users (name, email) values ('a', 'a@b.c')");
+      await db.writer.execute(
+        "insert into users (name, email) values ('a', 'a@b.c')",
+      );
       final rows = await db.reader.query('select email from users');
       expect(rows.single['email'], 'a@b.c');
 
@@ -132,24 +153,27 @@ void main() {
       expect(second.alreadyApplied, ['0001', '0002']);
     });
 
-    test('applies a migration containing a trigger (multi-statement)', () async {
-      final dir = Directory.systemTemp.createTempSync('keta_trig');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/0001_trigger.sql').writeAsStringSync('''
+    test(
+      'applies a migration containing a trigger (multi-statement)',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('keta_trig');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        File('${dir.path}/0001_trigger.sql').writeAsStringSync('''
 create table t (id integer primary key, n integer);
 create table audit (n integer);
 create trigger t_ins after insert on t begin
   insert into audit (n) values (new.n);
 end;
 ''');
-      final db = SqliteDb.memory();
-      addTearDown(db.close);
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
 
-      final result = await applyMigrations(db, directory: dir.path);
-      expect(result.applied, ['0001']);
+        final result = await applyMigrations(db, directory: dir.path);
+        expect(result.applied, ['0001']);
 
-      await db.writer.execute('insert into t (n) values (5)');
-      expect((await db.reader.query('select n from audit')).single['n'], 5);
-    });
+        await db.writer.execute('insert into t (n) values (5)');
+        expect((await db.reader.query('select n from audit')).single['n'], 5);
+      },
+    );
   });
 }

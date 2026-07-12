@@ -6,12 +6,11 @@ import 'package:keta_sqlite/keta_sqlite.dart';
 /// dependencies. keta reaches [log] and [close] structurally; keta_db reaches
 /// [db].
 class Env implements HasLog, HasDb, Disposable {
+  Env(this.db, this.log);
   @override
   final Db db;
   @override
   final Log log;
-
-  Env(this.db, this.log);
 
   static Future<Env> boot() async => Env(SqliteDb.open('app.db'), StdoutLog());
 

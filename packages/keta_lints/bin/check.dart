@@ -4,10 +4,12 @@ import 'package:keta_lints/keta_lints.dart';
 
 /// Project-wide checks. Exits non-zero on any finding, so it gates CI.
 ///
-///   dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
-///   dart run keta_lints:check canonical <file-or-dir> ...
-///   dart run keta_lints:check routes <file-or-dir> ...
-///   dart run keta_lints:check internal-await <file-or-dir> ...
+/// ```
+/// dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
+/// dart run keta_lints:check canonical <file-or-dir> ...
+/// dart run keta_lints:check routes <file-or-dir> ...
+/// dart run keta_lints:check internal-await <file-or-dir> ...
+/// ```
 ///
 /// `drift` is the contract-drift document diff between the externally-supplied
 /// contract (oracle) and the OpenAPI the code emits. `canonical` reports DTOs
@@ -22,12 +24,19 @@ void main(List<String> args) {
     case 'drift':
       _drift(args.sublist(1));
     case 'canonical':
-      _sourceCheck(args.sublist(1), canonicalDiagnostics, 'no canonical issues');
+      _sourceCheck(
+        args.sublist(1),
+        canonicalDiagnostics,
+        'no canonical issues',
+      );
     case 'routes':
       _sourceCheck(args.sublist(1), routeDiagnostics, 'no route issues');
     case 'internal-await':
       _sourceCheck(
-          args.sublist(1), internalAwaitDiagnostics, 'no internal awaits');
+        args.sublist(1),
+        internalAwaitDiagnostics,
+        'no internal awaits',
+      );
     default:
       stderr.writeln('unknown check "${args.first}"');
       exit(64);
@@ -45,9 +54,10 @@ void _drift(List<String> args) {
 }
 
 void _sourceCheck(
-    List<String> args,
-    List<Diagnostic> Function(String source, {String file}) analyze,
-    String cleanMessage) {
+  List<String> args,
+  List<Diagnostic> Function(String source, {String file}) analyze,
+  String cleanMessage,
+) {
   if (args.isEmpty) {
     stderr.writeln('usage: check <kind> <file-or-dir> ...');
     exit(64);

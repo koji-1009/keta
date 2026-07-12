@@ -39,8 +39,9 @@ const eventSchema = Schema(
 void main() {
   test('a top-level \$ref absent from deps is an unknown reference', () {
     const bad = Schema('Bad', {r'$ref': '#/components/schemas/Missing'});
-    expect(bad.validate({'anything': 1}),
-        [r'$: unknown schema reference "#/components/schemas/Missing"']);
+    expect(bad.validate({'anything': 1}), [
+      r'$: unknown schema reference "#/components/schemas/Missing"',
+    ]);
   });
 
   group('type number', () {
@@ -93,8 +94,9 @@ void main() {
 
   group('oneOf', () {
     test('a non-Map value is rejected', () {
-      expect(eventSchema.validate('created'),
-          [r'$: expected object, got string']);
+      expect(eventSchema.validate('created'), [
+        r'$: expected object, got string',
+      ]);
     });
     test('oneOf without a discriminator is unsupported', () {
       const s = Schema('NoDisc', {
@@ -102,14 +104,17 @@ void main() {
           {r'$ref': '#/components/schemas/Created'},
         ],
       });
-      expect(s.validate({'type': 'created'}),
-          [r'$: oneOf without a discriminator is not supported']);
+      expect(s.validate({'type': 'created'}), [
+        r'$: oneOf without a discriminator is not supported',
+      ]);
     });
     test('a non-string (or missing) discriminator value is rejected', () {
-      expect(eventSchema.validate({'type': 42}),
-          [r'$.type: discriminator must be a string']);
-      expect(eventSchema.validate(<String, Object?>{}),
-          [r'$.type: discriminator must be a string']);
+      expect(eventSchema.validate({'type': 42}), [
+        r'$.type: discriminator must be a string',
+      ]);
+      expect(eventSchema.validate(<String, Object?>{}), [
+        r'$.type: discriminator must be a string',
+      ]);
     });
     test('a mapped ref absent from deps is an unknown reference', () {
       const dangling = Schema('Dangling', {
@@ -121,19 +126,23 @@ void main() {
           'mapping': {'ghost': '#/components/schemas/Ghost'},
         },
       });
-      expect(dangling.validate({'type': 'ghost'}),
-          [r'$: unknown schema reference "#/components/schemas/Ghost"']);
+      expect(dangling.validate({'type': 'ghost'}), [
+        r'$: unknown schema reference "#/components/schemas/Ghost"',
+      ]);
     });
   });
 
-  test('type names in messages cover double/List/Map/null and the fallback', () {
-    const s = Schema('S', {'type': 'string'});
-    expect(s.validate(1.5), [r'$: expected string, got number']);
-    expect(s.validate([1]), [r'$: expected string, got array']);
-    expect(s.validate({'a': 1}), [r'$: expected string, got object']);
-    expect(s.validate(null), [r'$: expected string, got null']);
-    expect(s.validate(Duration.zero), [r'$: expected string, got Duration']);
-  });
+  test(
+    'type names in messages cover double/List/Map/null and the fallback',
+    () {
+      const s = Schema('S', {'type': 'string'});
+      expect(s.validate(1.5), [r'$: expected string, got number']);
+      expect(s.validate([1]), [r'$: expected string, got array']);
+      expect(s.validate({'a': 1}), [r'$: expected string, got object']);
+      expect(s.validate(null), [r'$: expected string, got null']);
+      expect(s.validate(Duration.zero), [r'$: expected string, got Duration']);
+    },
+  );
 
   group('enum on non-string types', () {
     test('an integer enum restricts the value', () {
@@ -172,8 +181,10 @@ void main() {
       'additionalProperties': false,
     });
     test('rejects an undeclared key', () {
-      expect(closed.validate({'a': 'x', 'evil': 1}),
-          contains(matches(r'evil: unexpected property')));
+      expect(
+        closed.validate({'a': 'x', 'evil': 1}),
+        contains(matches(r'evil: unexpected property')),
+      );
     });
     test('accepts a declared key', () {
       expect(closed.validate({'a': 'x'}), isEmpty);
@@ -213,12 +224,17 @@ void main() {
     test('resolves the variant by schema name when no mapping is given', () {
       expect(pet.validate({'kind': 'Cat', 'meow': true}), isEmpty);
       expect(pet.validate({'kind': 'Dog', 'bark': false}), isEmpty);
-      expect(pet.validate({'kind': 'Cat'}), contains(matches(r'meow: required')));
+      expect(
+        pet.validate({'kind': 'Cat'}),
+        contains(matches(r'meow: required')),
+      );
     });
 
     test('an unknown discriminator value is an unknown reference', () {
-      expect(pet.validate({'kind': 'Fish'}),
-          contains(matches(r'unknown schema reference')));
+      expect(
+        pet.validate({'kind': 'Fish'}),
+        contains(matches(r'unknown schema reference')),
+      );
     });
   });
 }

@@ -3,13 +3,7 @@ import 'package:keta_openapi/keta_openapi.dart';
 enum Role { admin, member }
 
 class UserDto {
-  final String id;
-  final String name;
-  final int? age;
-  final Role role;
-  final List<String> tags;
-
-  UserDto({
+  const UserDto({
     required this.id,
     required this.name,
     this.age,
@@ -18,12 +12,12 @@ class UserDto {
   });
 
   factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        age: json['age'] as int?,
-        role: Role.values.byName(json['role'] as String),
-        tags: (json['tags'] as List).cast<String>(),
-      );
+    id: json['id'] as String,
+    name: json['name'] as String,
+    age: json['age'] as int?,
+    role: Role.values.byName(json['role'] as String),
+    tags: (json['tags'] as List).cast<String>(),
+  );
 
   /// Constructs from a database row, where `tags` is a comma-joined column and
   /// `age` may be absent. Numeric-origin values are converted explicitly.
@@ -37,14 +31,19 @@ class UserDto {
       tags: tags.isEmpty ? const [] : tags.split(','),
     );
   }
+  final String id;
+  final String name;
+  final int? age;
+  final Role role;
+  final List<String> tags;
 
   Map<String, Object?> toJson() => {
-        'id': id,
-        'name': name,
-        if (age != null) 'age': age,
-        'role': role.name,
-        'tags': tags,
-      };
+    'id': id,
+    'name': name,
+    if (age != null) 'age': age,
+    'role': role.name,
+    'tags': tags,
+  };
 }
 
 const userDtoSchema = Schema('UserDto', {

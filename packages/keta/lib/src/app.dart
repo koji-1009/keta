@@ -17,15 +17,25 @@ typedef Handler<E> = FutureOr<Response> Function(Context<E> c);
 
 /// A middleware: it may run code around [next] and short-circuit by returning
 /// its own response.
-typedef Middleware<E> = FutureOr<Response> Function(
-    Context<E> c, Handler<E> next);
+typedef Middleware<E> =
+    FutureOr<Response> Function(Context<E> c, Handler<E> next);
 
 /// A typed-DSL handler, receiving the path's captured tuple as [params].
-typedef TypedHandler<E, T> = FutureOr<Response> Function(
-    Context<E> c, T params);
+typedef TypedHandler<E, T> =
+    FutureOr<Response> Function(Context<E> c, T params);
 
 /// One registered route, before the trie is compiled.
 class _Reg<E> {
+  _Reg(
+    this.method,
+    this.segments,
+    this.captures,
+    this.captureNames,
+    this.handler,
+    this.groupMiddleware,
+    this.doc,
+    this.template,
+  );
   final String method;
   final List<Segment> segments;
   final List<Capture<Object?>> captures;
@@ -34,19 +44,15 @@ class _Reg<E> {
   final List<Middleware<E>> groupMiddleware;
   final Object? doc;
   final String template;
-
-  _Reg(this.method, this.segments, this.captures, this.captureNames,
-      this.handler, this.groupMiddleware, this.doc, this.template);
 }
 
 /// A registered route exposed for OpenAPI generation and inspection.
 class RouteEntry {
+  const RouteEntry(this.method, this.segments, this.doc, this.template);
   final String method;
   final List<Segment> segments;
   final Object? doc;
   final String template;
-
-  const RouteEntry(this.method, this.segments, this.doc, this.template);
 }
 
 /// The application: a routing table plus app-wide middleware.
@@ -87,32 +93,51 @@ class App<E> {
   /// Opens the typed-DSL entry for [path]. Bind verbs on the returned [Route]
   /// with the same names as the string form: `app.on(path).post((c, p) => ...)`,
   /// where `p` is the path's captured tuple.
-  Route<E, T> on<T>(Path<T> path) => Route<E, T>._(this, path, const [], const []);
+  Route<E, T> on<T>(Path<T> path) =>
+      Route<E, T>._(this, path, const [], const []);
 
   /// All registered routes, in registration order.
   List<RouteEntry> get routes => [
-        for (final r in _regs)
-          RouteEntry(r.method, r.segments, r.doc, r.template),
-      ];
+    for (final r in _regs) RouteEntry(r.method, r.segments, r.doc, r.template),
+  ];
 
-  void _addPlain(String method, Object path, Handler<E> handler, Object? doc,
-      List<Segment> prefixSegments, List<Middleware<E>> groupMiddleware) {
+  void _addPlain(
+    String method,
+    Object path,
+    Handler<E> handler,
+    Object? doc,
+    List<Segment> prefixSegments,
+    List<Middleware<E>> groupMiddleware,
+  ) {
     final base = _basePath(path);
     final segments = [...prefixSegments, ...base.segments];
     // Captures from the whole path — a captured group prefix must be readable
     // via c.param too.
-    _register(method, segments, _capturesOf(segments), handler, doc,
-        groupMiddleware);
+    _register(
+      method,
+      segments,
+      _capturesOf(segments),
+      handler,
+      doc,
+      groupMiddleware,
+    );
   }
 
-  void _addTyped<T>(String method, Path<T> path, TypedHandler<E, T> handler,
-      Object? doc, List<Segment> prefixSegments,
-      List<Middleware<E>> groupMiddleware) {
+  void _addTyped<T>(
+    String method,
+    Path<T> path,
+    TypedHandler<E, T> handler,
+    Object? doc,
+    List<Segment> prefixSegments,
+    List<Middleware<E>> groupMiddleware,
+  ) {
     final segments = [...prefixSegments, ...path.segments];
     // The tuple carries only the base path's captures; any group-prefix
     // captures precede them in match order, so the adapter reads the base
     // captures starting past the prefix ones.
-    final prefixCaptureCount = prefixSegments.whereType<CaptureSegment>().length;
+    final prefixCaptureCount = prefixSegments
+        .whereType<CaptureSegment>()
+        .length;
     _register(
       method,
       segments,
@@ -123,12 +148,18 @@ class App<E> {
     );
   }
 
-  static List<Capture<Object?>> _capturesOf(List<Segment> segments) =>
-      [for (final s in segments.whereType<CaptureSegment>()) s.capture];
+  static List<Capture<Object?>> _capturesOf(List<Segment> segments) => [
+    for (final s in segments.whereType<CaptureSegment>()) s.capture,
+  ];
 
-  void _register(String method, List<Segment> segments,
-      List<Capture<Object?>> captures, Handler<E> handler, Object? doc,
-      List<Middleware<E>> groupMiddleware) {
+  void _register(
+    String method,
+    List<Segment> segments,
+    List<Capture<Object?>> captures,
+    Handler<E> handler,
+    Object? doc,
+    List<Middleware<E>> groupMiddleware,
+  ) {
     final names = [
       for (var i = 0; i < captures.length; i++) captures[i].name ?? 'p$i',
     ];
@@ -138,35 +169,41 @@ class App<E> {
     for (final name in names) {
       if (!seen.add(name)) {
         throw StateError(
-            'duplicate capture name ":$name" in ${templateOf(segments)}');
+          'duplicate capture name ":$name" in ${templateOf(segments)}',
+        );
       }
     }
-    _regs.add(_Reg<E>(
-      method,
-      segments,
-      captures,
-      names,
-      handler,
-      // Snapshot the group middleware at registration, so a later `..use()`
-      // affects only subsequently-registered routes (order-deterministic).
-      [...groupMiddleware],
-      doc,
-      templateOf(segments),
-    ));
+    _regs.add(
+      _Reg<E>(
+        method,
+        segments,
+        captures,
+        names,
+        handler,
+        // Snapshot the group middleware at registration, so a later `..use()`
+        // affects only subsequently-registered routes (order-deterministic).
+        [...groupMiddleware],
+        doc,
+        templateOf(segments),
+      ),
+    );
   }
 
   Path<dynamic> _basePath(Object path) => switch (path) {
-        String() => parsePathString(path),
-        Path() => path,
-        _ => throw ArgumentError.value(
-            path, 'path', 'must be a String or Path'),
-      };
+    String() => parsePathString(path),
+    Path() => path,
+    _ => throw ArgumentError.value(path, 'path', 'must be a String or Path'),
+  };
 
   /// Wraps a typed handler so it presents as a plain [Handler]: captures are
   /// parsed at the boundary (a [FormatException] becomes 400) and delivered as
   /// the path's typed tuple.
-  Handler<E> _typedAdapter<T>(Path<T> path, List<Capture<Object?>> captures,
-      int offset, TypedHandler<E, T> handler) {
+  Handler<E> _typedAdapter<T>(
+    Path<T> path,
+    List<Capture<Object?>> captures,
+    int offset,
+    TypedHandler<E, T> handler,
+  ) {
     return (Context<E> c) {
       final raw = ctxOf(c).orderedCaptures;
       final parsed = List<Object?>.filled(captures.length, null);
@@ -174,7 +211,10 @@ class App<E> {
         try {
           parsed[i] = captures[i].parse(raw[offset + i]);
         } on FormatException {
-          throw KetaException(400, 'invalid path parameter "${raw[offset + i]}"');
+          throw KetaException(
+            400,
+            'invalid path parameter "${raw[offset + i]}"',
+          );
         }
       }
       return handler(c, path.buildTuple(parsed));
@@ -194,18 +234,19 @@ class App<E> {
       final key = conflictKey(reg.method, reg.segments);
       if (!seen.add(key)) {
         throw StateError(
-            'route conflict: ${reg.method} ${reg.template} registered twice');
+          'route conflict: ${reg.method} ${reg.template} registered twice',
+        );
       }
       // Only group middleware wraps the leaf; app-level middleware wraps the
       // whole dispatch (below) so it also covers 404/405 — e.g. CORS preflight.
       _insert(root, reg, _compose(reg.groupMiddleware, reg.handler));
     }
-    final baseLog = log ??
+    final baseLog =
+        log ??
         (env is HasLog
             ? (env as HasLog).log
             : StdoutLog(flushInterval: Duration.zero));
-    return Router<E>._(
-        root, env, baseLog, maxBodyBytes, [..._middleware]);
+    return Router<E>._(root, env, baseLog, maxBodyBytes, [..._middleware]);
   }
 
   /// Starts the server, booting one env per isolate, and returns a [Server]
@@ -231,7 +272,10 @@ class App<E> {
     }
     if (isolates > 1 && transport != null) {
       throw ArgumentError.value(
-          transport, 'transport', 'not supported with isolates > 1');
+        transport,
+        'transport',
+        'not supported with isolates > 1',
+      );
     }
     // Worker 0 runs on the current isolate; bind it first so a configuration
     // error surfaces here before any child is spawned.
@@ -240,9 +284,11 @@ class App<E> {
     // timer here (a HasLog env owns its own).
     final fallbackLog = env is HasLog ? null : StdoutLog();
     final router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
-    final t = transport ??
+    final t =
+        transport ??
         H1Transport(
-            onError: (e, st) => router.baseLog.error('transport error', e, st));
+          onError: (e, st) => router.baseLog.error('transport error', e, st),
+        );
     final server = await t.bind(port, router.dispatch);
     if (isolates == 1) {
       return _Server<E>(env, router.baseLog, server);
@@ -273,13 +319,18 @@ class App<E> {
     var node = root;
     for (final seg in reg.segments) {
       node = switch (seg) {
-        LiteralSegment(:final value) =>
-          node.literals.putIfAbsent(value, _TrieNode<E>.new),
+        LiteralSegment(:final value) => node.literals.putIfAbsent(
+          value,
+          _TrieNode<E>.new,
+        ),
         CaptureSegment() => node.capture ??= _TrieNode<E>(),
       };
     }
-    node.methods[reg.method] =
-        _Compiled<E>(composed, reg.captureNames, reg.template);
+    node.methods[reg.method] = _Compiled<E>(
+      composed,
+      reg.captureNames,
+      reg.template,
+    );
   }
 
   Handler<E> _compose(List<Middleware<E>> middleware, Handler<E> base) {
@@ -297,11 +348,10 @@ List<Segment> _prefixSegments(String prefix) =>
 
 /// A prefixed child router with its own confined middleware.
 class RouteGroup<E> {
+  RouteGroup._(this._app, this._prefix, this._middleware);
   final App<E> _app;
   final List<Segment> _prefix;
   final List<Middleware<E>> _middleware;
-
-  RouteGroup._(this._app, this._prefix, this._middleware);
 
   /// Adds middleware confined to this group's routes. Runs after app-wide
   /// middleware, in the order added.
@@ -334,12 +384,11 @@ class RouteGroup<E> {
 /// The typed-DSL binding surface for one [Path]. Its verbs mirror [App]'s but
 /// hand the handler the path's captured tuple.
 class Route<E, T> {
+  Route._(this._app, this._path, this._prefix, this._middleware);
   final App<E> _app;
   final Path<T> _path;
   final List<Segment> _prefix;
   final List<Middleware<E>> _middleware;
-
-  Route._(this._app, this._path, this._prefix, this._middleware);
 
   void get(TypedHandler<E, T> handler, {Object? doc}) =>
       _app._addTyped('GET', _path, handler, doc, _prefix, _middleware);
@@ -364,16 +413,29 @@ class _TrieNode<E> {
 }
 
 class _Compiled<E> {
+  _Compiled(this.handler, this.captureNames, this.template);
   final Handler<E> handler;
   final List<String> captureNames;
   final String template;
-
-  _Compiled(this.handler, this.captureNames, this.template);
 }
 
 /// The compiled dispatcher: a radix trie plus the bound env. Matching stays on
 /// the synchronous path so a sync handler allocates no [Future].
 class Router<E> {
+  Router._(
+    this._root,
+    this.env,
+    this.baseLog,
+    this.maxBodyBytes,
+    List<Middleware<E>> appMiddleware,
+  ) {
+    var handler = _terminal;
+    for (final m in appMiddleware.reversed) {
+      final next = handler;
+      handler = (c) => m(c, next);
+    }
+    _appHandler = handler;
+  }
   final _TrieNode<E> _root;
   final E env;
   final Log baseLog;
@@ -385,21 +447,16 @@ class Router<E> {
   /// covers unmatched requests too.
   late final Handler<E> _appHandler;
 
-  Router._(this._root, this.env, this.baseLog, this.maxBodyBytes,
-      List<Middleware<E>> appMiddleware) {
-    var handler = _terminal;
-    for (final m in appMiddleware.reversed) {
-      final next = handler;
-      handler = (c) => m(c, next);
-    }
-    _appHandler = handler;
-  }
-
   FutureOr<Response> dispatch(TransportRequest request) {
     final segments = _decodedSegments(request.uri);
     final captured = <String>[];
-    final (compiled, pathMatched) =
-        _walk(_root, segments, 0, request.method, captured);
+    final (compiled, pathMatched) = _walk(
+      _root,
+      segments,
+      0,
+      request.method,
+      captured,
+    );
     final reqId = _reqId();
     final route = compiled?.template ?? request.uri.path;
     final params = <String, String>{
@@ -407,21 +464,22 @@ class Router<E> {
         for (var i = 0; i < compiled.captureNames.length; i++)
           compiled.captureNames[i]: captured[i],
     };
-    final ctx = RequestCtx<E>(
-      env: env,
-      method: request.method,
-      uri: request.uri,
-      route: route,
-      headers: request.headers,
-      remoteAddress: request.remoteAddress,
-      params: params,
-      orderedCaptures: captured,
-      log: baseLog.withFields({'reqId': reqId, 'route': route}),
-      maxBodyBytes: maxBodyBytes,
-      body: request.bodyStream,
-    )
-      ..matched = compiled?.handler
-      ..pathMatched = pathMatched;
+    final ctx =
+        RequestCtx<E>(
+            env: env,
+            method: request.method,
+            uri: request.uri,
+            route: route,
+            headers: request.headers,
+            remoteAddress: request.remoteAddress,
+            params: params,
+            orderedCaptures: captured,
+            log: baseLog.withFields({'reqId': reqId, 'route': route}),
+            maxBodyBytes: maxBodyBytes,
+            body: request.bodyStream,
+          )
+          ..matched = compiled?.handler
+          ..pathMatched = pathMatched;
     final c = Context<E>(ctx);
     // Client-disconnect → cooperative cancellation. abort() is idempotent, so a
     // later timeout (or vice versa) is harmless; a never-completing `closed`
@@ -435,10 +493,9 @@ class Router<E> {
     final handler = ctxOf(c).matched;
     if (handler != null) return handler(c);
     final pathMatched = ctxOf(c).pathMatched;
-    return Response.json(
-      {'error': pathMatched ? 'method not allowed' : 'not found'},
-      pathMatched ? 405 : 404,
-    );
+    return Response.json({
+      'error': pathMatched ? 'method not allowed' : 'not found',
+    }, pathMatched ? 405 : 404);
   }
 
   /// The last-resort fallback, always applied: `KetaException` maps to its
@@ -454,9 +511,7 @@ class Router<E> {
 
   String _reqId() {
     final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
-    return bytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 }
 
@@ -464,8 +519,13 @@ class Router<E> {
 /// literal branch still lets a capture branch match. Returns the compiled route
 /// (or null) and whether any route shares this path (to distinguish 405 from
 /// 404).
-(_Compiled<E>?, bool) _walk<E>(_TrieNode<E> node, List<String> segments,
-    int i, String method, List<String> captured) {
+(_Compiled<E>?, bool) _walk<E>(
+  _TrieNode<E> node,
+  List<String> segments,
+  int i,
+  String method,
+  List<String> captured,
+) {
   if (i == segments.length) {
     return (node.methods[method], node.methods.isNotEmpty);
   }
@@ -491,8 +551,10 @@ class Router<E> {
 /// Matchable path segments, percent-decoded, with empty segments dropped so a
 /// trailing slash and interior `//` stay tolerant. `uri.pathSegments` decodes
 /// each segment and keeps `%2F` inside a single segment.
-List<String> _decodedSegments(Uri uri) =>
-    [for (final s in uri.pathSegments) if (s.isNotEmpty) s];
+List<String> _decodedSegments(Uri uri) => [
+  for (final s in uri.pathSegments)
+    if (s.isNotEmpty) s,
+];
 
 /// A running server.
 abstract interface class Server {
@@ -502,15 +564,13 @@ abstract interface class Server {
 }
 
 class _Server<E> implements Server {
+  _Server(this.env, this._baseLog, this._transport);
   final E env;
   final Log _baseLog;
   final TransportServer _transport;
 
-  _Server(this.env, this._baseLog, this._transport);
-
   @override
-  Future<void> shutdown(
-      {Duration grace = const Duration(seconds: 30)}) async {
+  Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
     await _transport.close(grace: grace);
     if (env is Disposable) await (env as Disposable).close();
     await _baseLog.flush();
@@ -520,21 +580,19 @@ class _Server<E> implements Server {
 
 /// A handle to a spawned worker isolate and its shutdown control port.
 class _Worker {
+  _Worker(this.isolate, this.control);
   final Isolate isolate;
   final SendPort control;
-
-  _Worker(this.isolate, this.control);
 }
 
 /// The server for [App.serve] with `isolates > 1`: worker 0 runs here, the rest
 /// in spawned isolates driven over control ports.
 class _MultiServer<E> implements Server {
+  _MultiServer(this._env, this._baseLog, this._transport, this._workers);
   final E _env;
   final Log _baseLog;
   final TransportServer _transport;
   final List<_Worker> _workers;
-
-  _MultiServer(this._env, this._baseLog, this._transport, this._workers);
 
   @override
   Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
@@ -550,8 +608,9 @@ class _MultiServer<E> implements Server {
     if (_env is Disposable) await (_env as Disposable).close();
     await _baseLog.flush();
     if (_baseLog is StdoutLog) _baseLog.dispose();
-    await Future.wait(acks)
-        .timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
+    await Future.wait(
+      acks,
+    ).timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
     // Close every ack port whether or not the ack arrived — an un-closed
     // ReceivePort keeps this isolate alive and hangs the process.
     for (final port in ports) {
@@ -564,7 +623,11 @@ class _MultiServer<E> implements Server {
 }
 
 Future<_Worker> _spawnWorker<E>(
-    App<E> app, Future<E> Function() boot, int port, int maxBodyBytes) async {
+  App<E> app,
+  Future<E> Function() boot,
+  int port,
+  int maxBodyBytes,
+) async {
   final ready = ReceivePort();
   final errors = ReceivePort();
   try {
@@ -578,12 +641,15 @@ Future<_Worker> _spawnWorker<E>(
     final control = await Future.any([
       ready.first,
       errors.first.then<Object?>(
-          (e) => throw StateError('worker failed to start: $e')),
+        (e) => throw StateError('worker failed to start: $e'),
+      ),
     ]);
     return _Worker(isolate, control as SendPort);
+    // ignore: avoid_catching_errors
   } on ArgumentError catch (e) {
     throw StateError(
-        'serve(isolates > 1) requires a sendable boot and handlers: $e');
+      'serve(isolates > 1) requires a sendable boot and handlers: $e',
+    );
   } finally {
     ready.close();
     errors.close();
@@ -591,14 +657,15 @@ Future<_Worker> _spawnWorker<E>(
 }
 
 Future<void> _workerEntry<E>(
-    (App<E>, Future<E> Function(), int, int, SendPort) args) async {
+  (App<E>, Future<E> Function(), int, int, SendPort) args,
+) async {
   final (app, boot, port, maxBodyBytes, ready) = args;
   final env = await boot();
   final fallbackLog = env is HasLog ? null : StdoutLog();
   final router = app.compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
   final transport = await H1Transport(
-          onError: (e, st) => router.baseLog.error('transport error', e, st))
-      .bind(port, router.dispatch);
+    onError: (e, st) => router.baseLog.error('transport error', e, st),
+  ).bind(port, router.dispatch);
 
   final control = ReceivePort();
   ready.send(control.sendPort);

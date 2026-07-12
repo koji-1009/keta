@@ -42,22 +42,32 @@ void main() {
   test('override receives the finished document and may rewrite it', () {
     final app = App<Ignored>()..get('/x', (c) => c.text('x'));
     Map<String, Object?>? seen;
-    final spec = OpenApi.fromRoutes(app.routes, override: (doc) {
-      seen = doc;
-      return {...doc, 'x-audience': 'internal'};
-    });
+    final spec = OpenApi.fromRoutes(
+      app.routes,
+      override: (doc) {
+        seen = doc;
+        return {...doc, 'x-audience': 'internal'};
+      },
+    );
     expect(seen!['openapi'], '3.1.0');
     expect(spec.toJson()['x-audience'], 'internal');
   });
 
   test('referenced schemas are collected transitively and de-duplicated', () {
     final app = App<Ignored>()
-      ..get('/events', (c) => c.text('x'),
-          doc: const RouteDoc(response: eventSchema))
-      ..get('/events2', (c) => c.text('x'),
-          doc: const RouteDoc(response: eventSchema));
+      ..get(
+        '/events',
+        (c) => c.text('x'),
+        doc: const RouteDoc(response: eventSchema),
+      )
+      ..get(
+        '/events2',
+        (c) => c.text('x'),
+        doc: const RouteDoc(response: eventSchema),
+      );
     final schemas =
-        (OpenApi.fromRoutes(app.routes).toJson()['components'] as Map)['schemas']
+        (OpenApi.fromRoutes(app.routes).toJson()['components']
+                as Map)['schemas']
             as Map;
     expect(schemas.keys, unorderedEquals(['Event', 'Created', 'Deleted']));
     expect(schemas['Created'], createdSchema.json);
@@ -81,8 +91,10 @@ void main() {
   test('a documented route with no response fabricates a 200', () {
     final app = App<Ignored>()
       ..get('/s', (c) => c.text('x'), doc: const RouteDoc(summary: 'just s'));
-    final op = ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/s']
-        as Map)['get'] as Map;
+    final op =
+        ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/s']
+                as Map)['get']
+            as Map;
     expect(op['summary'], 'just s');
     expect(op['responses'], {
       '200': {'description': 'OK'},
@@ -105,17 +117,23 @@ void main() {
     expect(((params[1] as Map)['schema'] as Map)['type'], 'number');
   });
 
-  test('a mixed named/nameless capture path counts every capture in the index',
-      () {
-    final app = App<Ignored>();
-    app.on(root.cap(named(integer, 'id')).cap(dbl)).get((c, p) => c.text('x'));
-    final paths = OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map;
-    expect(paths.keys, ['/{id}/{p1}']);
-  });
+  test(
+    'a mixed named/nameless capture path counts every capture in the index',
+    () {
+      final app = App<Ignored>();
+      app
+          .on(root.cap(named(integer, 'id')).cap(dbl))
+          .get((c, p) => c.text('x'));
+      final paths = OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map;
+      expect(paths.keys, ['/{id}/{p1}']);
+    },
+  );
 
   test('an empty path maps to "/"', () {
     final app = App<Ignored>()..get('/', (c) => c.text('x'));
-    expect((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map).keys, ['/']);
+    expect((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map).keys, [
+      '/',
+    ]);
   });
 
   test('a duplicate path-parameter name fails fast', () {
@@ -123,12 +141,21 @@ void main() {
     // capture, which would emit an invalid `/{p0}/{p0}` template. (App-level
     // registration also rejects this; here we drive OpenApi directly with a
     // RouteEntry to prove the emitter guards it independently.)
-    final route = RouteEntry('GET', [
-      CaptureSegment(integer),
-      CaptureSegment(named(dbl, 'p0')),
-    ], null, '/:p0/:p0');
-    expect(() => OpenApi.fromRoutes([route]),
-        throwsA(isA<StateError>().having((e) => e.message, 'message',
-            contains('duplicate path parameter'))));
+    final route = RouteEntry(
+      'GET',
+      [const CaptureSegment(integer), CaptureSegment(named(dbl, 'p0'))],
+      null,
+      '/:p0/:p0',
+    );
+    expect(
+      () => OpenApi.fromRoutes([route]),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('duplicate path parameter'),
+        ),
+      ),
+    );
   });
 }

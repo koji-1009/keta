@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
@@ -8,15 +9,14 @@ import 'package:test/test.dart';
 
 class Env {}
 
-/// A fake carrying the `.remoteAddress.address` chain _ShelfRequest reads.
-class _FakeRemote {
-  final Object? address;
-  _FakeRemote(this.address);
-}
-
-class _FakeConnInfo {
-  final Object? remoteAddress;
+class _FakeConnInfo implements HttpConnectionInfo {
   _FakeConnInfo(this.remoteAddress);
+  @override
+  final InternetAddress remoteAddress;
+  @override
+  int get remotePort => 0;
+  @override
+  int get localPort => 0;
 }
 
 void main() {
@@ -26,7 +26,8 @@ void main() {
 
     final handler = ketaToShelf(app, Env());
     final response = await handler(
-        shelf.Request('GET', Uri.parse('http://localhost/hello/shelf')));
+      shelf.Request('GET', Uri.parse('http://localhost/hello/shelf')),
+    );
 
     expect(response.statusCode, 200);
     expect(await response.readAsString(), '{"hello":"shelf"}');
@@ -34,8 +35,9 @@ void main() {
 
   test('ketaToShelf maps a keta 404 through', () async {
     final handler = ketaToShelf(App<Env>(), Env());
-    final response =
-        await handler(shelf.Request('GET', Uri.parse('http://localhost/nope')));
+    final response = await handler(
+      shelf.Request('GET', Uri.parse('http://localhost/nope')),
+    );
     expect(response.statusCode, 404);
   });
 
@@ -68,12 +70,16 @@ void main() {
     test('passes keta response headers through', () async {
       final app = App<Env>();
       app.get(
-          '/h',
-          (c) => Response(201,
-              headers: {'x-keta': 'yes', 'content-type': 'text/plain'},
-              body: 'ok'));
+        '/h',
+        (c) => Response(
+          201,
+          headers: {'x-keta': 'yes', 'content-type': 'text/plain'},
+          body: 'ok',
+        ),
+      );
       final response = await ketaToShelf(app, Env())(
-          shelf.Request('GET', Uri.parse('http://localhost/h')));
+        shelf.Request('GET', Uri.parse('http://localhost/h')),
+      );
       expect(response.statusCode, 201);
       expect(response.headers['x-keta'], 'yes');
       expect(response.headers['content-type'], 'text/plain');
@@ -83,51 +89,76 @@ void main() {
       final app = App<Env>();
       app.get('/bytes', (c) => Response(200, body: utf8.encode('bytes!')));
       final response = await ketaToShelf(app, Env())(
-          shelf.Request('GET', Uri.parse('http://localhost/bytes')));
+        shelf.Request('GET', Uri.parse('http://localhost/bytes')),
+      );
       expect(await response.readAsString(), 'bytes!');
     });
 
     test('serves a Stream<List<int>> keta body', () async {
       final app = App<Env>();
       app.get(
-          '/stream',
-          (c) => Response(200,
-              body: Stream<List<int>>.fromIterable(
-                  [utf8.encode('a'), utf8.encode('b')])));
+        '/stream',
+        (c) => Response(
+          200,
+          body: Stream<List<int>>.fromIterable([
+            utf8.encode('a'),
+            utf8.encode('b'),
+          ]),
+        ),
+      );
       final response = await ketaToShelf(app, Env())(
-          shelf.Request('GET', Uri.parse('http://localhost/stream')));
+        shelf.Request('GET', Uri.parse('http://localhost/stream')),
+      );
       expect(await response.readAsString(), 'ab');
     });
 
     test('forwards the shelf request body to keta', () async {
       final app = App<Env>();
-      app.post('/echo',
-          (c) async => c.text('got:${utf8.decode(await c.bodyBytes())}'));
-      final response = await ketaToShelf(app, Env())(shelf.Request(
-          'POST', Uri.parse('http://localhost/echo'),
-          body: 'payload'));
+      app.post(
+        '/echo',
+        (c) async => c.text('got:${utf8.decode(await c.bodyBytes())}'),
+      );
+      final response = await ketaToShelf(app, Env())(
+        shelf.Request(
+          'POST',
+          Uri.parse('http://localhost/echo'),
+          body: 'payload',
+        ),
+      );
       expect(await response.readAsString(), 'got:payload');
     });
 
-    test('enforces maxBodyBytes as a 413, allowing the exact boundary',
-        () async {
-      final app = App<Env>();
-      app.post('/upload',
-          (c) async => c.text('len=${(await c.bodyBytes()).length}'));
-      final handler = ketaToShelf(app, Env(), maxBodyBytes: 4);
+    test(
+      'enforces maxBodyBytes as a 413, allowing the exact boundary',
+      () async {
+        final app = App<Env>();
+        app.post(
+          '/upload',
+          (c) async => c.text('len=${(await c.bodyBytes()).length}'),
+        );
+        final handler = ketaToShelf(app, Env(), maxBodyBytes: 4);
 
-      final ok = await handler(shelf.Request(
-          'POST', Uri.parse('http://localhost/upload'),
-          body: 'abcd'));
-      expect(ok.statusCode, 200);
-      expect(await ok.readAsString(), 'len=4');
+        final ok = await handler(
+          shelf.Request(
+            'POST',
+            Uri.parse('http://localhost/upload'),
+            body: 'abcd',
+          ),
+        );
+        expect(ok.statusCode, 200);
+        expect(await ok.readAsString(), 'len=4');
 
-      final tooBig = await handler(shelf.Request(
-          'POST', Uri.parse('http://localhost/upload'),
-          body: 'way too big'));
-      expect(tooBig.statusCode, 413);
-      expect(await tooBig.readAsString(), contains('exceeds 4 bytes'));
-    });
+        final tooBig = await handler(
+          shelf.Request(
+            'POST',
+            Uri.parse('http://localhost/upload'),
+            body: 'way too big',
+          ),
+        );
+        expect(tooBig.statusCode, 413);
+        expect(await tooBig.readAsString(), contains('exceeds 4 bytes'));
+      },
+    );
 
     test('fails fast on route conflicts at compile time', () {
       final app = App<Env>();
@@ -135,20 +166,31 @@ void main() {
       app.get('/a/:y', (c) => c.text('2'));
       expect(
         () => ketaToShelf(app, Env()),
-        throwsA(isA<StateError>()
-            .having((e) => e.message, 'message', contains('route conflict'))),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('route conflict'),
+          ),
+        ),
       );
     });
 
     test('lowercases shelf request headers for keta', () async {
       final app = App<Env>();
       app.get(
-          '/hdr',
-          (c) => c.text(
-              '${c.header('x-trace-id')}|${c.headers.containsKey('x-trace-id')}'));
-      final response = await ketaToShelf(app, Env())(shelf.Request(
-          'GET', Uri.parse('http://localhost/hdr'),
-          headers: {'X-Trace-Id': 'abc'}));
+        '/hdr',
+        (c) => c.text(
+          '${c.header('x-trace-id')}|${c.headers.containsKey('x-trace-id')}',
+        ),
+      );
+      final response = await ketaToShelf(app, Env())(
+        shelf.Request(
+          'GET',
+          Uri.parse('http://localhost/hdr'),
+          headers: {'X-Trace-Id': 'abc'},
+        ),
+      );
       expect(await response.readAsString(), 'abc|true');
     });
   });
@@ -166,8 +208,10 @@ void main() {
 
     test('maps a non-200 shelf status through', () async {
       final app = App<Env>();
-      app.get('/teapot',
-          shelfToKeta((request) => shelf.Response(418, body: 'short and stout')));
+      app.get(
+        '/teapot',
+        shelfToKeta((request) => shelf.Response(418, body: 'short and stout')),
+      );
       final res = await TestClient(app, Env()).get('/teapot');
       expect(res.status, 418);
       expect(res.text(), 'short and stout');
@@ -176,9 +220,12 @@ void main() {
     test('passes response headers through and strips content-length', () async {
       final app = App<Env>();
       app.get(
-          '/hdrs',
-          shelfToKeta((request) =>
-              shelf.Response(200, body: 'hi', headers: {'x-shelf': 'v1'})));
+        '/hdrs',
+        shelfToKeta(
+          (request) =>
+              shelf.Response(200, body: 'hi', headers: {'x-shelf': 'v1'}),
+        ),
+      );
       final res = await TestClient(app, Env()).get('/hdrs');
       expect(res.headers['x-shelf'], 'v1');
       // shelf sets content-length automatically; the bridge must remove it so
@@ -190,13 +237,18 @@ void main() {
     test('collects a multi-chunk streaming shelf body', () async {
       final app = App<Env>();
       app.get(
-          '/chunks',
-          shelfToKeta((request) => shelf.Response(200,
-              body: Stream<List<int>>.fromIterable([
-                utf8.encode('one'),
-                utf8.encode('-'),
-                utf8.encode('two'),
-              ]))));
+        '/chunks',
+        shelfToKeta(
+          (request) => shelf.Response(
+            200,
+            body: Stream<List<int>>.fromIterable([
+              utf8.encode('one'),
+              utf8.encode('-'),
+              utf8.encode('two'),
+            ]),
+          ),
+        ),
+      );
       final res = await TestClient(app, Env()).get('/chunks');
       expect(res.status, 200);
       expect(res.text(), 'one-two');
@@ -205,11 +257,15 @@ void main() {
     test('forwards keta request headers to the shelf handler', () async {
       final app = App<Env>();
       app.get(
-          '/token',
-          shelfToKeta((request) =>
-              shelf.Response.ok('token=${request.headers['x-token']}')));
-      final res = await TestClient(app, Env())
-          .get('/token', headers: {'X-Token': 'secret'});
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok('token=${request.headers['x-token']}'),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'X-Token': 'secret'});
       expect(res.text(), 'token=secret');
     });
   });
@@ -217,25 +273,41 @@ void main() {
   group('_absolute (through the bridge)', () {
     test('keeps an already-absolute uri verbatim', () async {
       final app = App<Env>();
-      app.get('/inner',
-          shelfToKeta((request) => shelf.Response.ok(request.requestedUri.toString())));
-      final response = await ketaToShelf(app, Env())(shelf.Request(
-          'GET', Uri.parse('http://example.test:8080/inner?q=1')));
-      expect(await response.readAsString(), 'http://example.test:8080/inner?q=1');
+      app.get(
+        '/inner',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final response = await ketaToShelf(app, Env())(
+        shelf.Request('GET', Uri.parse('http://example.test:8080/inner?q=1')),
+      );
+      expect(
+        await response.readAsString(),
+        'http://example.test:8080/inner?q=1',
+      );
     });
 
     test('preserves a non-empty query', () async {
       final app = App<Env>();
-      app.get('/q',
-          shelfToKeta((request) => shelf.Response.ok(request.requestedUri.toString())));
+      app.get(
+        '/q',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
       final res = await TestClient(app, Env()).get('/q?x=1&y=2');
       expect(res.text(), 'http://localhost/q?x=1&y=2');
     });
 
     test('omits the query separator when the query is empty', () async {
       final app = App<Env>();
-      app.get('/q',
-          shelfToKeta((request) => shelf.Response.ok(request.requestedUri.toString())));
+      app.get(
+        '/q',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
       final res = await TestClient(app, Env()).get('/q');
       expect(res.text(), 'http://localhost/q');
     });
@@ -245,9 +317,13 @@ void main() {
     Future<String> addrWith(Map<String, Object> context) async {
       final app = App<Env>();
       app.get('/ip', (c) => c.text('addr=[${c.remoteAddress}]'));
-      final response = await ketaToShelf(app, Env())(shelf.Request(
-          'GET', Uri.parse('http://localhost/ip'),
-          context: context));
+      final response = await ketaToShelf(app, Env())(
+        shelf.Request(
+          'GET',
+          Uri.parse('http://localhost/ip'),
+          context: context,
+        ),
+      );
       return response.readAsString();
     }
 
@@ -255,35 +331,17 @@ void main() {
       expect(await addrWith({}), 'addr=[]');
     });
 
-    test('reads the address off the connection info', () async {
+    test('reads the address off a HttpConnectionInfo', () async {
       expect(
         await addrWith({
-          'shelf.io.connection_info': _FakeConnInfo(_FakeRemote('9.9.9.9')),
+          'shelf.io.connection_info': _FakeConnInfo(InternetAddress('9.9.9.9')),
         }),
         'addr=[9.9.9.9]',
       );
     });
 
-    test('is empty when the address is null', () async {
-      expect(
-        await addrWith({
-          'shelf.io.connection_info': _FakeConnInfo(_FakeRemote(null)),
-        }),
-        'addr=[]',
-      );
-    });
-
-    test('swallows a missing accessor and yields empty', () async {
+    test('is empty when the value is not a HttpConnectionInfo', () async {
       expect(await addrWith({'shelf.io.connection_info': Object()}), 'addr=[]');
-    });
-
-    test('swallows a bad cast and yields empty', () async {
-      expect(
-        await addrWith({
-          'shelf.io.connection_info': _FakeConnInfo(_FakeRemote(42)),
-        }),
-        'addr=[]',
-      );
     });
   });
 
@@ -291,12 +349,16 @@ void main() {
     test('ketaToShelf drops a stale content-length on a stream body', () async {
       final app = App<Env>();
       app.get(
-          '/s',
-          (c) => Response(200,
-              headers: {'content-length': '999'},
-              body: Stream<List<int>>.value(utf8.encode('hi'))));
+        '/s',
+        (c) => Response(
+          200,
+          headers: {'content-length': '999'},
+          body: Stream<List<int>>.value(utf8.encode('hi')),
+        ),
+      );
       final response = await ketaToShelf(app, Env())(
-          shelf.Request('GET', Uri.parse('http://localhost/s')));
+        shelf.Request('GET', Uri.parse('http://localhost/s')),
+      );
       // The bogus 999 is gone; shelf frames the 2-byte body itself.
       expect(response.headers['content-length'], isNot('999'));
       expect(await response.readAsString(), 'hi');
@@ -305,10 +367,15 @@ void main() {
     test('shelfToKeta strips a capitalized Content-Length', () async {
       final app = App<Env>();
       app.get(
-          '/h',
-          shelfToKeta((r) => shelf.Response(200,
-              body: Stream<List<int>>.value(utf8.encode('hi')),
-              headers: {'Content-Length': '999', 'x-k': 'v'})));
+        '/h',
+        shelfToKeta(
+          (r) => shelf.Response(
+            200,
+            body: Stream<List<int>>.value(utf8.encode('hi')),
+            headers: {'Content-Length': '999', 'x-k': 'v'},
+          ),
+        ),
+      );
       final res = await TestClient(app, Env()).get('/h');
       expect(res.headers.containsKey('content-length'), isFalse);
       expect(res.headers['x-k'], 'v');
@@ -328,22 +395,26 @@ void main() {
       expect(okRes.text(), 'len=${big.length + 2}');
 
       // The limiter fails an over-limit read as a 413 stream error.
-      final tight = App<Env>()..post('/up', shelfToKeta(echoLen, maxBodyBytes: 4));
+      final tight = App<Env>()
+        ..post('/up', shelfToKeta(echoLen, maxBodyBytes: 4));
       final tooBig = await TestClient(tight, Env()).post('/up', json: 'abcd');
       expect(tooBig.status, 413); // "abcd" JSON-encodes to 6 bytes
     });
 
     test('shelfToKeta reflects the Host header into requestedUri', () async {
       final app = App<Env>();
-      app.get('/token',
-          shelfToKeta((r) => shelf.Response.ok(r.requestedUri.toString())));
-      final res = await TestClient(app, Env())
-          .get('/token', headers: {'host': 'api.example.com:8443'});
+      app.get(
+        '/token',
+        shelfToKeta((r) => shelf.Response.ok(r.requestedUri.toString())),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'api.example.com:8443'});
       expect(res.text(), 'http://api.example.com:8443/token');
     });
 
-    test('ketaToShelf leaves bodyStream() unbounded (the escape hatch)',
-        () async {
+    test('ketaToShelf leaves bodyStream() unbounded (the escape hatch)', () async {
       final app = App<Env>();
       // A keta handler reading the bodyStream() escape gets the whole body; the
       // limit is enforced only at the core's buffering point (body/bodyBytes).
@@ -352,9 +423,13 @@ void main() {
         return c.text('len=${bytes.length}');
       });
       final handler = ketaToShelf(app, Env(), maxBodyBytes: 4);
-      final res = await handler(shelf.Request(
-          'POST', Uri.parse('http://localhost/up'),
-          body: 'way too big'));
+      final res = await handler(
+        shelf.Request(
+          'POST',
+          Uri.parse('http://localhost/up'),
+          body: 'way too big',
+        ),
+      );
       expect(res.statusCode, 200);
       expect(await res.readAsString(), 'len=11');
     });

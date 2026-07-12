@@ -28,15 +28,15 @@ Context<E> testContext<E>(
   List<int>? rawBody,
   int maxBodyBytes = 1 << 20,
 }) {
-  final baseLog = env is HasLog ? (env as HasLog).log : StdoutLog(flushInterval: Duration.zero);
+  final baseLog = env is HasLog
+      ? (env as HasLog).log
+      : StdoutLog(flushInterval: Duration.zero);
   final ctx = RequestCtx<E>(
     env: env,
     method: method,
     uri: Uri.parse(path),
     route: path,
-    headers: {
-      for (final e in headers.entries) e.key.toLowerCase(): e.value,
-    },
+    headers: {for (final e in headers.entries) e.key.toLowerCase(): e.value},
     remoteAddress: 'test',
     params: params,
     orderedCaptures: params.values.toList(),
@@ -45,8 +45,8 @@ Context<E> testContext<E>(
     body: rawBody != null
         ? Stream.value(rawBody)
         : jsonBody == null
-            ? const Stream.empty()
-            : Stream.value(utf8.encode(jsonEncode(jsonBody))),
+        ? const Stream.empty()
+        : Stream.value(utf8.encode(jsonEncode(jsonBody))),
   );
   return Context<E>(ctx);
 }
@@ -54,28 +54,35 @@ Context<E> testContext<E>(
 /// A socket-free client that runs the full pipeline — radix compilation,
 /// matching, middleware, and handlers — against an in-memory request.
 class TestClient<E> {
-  final Router<E> _router;
-
   TestClient(App<E> app, E env) : _router = app.compile(env);
+  final Router<E> _router;
 
   Future<TestResponse> get(String path, {Map<String, String>? headers}) =>
       _send('GET', path, null, headers);
 
-  Future<TestResponse> post(String path,
-          {Object? json, Map<String, String>? headers}) =>
-      _send('POST', path, json, headers);
+  Future<TestResponse> post(
+    String path, {
+    Object? json,
+    Map<String, String>? headers,
+  }) => _send('POST', path, json, headers);
 
-  Future<TestResponse> put(String path,
-          {Object? json, Map<String, String>? headers}) =>
-      _send('PUT', path, json, headers);
+  Future<TestResponse> put(
+    String path, {
+    Object? json,
+    Map<String, String>? headers,
+  }) => _send('PUT', path, json, headers);
 
-  Future<TestResponse> delete(String path,
-          {Object? json, Map<String, String>? headers}) =>
-      _send('DELETE', path, json, headers);
+  Future<TestResponse> delete(
+    String path, {
+    Object? json,
+    Map<String, String>? headers,
+  }) => _send('DELETE', path, json, headers);
 
-  Future<TestResponse> patch(String path,
-          {Object? json, Map<String, String>? headers}) =>
-      _send('PATCH', path, json, headers);
+  Future<TestResponse> patch(
+    String path, {
+    Object? json,
+    Map<String, String>? headers,
+  }) => _send('PATCH', path, json, headers);
 
   Future<TestResponse> options(String path, {Map<String, String>? headers}) =>
       _send('OPTIONS', path, null, headers);
@@ -83,17 +90,16 @@ class TestClient<E> {
   Future<TestResponse> head(String path, {Map<String, String>? headers}) =>
       _send('HEAD', path, null, headers);
 
-  Future<TestResponse> _send(String method, String path, Object? json,
-      Map<String, String>? headers) async {
-    final request = _TestRequest(
-      method,
-      Uri.parse(path),
-      {
-        for (final e in (headers ?? const {}).entries)
-          e.key.toLowerCase(): e.value,
-      },
-      json == null ? const [] : utf8.encode(jsonEncode(json)),
-    );
+  Future<TestResponse> _send(
+    String method,
+    String path,
+    Object? json,
+    Map<String, String>? headers,
+  ) async {
+    final request = _TestRequest(method, Uri.parse(path), {
+      for (final e in (headers ?? const {}).entries)
+        e.key.toLowerCase(): e.value,
+    }, json == null ? const [] : utf8.encode(jsonEncode(json)));
     final response = await _router.dispatch(request);
     return TestResponse._from(response);
   }
@@ -101,19 +107,19 @@ class TestClient<E> {
 
 /// The materialized result of a [TestClient] request.
 class TestResponse {
+  TestResponse._(this.status, this.headers, this._body);
   final int status;
   final Map<String, String> headers;
   final String _body;
-
-  TestResponse._(this.status, this.headers, this._body);
 
   static Future<TestResponse> _from(Response response) async {
     final body = response.body;
     final text = switch (body) {
       String() => body,
       List<int>() => utf8.decode(body),
-      Stream<List<int>>() =>
-        utf8.decode(await body.expand((chunk) => chunk).toList()),
+      Stream<List<int>>() => utf8.decode(
+        await body.expand((chunk) => chunk).toList(),
+      ),
       _ => '',
     };
     return TestResponse._(response.status, response.headers, text);
@@ -149,6 +155,7 @@ void testBothModes(
 }
 
 class _TestRequest implements TransportRequest {
+  _TestRequest(this.method, this.uri, this.headers, this._body);
   @override
   final String method;
   @override
@@ -156,8 +163,6 @@ class _TestRequest implements TransportRequest {
   @override
   final Map<String, String> headers;
   final List<int> _body;
-
-  _TestRequest(this.method, this.uri, this.headers, this._body);
 
   @override
   Stream<List<int>> get bodyStream =>

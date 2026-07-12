@@ -10,10 +10,10 @@ class Env {}
 
 /// An in-memory log for asserting on middleware output.
 class MemLog implements Log {
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
   MemLog(this.lines) : _baked = const {};
   MemLog._(this.lines, this._baked);
+  final List<Map<String, Object?>> lines;
+  final Map<String, Object?> _baked;
   void _add(String level, String msg, Map<String, Object?> fields) =>
       lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
   @override
@@ -26,9 +26,12 @@ class MemLog implements Log {
   void warn(String msg, [Map<String, Object?> f = const {}]) =>
       _add('warn', msg, f);
   @override
-  void error(String msg,
-          [Object? e, StackTrace? st, Map<String, Object?> f = const {}]) =>
-      _add('error', msg, {...f, if (e != null) 'error': '$e'});
+  void error(
+    String msg, [
+    Object? e,
+    StackTrace? st,
+    Map<String, Object?> f = const {},
+  ]) => _add('error', msg, {...f, if (e != null) 'error': '$e'});
   @override
   Future<void> flush() async {}
   @override
@@ -36,47 +39,56 @@ class MemLog implements Log {
 }
 
 class LogEnv implements HasLog {
+  LogEnv(this.log);
   @override
   final Log log;
-  LogEnv(this.log);
+}
+
+Map<String, Object?> _spanIn(Map<String, Object?> doc) {
+  final rs = (doc['resourceSpans'] as List).first as Map<String, Object?>;
+  final ss = (rs['scopeSpans'] as List).first as Map<String, Object?>;
+  return (ss['spans'] as List).first as Map<String, Object?>;
 }
 
 Map<String, Object?> _spanOf(String payload) =>
-    jsonDecode(payload)['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
-        as Map<String, Object?>;
+    _spanIn(jsonDecode(payload) as Map<String, Object?>);
 
 Map<String, Object?> _firstSpan(List<String> captured) =>
     _spanOf(captured.single);
 
 Map<String, Object?> _attrsOf(Map<String, Object?> span) => {
-      for (final a in span['attributes'] as List)
-        (a as Map)['key'] as String: (a['value'] as Map).cast<String, Object?>(),
-    };
+  for (final a in span['attributes'] as List)
+    (a as Map)['key'] as String: (a['value'] as Map).cast<String, Object?>(),
+};
 
 void main() {
-  test('otel records a server span continuing the incoming traceparent',
-      () async {
-    final captured = <String>[];
-    final exporter = OtlpExporter((payload) async => captured.add(payload));
-    final app = App<Env>()..use(otel(exporter: exporter));
-    app.get('/users/:id', (c) => c.json({'id': c.param<String>('id')}));
-    final client = TestClient(app, Env());
+  test(
+    'otel records a server span continuing the incoming traceparent',
+    () async {
+      final captured = <String>[];
+      final exporter = OtlpExporter((payload) async => captured.add(payload));
+      final app = App<Env>()..use(otel(exporter: exporter));
+      app.get('/users/:id', (c) => c.json({'id': c.param<String>('id')}));
+      final client = TestClient(app, Env());
 
-    await client.get('/users/7', headers: {
-      'traceparent':
-          '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
-    });
-    await pumpEventQueue(); // export is deferred off the hot path
+      await client.get(
+        '/users/7',
+        headers: {
+          'traceparent':
+              '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+        },
+      );
+      await pumpEventQueue(); // export is deferred off the hot path
 
-    expect(captured, hasLength(1));
-    final span = jsonDecode(captured.single)['resourceSpans'][0]['scopeSpans']
-        [0]['spans'][0] as Map<String, Object?>;
-    expect(span['name'], 'GET /users/:id');
-    expect(span['traceId'], '0af7651916cd43dd8448eb211c80319c');
-    expect(span['parentSpanId'], 'b7ad6b7169203331');
-    // OTel SERVER convention: a 2xx leaves status unset (not ok).
-    expect((span['status'] as Map)['code'], SpanStatus.unset.index);
-  });
+      expect(captured, hasLength(1));
+      final span = _firstSpan(captured);
+      expect(span['name'], 'GET /users/:id');
+      expect(span['traceId'], '0af7651916cd43dd8448eb211c80319c');
+      expect(span['parentSpanId'], 'b7ad6b7169203331');
+      // OTel SERVER convention: a 2xx leaves status unset (not ok).
+      expect((span['status'] as Map)['code'], SpanStatus.unset.index);
+    },
+  );
 
   test('a 5xx span is marked error', () async {
     final captured = <String>[];
@@ -87,8 +99,7 @@ void main() {
 
     await client.get('/boom');
     await pumpEventQueue();
-    final span = jsonDecode(captured.single)['resourceSpans'][0]['scopeSpans']
-        [0]['spans'][0] as Map<String, Object?>;
+    final span = _firstSpan(captured);
     expect((span['status'] as Map)['code'], SpanStatus.error.index);
   });
 
@@ -105,26 +116,29 @@ void main() {
 
     expect(
       body,
-      contains('keta_requests_total{method="GET",route="/users/:id",status="200"} 2'),
+      contains(
+        'keta_requests_total{method="GET",route="/users/:id",status="200"} 2',
+      ),
     );
     expect(body, contains('keta_request_duration_ms_sum{method="GET"'));
   });
 
   test('encodeOtlp carries the service name', () {
-    final doc = encodeOtlp(
-      [
-        OtelSpan(
-          traceId: 'a' * 32,
-          spanId: 'b' * 16,
-          name: 'GET /x',
-          startUnixNano: 1,
-          endUnixNano: 2,
-        ),
-      ],
-      'svc',
-    );
-    final resource = (doc['resourceSpans'] as List)[0]['resource'] as Map;
-    expect((resource['attributes'] as List)[0]['value']['stringValue'], 'svc');
+    final doc = encodeOtlp([
+      OtelSpan(
+        traceId: 'a' * 32,
+        spanId: 'b' * 16,
+        name: 'GET /x',
+        startUnixNano: 1,
+        endUnixNano: 2,
+      ),
+    ], 'svc');
+    final resource =
+        ((doc['resourceSpans'] as List).first
+                as Map<String, Object?>)['resource']
+            as Map<String, Object?>;
+    final attr = (resource['attributes'] as List).first as Map<String, Object?>;
+    expect((attr['value'] as Map)['stringValue'], 'svc');
   });
 
   group('trace context', () {
@@ -148,19 +162,22 @@ void main() {
       '00-0af7651916cd43dd8448eb211c80319c-abc-01',
       '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-zz',
     ]) {
-      test('a malformed traceparent "$bad" falls back to a new trace', () async {
-        final captured = <String>[];
-        final app = App<Env>()
-          ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
-        app.get('/x', (c) => c.text('ok'));
-        await TestClient(app, Env()).get('/x', headers: {'traceparent': bad});
-        await pumpEventQueue();
+      test(
+        'a malformed traceparent "$bad" falls back to a new trace',
+        () async {
+          final captured = <String>[];
+          final app = App<Env>()
+            ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+          app.get('/x', (c) => c.text('ok'));
+          await TestClient(app, Env()).get('/x', headers: {'traceparent': bad});
+          await pumpEventQueue();
 
-        final span = _firstSpan(captured);
-        expect(span['traceId'], matches(RegExp(r'^[0-9a-f]{32}$')));
-        expect(span['traceId'], isNot('0af7651916cd43dd8448eb211c80319c'));
-        expect(span.containsKey('parentSpanId'), isFalse);
-      });
+          final span = _firstSpan(captured);
+          expect(span['traceId'], matches(RegExp(r'^[0-9a-f]{32}$')));
+          expect(span['traceId'], isNot('0af7651916cd43dd8448eb211c80319c'));
+          expect(span.containsKey('parentSpanId'), isFalse);
+        },
+      );
     }
   });
 
@@ -187,8 +204,10 @@ void main() {
       await TestClient(app, Env()).get('/down');
       await pumpEventQueue();
 
-      expect((_firstSpan(captured)['status'] as Map)['code'],
-          SpanStatus.error.index);
+      expect(
+        (_firstSpan(captured)['status'] as Map)['code'],
+        SpanStatus.error.index,
+      );
     });
 
     test('499 is unset and 500 is error at the boundary', () async {
@@ -202,10 +221,14 @@ void main() {
       await client.get('/r500');
       await pumpEventQueue();
 
-      expect((_spanOf(captured[0])['status'] as Map)['code'],
-          SpanStatus.unset.index);
-      expect((_spanOf(captured[1])['status'] as Map)['code'],
-          SpanStatus.error.index);
+      expect(
+        (_spanOf(captured[0])['status'] as Map)['code'],
+        SpanStatus.unset.index,
+      );
+      expect(
+        (_spanOf(captured[1])['status'] as Map)['code'],
+        SpanStatus.error.index,
+      );
     });
   });
 
@@ -236,33 +259,40 @@ void main() {
 
     test('an async-rejecting sender never fails the request', () async {
       final app = App<Env>()
-        ..use(otel(
-            exporter: OtlpExporter((p) async => throw StateError('down'))));
+        ..use(
+          otel(exporter: OtlpExporter((p) async => throw StateError('down'))),
+        );
       app.get('/x', (c) => c.text('ok'));
       final res = await TestClient(app, Env()).get('/x');
       expect(res.status, 200);
       await Future<void>.delayed(Duration.zero);
     });
 
-    test('one request feeds both the exporter and the metrics registry',
-        () async {
-      final captured = <String>[];
-      final metrics = MetricsRegistry();
-      final app = App<Env>()
-        ..use(otel(
-            exporter: OtlpExporter((p) async => captured.add(p)),
-            metrics: metrics));
-      app.get('/x', (c) => c.text('ok'));
-      await TestClient(app, Env()).get('/x');
-      await pumpEventQueue();
+    test(
+      'one request feeds both the exporter and the metrics registry',
+      () async {
+        final captured = <String>[];
+        final metrics = MetricsRegistry();
+        final app = App<Env>()
+          ..use(
+            otel(
+              exporter: OtlpExporter((p) async => captured.add(p)),
+              metrics: metrics,
+            ),
+          );
+        app.get('/x', (c) => c.text('ok'));
+        await TestClient(app, Env()).get('/x');
+        await pumpEventQueue();
 
-      expect(captured, hasLength(1));
-      expect(
-        metrics.prometheus(),
-        contains(
-            'keta_requests_total{method="GET",route="/x",status="200"} 1'),
-      );
-    });
+        expect(captured, hasLength(1));
+        expect(
+          metrics.prometheus(),
+          contains(
+            'keta_requests_total{method="GET",route="/x",status="200"} 1',
+          ),
+        );
+      },
+    );
   });
 
   group('encodeOtlp / OtlpExporter', () {
@@ -289,8 +319,7 @@ void main() {
           },
         ),
       ], 'svc');
-      final span = (((doc['resourceSpans'] as List)[0]['scopeSpans']
-          as List)[0]['spans'] as List)[0] as Map<String, Object?>;
+      final span = _spanIn(doc);
       final attrs = _attrsOf(span);
       expect(attrs['b'], {'boolValue': true});
       expect(attrs['d'], {'doubleValue': 1.5});
@@ -298,34 +327,43 @@ void main() {
       expect(attrs['o'], {'stringValue': '0:00:01.000000'});
     });
 
-    test('the envelope carries SERVER kind, string nanos, and no root parent',
-        () {
-      final doc = encodeOtlp([
-        OtelSpan(
-          traceId: 'a' * 32,
-          spanId: 'b' * 16,
-          name: 'GET /x',
-          startUnixNano: 1,
-          endUnixNano: 2,
-          status: SpanStatus.error,
-        ),
-      ], 'svc');
-      final span = (((doc['resourceSpans'] as List)[0]['scopeSpans']
-          as List)[0]['spans'] as List)[0] as Map<String, Object?>;
-      expect(span['kind'], 2);
-      expect(span['startTimeUnixNano'], '1');
-      expect(span['endTimeUnixNano'], '2');
-      expect((span['status'] as Map)['code'], SpanStatus.error.index);
-      expect(span.containsKey('parentSpanId'), isFalse);
-    });
+    test(
+      'the envelope carries SERVER kind, string nanos, and no root parent',
+      () {
+        final doc = encodeOtlp([
+          OtelSpan(
+            traceId: 'a' * 32,
+            spanId: 'b' * 16,
+            name: 'GET /x',
+            startUnixNano: 1,
+            endUnixNano: 2,
+            status: SpanStatus.error,
+          ),
+        ], 'svc');
+        final span = _spanIn(doc);
+        expect(span['kind'], 2);
+        expect(span['startTimeUnixNano'], '1');
+        expect(span['endTimeUnixNano'], '2');
+        expect((span['status'] as Map)['code'], SpanStatus.error.index);
+        expect(span.containsKey('parentSpanId'), isFalse);
+      },
+    );
 
-    test('a span defaults to SpanStatus.unset with no parent or attributes', () {
-      const span = OtelSpan(
-          traceId: '', spanId: '', name: 'n', startUnixNano: 0, endUnixNano: 0);
-      expect(span.status, SpanStatus.unset);
-      expect(span.parentSpanId, isNull);
-      expect(span.attributes, isEmpty);
-    });
+    test(
+      'a span defaults to SpanStatus.unset with no parent or attributes',
+      () {
+        const span = OtelSpan(
+          traceId: '',
+          spanId: '',
+          name: 'n',
+          startUnixNano: 0,
+          endUnixNano: 0,
+        );
+        expect(span.status, SpanStatus.unset);
+        expect(span.parentSpanId, isNull);
+        expect(span.attributes, isEmpty);
+      },
+    );
   });
 
   group('lifecycle and sampling', () {
@@ -360,40 +398,56 @@ void main() {
       expect(captured, hasLength(1));
     });
 
-    test('an unsampled traceparent is not exported but metrics still record',
-        () async {
-      final captured = <String>[];
-      final metrics = MetricsRegistry();
-      final app = App<Env>()
-        ..use(otel(
-            exporter: OtlpExporter((p) async => captured.add(p)),
-            metrics: metrics));
-      app.get('/x', (c) => c.text('ok'));
-      // flags '00' = the upstream did not sample this trace.
-      await TestClient(app, Env()).get('/x', headers: {
-        'traceparent':
-            '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
-      });
-      await pumpEventQueue();
+    test(
+      'an unsampled traceparent is not exported but metrics still record',
+      () async {
+        final captured = <String>[];
+        final metrics = MetricsRegistry();
+        final app = App<Env>()
+          ..use(
+            otel(
+              exporter: OtlpExporter((p) async => captured.add(p)),
+              metrics: metrics,
+            ),
+          );
+        app.get('/x', (c) => c.text('ok'));
+        // flags '00' = the upstream did not sample this trace.
+        await TestClient(app, Env()).get(
+          '/x',
+          headers: {
+            'traceparent':
+                '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
+          },
+        );
+        await pumpEventQueue();
 
-      expect(captured, isEmpty);
-      expect(
+        expect(captured, isEmpty);
+        expect(
           metrics.prometheus(),
           contains(
-              'keta_requests_total{method="GET",route="/x",status="200"} 1'));
-    });
+            'keta_requests_total{method="GET",route="/x",status="200"} 1',
+          ),
+        );
+      },
+    );
 
     test('exportUnsampled forces export of an unsampled trace', () async {
       final captured = <String>[];
       final app = App<Env>()
-        ..use(otel(
+        ..use(
+          otel(
             exporter: OtlpExporter((p) async => captured.add(p)),
-            exportUnsampled: true));
+            exportUnsampled: true,
+          ),
+        );
       app.get('/x', (c) => c.text('ok'));
-      await TestClient(app, Env()).get('/x', headers: {
-        'traceparent':
-            '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
-      });
+      await TestClient(app, Env()).get(
+        '/x',
+        headers: {
+          'traceparent':
+              '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
+        },
+      );
       await pumpEventQueue();
 
       expect(captured, hasLength(1)); // exported despite sampled=0
@@ -403,9 +457,13 @@ void main() {
       final lines = <Map<String, Object?>>[];
       final env = LogEnv(MemLog(lines));
       final app = App<LogEnv>()
-        ..use(otel(
-            exporter:
-                OtlpExporter((p) async => throw StateError('collector down'))));
+        ..use(
+          otel(
+            exporter: OtlpExporter(
+              (p) async => throw StateError('collector down'),
+            ),
+          ),
+        );
       app.get('/x', (c) => c.text('ok'));
 
       final res = await TestClient(app, env).get('/x');

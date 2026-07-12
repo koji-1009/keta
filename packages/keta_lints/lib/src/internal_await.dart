@@ -13,8 +13,10 @@ import 'diagnostic.dart';
 ///
 /// A genuine I/O boundary can opt out with a `// keta:allow-await` comment on
 /// the awaiting line or the line above it.
-List<Diagnostic> internalAwaitDiagnostics(String source,
-    {String file = '<memory>'}) {
+List<Diagnostic> internalAwaitDiagnostics(
+  String source, {
+  String file = '<memory>',
+}) {
   final result = parseString(content: source, throwIfDiagnostics: false);
   final lineInfo = result.lineInfo;
   final lines = source.split('\n');
@@ -28,13 +30,16 @@ List<Diagnostic> internalAwaitDiagnostics(String source,
         previous.contains('keta:allow-await')) {
       return;
     }
-    diagnostics.add(Diagnostic(
-      rule: 'keta_internal_await',
-      message: 'await on line $line defeats the synchronous path; use '
-          'chain()/guard(), or justify it with // keta:allow-await',
-      file: file,
-      scope: 'L$line',
-    ));
+    diagnostics.add(
+      Diagnostic(
+        rule: 'keta_internal_await',
+        message:
+            'await on line $line defeats the synchronous path; use '
+            'chain()/guard(), or justify it with // keta:allow-await',
+        file: file,
+        scope: 'L$line',
+      ),
+    );
   }
 
   result.unit.accept(_AwaitVisitor(report));
@@ -42,9 +47,8 @@ List<Diagnostic> internalAwaitDiagnostics(String source,
 }
 
 class _AwaitVisitor extends RecursiveAstVisitor<void> {
-  final void Function(int offset) report;
-
   _AwaitVisitor(this.report);
+  final void Function(int offset) report;
 
   @override
   void visitAwaitExpression(AwaitExpression node) {

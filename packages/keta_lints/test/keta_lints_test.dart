@@ -4,59 +4,59 @@ import 'package:keta_lints/src/dart_literal.dart';
 import 'package:test/test.dart';
 
 Map<String, Object?> get _doc => {
-      'openapi': '3.1.0',
-      'info': {'title': 't', 'version': '1'},
-      'paths': {
-        '/users/{id}': {
-          'get': {
-            'summary': 'get',
-            'responses': {
-              '200': {
-                'content': {
-                  'application/json': {
-                    'schema': {r'$ref': '#/components/schemas/UserDto'},
-                  },
-                },
-              },
-            },
-          },
-        },
-        '/users': {
-          'post': {
-            'requestBody': {
-              'content': {
-                'application/json': {
-                  'schema': {r'$ref': '#/components/schemas/UserDto'},
-                },
-              },
-            },
-            'responses': {'200': <String, Object?>{}},
-          },
-        },
-      },
-      'components': {
-        'schemas': {
-          'Role': {
-            'type': 'string',
-            'enum': ['admin', 'member'],
-          },
-          'UserDto': {
-            'type': 'object',
-            'required': ['id', 'name', 'role', 'tags'],
-            'properties': {
-              'id': {'type': 'string'},
-              'name': {'type': 'string'},
-              'age': {'type': 'integer'},
-              'role': {r'$ref': '#/components/schemas/Role'},
-              'tags': {
-                'type': 'array',
-                'items': {'type': 'string'},
+  'openapi': '3.1.0',
+  'info': {'title': 't', 'version': '1'},
+  'paths': {
+    '/users/{id}': {
+      'get': {
+        'summary': 'get',
+        'responses': {
+          '200': {
+            'content': {
+              'application/json': {
+                'schema': {r'$ref': '#/components/schemas/UserDto'},
               },
             },
           },
         },
       },
-    };
+    },
+    '/users': {
+      'post': {
+        'requestBody': {
+          'content': {
+            'application/json': {
+              'schema': {r'$ref': '#/components/schemas/UserDto'},
+            },
+          },
+        },
+        'responses': {'200': <String, Object?>{}},
+      },
+    },
+  },
+  'components': {
+    'schemas': {
+      'Role': {
+        'type': 'string',
+        'enum': ['admin', 'member'],
+      },
+      'UserDto': {
+        'type': 'object',
+        'required': ['id', 'name', 'role', 'tags'],
+        'properties': {
+          'id': {'type': 'string'},
+          'name': {'type': 'string'},
+          'age': {'type': 'integer'},
+          'role': {r'$ref': '#/components/schemas/Role'},
+          'tags': {
+            'type': 'array',
+            'items': {'type': 'string'},
+          },
+        },
+      },
+    },
+  },
+};
 
 void main() {
   group('scaffold', () {
@@ -66,9 +66,13 @@ void main() {
       final dtos = scaffold.dtos;
       expect(dtos, contains('enum Role { admin, member }'));
       expect(dtos, contains('class UserDto {'));
+      expect(dtos, contains('  const UserDto({'));
       expect(dtos, contains("id: json['id'] as String,"));
       expect(dtos, contains("age: json['age'] as int?,"));
-      expect(dtos, contains("role: Role.values.byName(json['role'] as String),"));
+      expect(
+        dtos,
+        contains("role: Role.values.byName(json['role'] as String),"),
+      );
       expect(dtos, contains("tags: (json['tags'] as List).cast<String>(),"));
       expect(dtos, contains("if (age != null) 'age': age,"));
       expect(dtos, contains("'role': role.name,"));
@@ -79,15 +83,20 @@ void main() {
     test('materializes typed route skeletons that throw 501', () {
       final routes = scaffold.routes;
       expect(routes, contains("app.get('/users/:id',"));
-      expect(routes, contains("throw const KetaException(501, 'not implemented')"));
+      expect(
+        routes,
+        contains("throw const KetaException(501, 'not implemented')"),
+      );
       expect(routes, contains('response: userDtoSchema'));
       expect(routes, contains("app.post('/users',"));
       expect(routes, contains('requestBody: userDtoSchema'));
     });
 
     test('materializes a DTO contract test', () {
-      expect(scaffold.contractTest,
-          contains("test('UserDto round-trips and validates'"));
+      expect(
+        scaffold.contractTest,
+        contains("test('UserDto round-trips and validates'"),
+      );
       expect(scaffold.contractTest, contains('userDtoSchema.validate'));
     });
 
@@ -190,9 +199,10 @@ class UserDto {
       expect(canonicalDiagnostics(source), isEmpty);
     });
 
-    test('a DTO (by Schema signal) without mappers is keta_canonical_missing',
-        () {
-      const source = '''
+    test(
+      'a DTO (by Schema signal) without mappers is keta_canonical_missing',
+      () {
+        const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
 class Point {
   final int x;
@@ -201,11 +211,12 @@ class Point {
 }
 const pointSchema = Schema('Point', {'type': 'object', 'required': ['x', 'y'], 'properties': {'x': {'type': 'integer'}, 'y': {'type': 'integer'}}});
 ''';
-      final d = canonicalDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_canonical_missing');
-      expect(d.single.message, contains('Point'));
-    });
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_canonical_missing');
+        expect(d.single.message, contains('Point'));
+      },
+    );
 
     test('a mismatched toJson is keta_canonical_drift', () {
       const source = '''
@@ -242,7 +253,10 @@ class UserDto {
 const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'age': {'type': 'integer'}}});
 ''';
       final fixed = applyCanonicalFix(source);
-      expect(fixed, contains("factory UserDto.fromJson(Map<String, Object?> json)"));
+      expect(
+        fixed,
+        contains('factory UserDto.fromJson(Map<String, Object?> json)'),
+      );
       expect(fixed, contains("id: json['id'] as String,"));
       expect(fixed, contains("age: json['age'] as int?,"));
       expect(fixed, contains("if (age != null) 'age': age,"));
@@ -250,9 +264,10 @@ const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], '
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('reconciles drift across fromJson, toJson, and the schema (M4 gate)',
-        () {
-      const source = '''
+    test(
+      'reconciles drift across fromJson, toJson, and the schema (M4 gate)',
+      () {
+        const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
 
 class UserDto {
@@ -271,14 +286,15 @@ const userDtoSchema = Schema('UserDto', {
   'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}},
 });
 ''';
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, contains("email: json['email'] as String?,"));
-      expect(fixed, contains("if (email != null) 'email': email,"));
-      // The schema constant gained the field so OpenAPI reflects it.
-      expect(fixed, contains("'email': {'type': 'string'}"));
-      expect(canonicalDiagnostics(fixed), isEmpty);
-      expect(applyCanonicalFix(fixed), fixed);
-    });
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, contains("email: json['email'] as String?,"));
+        expect(fixed, contains("if (email != null) 'email': email,"));
+        // The schema constant gained the field so OpenAPI reflects it.
+        expect(fixed, contains("'email': {'type': 'string'}"));
+        expect(canonicalDiagnostics(fixed), isEmpty);
+        expect(applyCanonicalFix(fixed), fixed);
+      },
+    );
 
     test('removing two adjacent fields does not corrupt source', () {
       const source = '''
@@ -367,7 +383,10 @@ class Dto {
 }
 ''';
       final fixed = applyCanonicalFix(source);
-      expect(fixed, contains("meta: (json['meta'] as Map).cast<String, int>()"));
+      expect(
+        fixed,
+        contains("meta: (json['meta'] as Map).cast<String, int>()"),
+      );
       expect(fixed, contains("'meta': meta,"));
       expect(canonicalDiagnostics(fixed), isEmpty);
     });
@@ -460,7 +479,8 @@ void register(app) {
     });
 
     test('an await is flagged', () {
-      const source = 'Future<void> f() async { await g(); }\nFuture<void> g() async {}';
+      const source =
+          'Future<void> f() async { await g(); }\nFuture<void> g() async {}';
       final d = internalAwaitDiagnostics(source);
       expect(d, hasLength(1));
       expect(d.single.rule, 'keta_internal_await');
@@ -507,15 +527,20 @@ void register() {
       final b = diagnosticId('lib/x.dart', 'GET /x', 'keta_route_conflict');
       expect(a, b);
       expect(a, matches(RegExp(r'^[0-9a-f]{16}$')));
-      expect(a, isNot(diagnosticId('lib/y.dart', 'GET /x', 'keta_route_conflict')));
+      expect(
+        a,
+        isNot(diagnosticId('lib/y.dart', 'GET /x', 'keta_route_conflict')),
+      );
     });
   });
 
   group('dartLiteral', () {
     test('a single-line \$ value takes the raw-string path', () {
       expect(dartLiteral(r'$ref'), r"r'$ref'");
-      expect(dartLiteral({r'$ref': '#/components/schemas/X'}),
-          r"{r'$ref': '#/components/schemas/X'}");
+      expect(
+        dartLiteral({r'$ref': '#/components/schemas/X'}),
+        r"{r'$ref': '#/components/schemas/X'}",
+      );
     });
     test('escapes backslash, quote, and control chars', () {
       expect(dartLiteral(r'a\b'), r"'a\\b'");
@@ -549,7 +574,8 @@ void register() {
   group('yaml_plain', () {
     test('parses a mapping document into plain collections', () {
       final doc = loadYamlDocument(
-          'info:\n  title: t\ntags:\n  - a\n  - 2\nflag: true\n');
+        'info:\n  title: t\ntags:\n  - a\n  - 2\nflag: true\n',
+      );
       expect(doc['info'], {'title': 't'});
       expect(doc['info'], isA<Map<String, Object?>>());
       expect(doc['tags'], ['a', 2]);
@@ -734,38 +760,60 @@ class Dto {
 ''';
       final fixed = applyCanonicalFix(source);
       expect(
-          fixed,
-          contains(
-              "(json['roles'] as List).map((e) => Role.values.byName(e as String)).toList()"));
+        fixed,
+        contains(
+          "(json['roles'] as List).map((e) => Role.values.byName(e as String)).toList()",
+        ),
+      );
       expect(
-          fixed,
-          contains(
-              "(json['items'] as List).map((e) => Item.fromJson(e as Map<String, Object?>)).toList()"));
+        fixed,
+        contains(
+          "(json['items'] as List).map((e) => Item.fromJson(e as Map<String, Object?>)).toList()",
+        ),
+      );
       expect(
-          fixed,
-          contains(
-              "(json['roleMap'] as Map).map((k, v) => MapEntry(k as String, Role.values.byName(v as String)))"));
+        fixed,
+        contains(
+          "(json['roleMap'] as Map).map((k, v) => MapEntry(k as String, Role.values.byName(v as String)))",
+        ),
+      );
       expect(
-          fixed,
-          contains(
-              "(json['itemMap'] as Map).map((k, v) => MapEntry(k as String, Item.fromJson(v as Map<String, Object?>)))"));
+        fixed,
+        contains(
+          "(json['itemMap'] as Map).map((k, v) => MapEntry(k as String, Item.fromJson(v as Map<String, Object?>)))",
+        ),
+      );
       expect(
-          fixed,
-          contains(
-              "maybeRole: json['maybeRole'] == null ? null : Role.values.byName(json['maybeRole'] as String)"));
-      expect(fixed, contains("if (maybeRole != null) 'maybeRole': maybeRole!.name,"));
-      expect(fixed, contains("if (maybeItem != null) 'maybeItem': maybeItem!.toJson(),"));
+        fixed,
+        contains(
+          "maybeRole: json['maybeRole'] == null ? null : Role.values.byName(json['maybeRole'] as String)",
+        ),
+      );
       expect(
-          fixed,
-          contains(
-              "if (maybeList != null) 'maybeList': maybeList!.map((e) => e.toJson()).toList(),"));
+        fixed,
+        contains("if (maybeRole != null) 'maybeRole': maybeRole!.name,"),
+      );
       expect(
-          fixed,
-          contains(
-              "if (maybeMap != null) 'maybeMap': maybeMap!.map((k, v) => MapEntry(k, v.toJson())),"));
+        fixed,
+        contains("if (maybeItem != null) 'maybeItem': maybeItem!.toJson(),"),
+      );
+      expect(
+        fixed,
+        contains(
+          "if (maybeList != null) 'maybeList': maybeList!.map((e) => e.toJson()).toList(),",
+        ),
+      );
+      expect(
+        fixed,
+        contains(
+          "if (maybeMap != null) 'maybeMap': maybeMap!.map((k, v) => MapEntry(k, v.toJson())),",
+        ),
+      );
       expect(fixed, contains("'roles': roles.map((e) => e.name).toList(),"));
-      expect(fixed,
-          contains("'itemMap': itemMap.map((k, v) => MapEntry(k, v.toJson())),"));
+      expect(
+        fixed,
+        contains("'itemMap': itemMap.map((k, v) => MapEntry(k, v.toJson())),"),
+      );
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });
@@ -782,9 +830,11 @@ class Dto {
       final fixed = applyCanonicalFix(source);
       expect(fixed, contains("price: (json['price'] as num).toDouble(),"));
       expect(
-          fixed,
-          contains(
-              "rate: json['rate'] == null ? null : (json['rate'] as num).toDouble(),"));
+        fixed,
+        contains(
+          "rate: json['rate'] == null ? null : (json['rate'] as num).toDouble(),",
+        ),
+      );
       expect(canonicalDiagnostics(fixed), isEmpty);
     });
 
@@ -857,17 +907,23 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
       };
       final dtos = generateScaffold(doc).dtos;
       expect(
-          dtos,
-          contains(
-              "roles: (json['roles'] as List).map((e) => Role.values.byName(e as String)).toList(),"));
+        dtos,
+        contains(
+          "roles: (json['roles'] as List).map((e) => Role.values.byName(e as String)).toList(),",
+        ),
+      );
       expect(
-          dtos,
-          contains(
-              "items: (json['items'] as List).map((e) => Item.fromJson(e as Map<String, Object?>)).toList(),"));
+        dtos,
+        contains(
+          "items: (json['items'] as List).map((e) => Item.fromJson(e as Map<String, Object?>)).toList(),",
+        ),
+      );
       expect(
-          dtos,
-          contains(
-              "prices: (json['prices'] as List).map((e) => (e as num).toDouble()).toList(),"));
+        dtos,
+        contains(
+          "prices: (json['prices'] as List).map((e) => (e as num).toDouble()).toList(),",
+        ),
+      );
       expect(dtos, contains("'roles': roles.map((e) => e.name).toList(),"));
       expect(dtos, contains("'items': items.map((e) => e.toJson()).toList(),"));
     });
@@ -918,7 +974,10 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
           },
         },
       };
-      expect(generateScaffold(doc).contractTest, contains("'inner': {'n': 'x'}"));
+      expect(
+        generateScaffold(doc).contractTest,
+        contains("'inner': {'n': 'x'}"),
+      );
     });
   });
 
@@ -948,42 +1007,45 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
 
     test('scaffold rejects recursion, name collision, and bad enum values', () {
       expect(
-          () => generateScaffold({
-                'components': {
-                  'schemas': {
-                    'Node': {
-                      'type': 'object',
-                      'required': ['next'],
-                      'properties': {
-                        'next': {r'$ref': '#/components/schemas/Node'},
-                      },
-                    },
-                  },
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'Node': {
+                'type': 'object',
+                'required': ['next'],
+                'properties': {
+                  'next': {r'$ref': '#/components/schemas/Node'},
                 },
-              }),
-          throwsA(isA<ScaffoldError>()));
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
       expect(
-          () => generateScaffold({
-                'components': {
-                  'schemas': {
-                    'Foo': {'type': 'object', 'properties': <String, Object?>{}},
-                    'foo': {'type': 'object', 'properties': <String, Object?>{}},
-                  },
-                },
-              }),
-          throwsA(isA<ScaffoldError>()));
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'Foo': {'type': 'object', 'properties': <String, Object?>{}},
+              'foo': {'type': 'object', 'properties': <String, Object?>{}},
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
       expect(
-          () => generateScaffold({
-                'components': {
-                  'schemas': {
-                    'E': {
-                      'type': 'string',
-                      'enum': ['ok', 'default'],
-                    },
-                  },
-                },
-              }),
-          throwsA(isA<ScaffoldError>()));
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'E': {
+                'type': 'string',
+                'enum': ['ok', 'default'],
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
     });
 
     test('drift reports a field type change and a required change', () {

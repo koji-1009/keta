@@ -25,10 +25,9 @@ List<Diagnostic> routeDiagnostics(String source, {String file = '<memory>'}) {
 const _verbs = {'get', 'post', 'put', 'delete', 'patch', 'head', 'options'};
 
 class _RouteVisitor extends RecursiveAstVisitor<void> {
+  _RouteVisitor(this.file, this.diagnostics);
   final String file;
   final List<Diagnostic> diagnostics;
-
-  _RouteVisitor(this.file, this.diagnostics);
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
@@ -38,7 +37,10 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
         args.length >= 2 &&
         args[0] is SimpleStringLiteral &&
         args[1] is FunctionExpression) {
-      _check((args[0] as SimpleStringLiteral).value, args[1] as FunctionExpression);
+      _check(
+        (args[0] as SimpleStringLiteral).value,
+        args[1] as FunctionExpression,
+      );
     }
     super.visitMethodInvocation(node);
   }
@@ -49,43 +51,50 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
     handler.body.accept(_ParamCollector(used));
 
     for (final name in used.difference(captures)) {
-      diagnostics.add(Diagnostic(
-        rule: 'keta_param_unknown',
-        message: 'c.param(\'$name\') is not a capture in "$path"; '
-            'add :$name to the route or fix the name',
-        file: file,
-        scope: '$path#$name',
-      ));
+      diagnostics.add(
+        Diagnostic(
+          rule: 'keta_param_unknown',
+          message:
+              'c.param(\'$name\') is not a capture in "$path"; '
+              'add :$name to the route or fix the name',
+          file: file,
+          scope: '$path#$name',
+        ),
+      );
     }
     for (final capture in captures.difference(used)) {
-      diagnostics.add(Diagnostic(
-        rule: 'keta_capture_unused',
-        message: 'capture ":$capture" in "$path" is never read via c.param; '
-            'read it or remove it from the route',
-        file: file,
-        scope: '$path#$capture',
-      ));
+      diagnostics.add(
+        Diagnostic(
+          rule: 'keta_capture_unused',
+          message:
+              'capture ":$capture" in "$path" is never read via c.param; '
+              'read it or remove it from the route',
+          file: file,
+          scope: '$path#$capture',
+        ),
+      );
     }
   }
 }
 
 class _ParamCollector extends RecursiveAstVisitor<void> {
-  final Set<String> names;
-
   _ParamCollector(this.names);
+  final Set<String> names;
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (node.methodName.name == 'param' &&
         node.argumentList.arguments.length == 1 &&
         node.argumentList.arguments.first is SimpleStringLiteral) {
-      names.add((node.argumentList.arguments.first as SimpleStringLiteral).value);
+      names.add(
+        (node.argumentList.arguments.first as SimpleStringLiteral).value,
+      );
     }
     super.visitMethodInvocation(node);
   }
 }
 
 Set<String> _captures(String path) => {
-      for (final segment in path.split('/'))
-        if (segment.startsWith(':') && segment.length > 1) segment.substring(1),
-    };
+  for (final segment in path.split('/'))
+    if (segment.startsWith(':') && segment.length > 1) segment.substring(1),
+};

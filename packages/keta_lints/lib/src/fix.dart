@@ -29,8 +29,9 @@ String applyCanonicalFix(String source) {
   final dtoNames = <String>{...schemas.keys};
   for (final declaration in unit.declarations) {
     if (declaration is EnumDeclaration) {
-      enums[declaration.namePart.typeName.lexeme] =
-          declaration.body.constants.map((c) => c.name.lexeme).toList();
+      enums[declaration.namePart.typeName.lexeme] = declaration.body.constants
+          .map((c) => c.name.lexeme)
+          .toList();
     } else if (declaration is ClassDeclaration && _hasMapper(declaration)) {
       dtoNames.add(declaration.namePart.typeName.lexeme);
     }
@@ -61,11 +62,10 @@ bool _hasMapper(ClassDeclaration node) {
 }
 
 class _Edit {
+  _Edit(this.start, this.end, this.replacement);
   final int start;
   final int end;
   final String replacement;
-
-  _Edit(this.start, this.end, this.replacement);
 }
 
 String _applyEdits(String source, List<_Edit> edits) {
@@ -83,9 +83,14 @@ String _applyEdits(String source, List<_Edit> edits) {
   return result;
 }
 
-void _fixClass(ClassDeclaration node, _TypeResolver resolver,
-    Set<String> dtoNames, Map<String, Expression> schemas, String source,
-    List<_Edit> edits) {
+void _fixClass(
+  ClassDeclaration node,
+  _TypeResolver resolver,
+  Set<String> dtoNames,
+  Map<String, Expression> schemas,
+  String source,
+  List<_Edit> edits,
+) {
   final className = node.namePart.typeName.lexeme;
   // Only touch classes with a canonical signal, and never an abstract/sealed
   // one (a factory can't instantiate it).
@@ -99,7 +104,9 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
   MethodDeclaration? toJson;
 
   for (final member in node.body.members) {
-    if (member is FieldDeclaration && !member.isStatic && member.fields.isFinal) {
+    if (member is FieldDeclaration &&
+        !member.isStatic &&
+        member.fields.isFinal) {
       // Skip fields with initializers / late — not constructor parameters.
       for (final v in member.fields.variables) {
         if (v.initializer == null) {
@@ -137,7 +144,8 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
 
   final fieldNames = {for (final f in fields) f.name};
   final schema = schemas[className];
-  final mapperDrifted = fromJson == null ||
+  final mapperDrifted =
+      fromJson == null ||
       toJson == null ||
       !_setEquals(_toJsonKeys(toJson)!, fieldNames);
   final schemaDrifted =
@@ -162,7 +170,12 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
   }
   if (schema != null) {
     edits.add(
-        _Edit(schema.offset, schema.end, _schemaSource(className, fields, schema, source)));
+      _Edit(
+        schema.offset,
+        schema.end,
+        _schemaSource(className, fields, schema, source),
+      ),
+    );
   }
 }
 
@@ -175,10 +188,18 @@ Map<String, Expression> _schemaInitializers(CompilationUnit unit) {
     for (final variable in declaration.variables.variables) {
       final init = variable.initializer;
       final (name, isSchema) = switch (init) {
-        InstanceCreationExpression(:final constructorName, :final argumentList) =>
-          (_firstStringArg(argumentList), constructorName.type.name.lexeme == 'Schema'),
-        MethodInvocation(:final methodName, :final argumentList) =>
-          (_firstStringArg(argumentList), methodName.name == 'Schema'),
+        InstanceCreationExpression(
+          :final constructorName,
+          :final argumentList,
+        ) =>
+          (
+            _firstStringArg(argumentList),
+            constructorName.type.name.lexeme == 'Schema',
+          ),
+        MethodInvocation(:final methodName, :final argumentList) => (
+          _firstStringArg(argumentList),
+          methodName.name == 'Schema',
+        ),
         _ => (null, false),
       };
       if (isSchema && name != null && init != null) result[name] = init;
@@ -231,15 +252,21 @@ Set<String> _schemaPropertyNames(Expression init) {
 /// other top-level schema key (`description`, `additionalProperties`, …), and
 /// re-deriving `required` and `deps` from the field model.
 String _schemaSource(
-    String className, List<_Field> fields, Expression init, String source) {
+  String className,
+  List<_Field> fields,
+  Expression init,
+  String source,
+) {
   final map = _schemaMap(init);
   final props = map == null ? null : _propertiesLiteral(map);
   final existing = <String, String>{};
   if (props != null) {
     for (final e in props.elements) {
       if (e is MapLiteralEntry && e.key is SimpleStringLiteral) {
-        existing[(e.key as SimpleStringLiteral).value] =
-            source.substring(e.value.offset, e.value.end);
+        existing[(e.key as SimpleStringLiteral).value] = source.substring(
+          e.value.offset,
+          e.value.end,
+        );
       }
     }
   }
@@ -271,7 +298,9 @@ String _schemaSource(
   }
 
   final buffer = StringBuffer("Schema('$className', {'type': 'object'");
-  if (required.isNotEmpty) buffer.write(", 'required': [${required.join(', ')}]");
+  if (required.isNotEmpty) {
+    buffer.write(", 'required': [${required.join(', ')}]");
+  }
   buffer.write(", 'properties': {${properties.join(', ')}}");
   for (final extra in extras) {
     buffer.write(', $extra');
@@ -280,7 +309,8 @@ String _schemaSource(
   final depList = deps.toList()..sort();
   if (depList.isNotEmpty) {
     buffer.write(
-        ', deps: [${depList.map((d) => '${_lowerFirst(d)}Schema').join(', ')}]');
+      ', deps: [${depList.map((d) => '${_lowerFirst(d)}Schema').join(', ')}]',
+    );
   }
   buffer.write(')');
   return buffer.toString();
@@ -330,7 +360,8 @@ bool _setEquals(Set<String> a, Set<String> b) =>
 
 String _fromJsonSource(String className, List<_Field> fields) {
   final buffer = StringBuffer(
-      '  factory $className.fromJson(Map<String, Object?> json) => $className(\n');
+    '  factory $className.fromJson(Map<String, Object?> json) => $className(\n',
+  );
   for (final f in fields) {
     buffer.writeln('        ${f.name}: ${f.fromJsonExpr()},');
   }
@@ -350,10 +381,9 @@ String _toJsonSource(List<_Field> fields) {
 // --- field / type model ---------------------------------------------------
 
 class _Field {
+  _Field(this.name, this.type);
   final String name;
   final _FieldType type;
-
-  _Field(this.name, this.type);
 
   /// The field name escaped for embedding inside a generated single-quoted
   /// string literal — a name containing `$`, `'`, or `\` (all legal in a Dart
@@ -367,7 +397,9 @@ class _Field {
     final t = type;
     final key = _keyLiteral;
     if (t is _Prim && t.dart != 'double') {
-      return t.nullable ? "json['$key'] as ${t.dart}?" : "json['$key'] as ${t.dart}";
+      return t.nullable
+          ? "json['$key'] as ${t.dart}?"
+          : "json['$key'] as ${t.dart}";
     }
     final expr = t.fromJson("json['$key']");
     return t.nullable ? "json['$key'] == null ? null : $expr" : expr;
@@ -382,8 +414,8 @@ class _Field {
 }
 
 sealed class _FieldType {
-  final bool nullable;
   const _FieldType(this.nullable);
+  final bool nullable;
 
   String fromJson(String access);
   String toJson(String name, {required bool nullable});
@@ -392,8 +424,8 @@ sealed class _FieldType {
 }
 
 class _Prim extends _FieldType {
-  final String dart;
   const _Prim(this.dart, super.nullable);
+  final String dart;
 
   @override
   String fromJson(String access) =>
@@ -402,19 +434,19 @@ class _Prim extends _FieldType {
   String toJson(String name, {required bool nullable}) => name;
   @override
   Object? schemaJson() => {
-        'type': switch (dart) {
-          'int' => 'integer',
-          'double' => 'number',
-          'bool' => 'boolean',
-          _ => 'string',
-        },
-      };
+    'type': switch (dart) {
+      'int' => 'integer',
+      'double' => 'number',
+      'bool' => 'boolean',
+      _ => 'string',
+    },
+  };
 }
 
 class _EnumType extends _FieldType {
+  const _EnumType(this.name, this.values, super.nullable);
   final String name;
   final List<String>? values;
-  const _EnumType(this.name, this.values, super.nullable);
 
   @override
   String fromJson(String access) => '$name.values.byName($access as String)';
@@ -422,13 +454,15 @@ class _EnumType extends _FieldType {
   String toJson(String field, {required bool nullable}) =>
       nullable ? '$field!.name' : '$field.name';
   @override
-  Object? schemaJson() =>
-      {'type': 'string', if (values != null) 'enum': values};
+  Object? schemaJson() => {
+    'type': 'string',
+    if (values != null) 'enum': values,
+  };
 }
 
 class _DtoType extends _FieldType {
-  final String name;
   const _DtoType(this.name, super.nullable);
+  final String name;
 
   @override
   String fromJson(String access) =>
@@ -443,20 +477,20 @@ class _DtoType extends _FieldType {
 }
 
 class _ListType extends _FieldType {
-  final _FieldType item;
   const _ListType(this.item, super.nullable);
+  final _FieldType item;
 
   @override
   String fromJson(String access) => switch (item) {
-        _Prim(dart: 'double') =>
-          '($access as List).map((e) => (e as num).toDouble()).toList()',
-        _Prim(:final dart) => '($access as List).cast<$dart>()',
-        _EnumType(:final name) =>
-          '($access as List).map((e) => $name.values.byName(e as String)).toList()',
-        _DtoType(:final name) =>
-          '($access as List).map((e) => $name.fromJson(e as Map<String, Object?>)).toList()',
-        _ => '$access as List',
-      };
+    _Prim(dart: 'double') =>
+      '($access as List).map((e) => (e as num).toDouble()).toList()',
+    _Prim(:final dart) => '($access as List).cast<$dart>()',
+    _EnumType(:final name) =>
+      '($access as List).map((e) => $name.values.byName(e as String)).toList()',
+    _DtoType(:final name) =>
+      '($access as List).map((e) => $name.fromJson(e as Map<String, Object?>)).toList()',
+    _ => '$access as List',
+  };
   @override
   String toJson(String field, {required bool nullable}) {
     final f = nullable ? '$field!' : field;
@@ -475,20 +509,20 @@ class _ListType extends _FieldType {
 }
 
 class _MapType extends _FieldType {
-  final _FieldType value;
   const _MapType(this.value, super.nullable);
+  final _FieldType value;
 
   @override
   String fromJson(String access) => switch (value) {
-        _Prim(dart: 'double') =>
-          '($access as Map).map((k, v) => MapEntry(k as String, (v as num).toDouble()))',
-        _Prim(:final dart) => '($access as Map).cast<String, $dart>()',
-        _EnumType(:final name) =>
-          '($access as Map).map((k, v) => MapEntry(k as String, $name.values.byName(v as String)))',
-        _DtoType(:final name) =>
-          '($access as Map).map((k, v) => MapEntry(k as String, $name.fromJson(v as Map<String, Object?>)))',
-        _ => '($access as Map).cast<String, Object?>()',
-      };
+    _Prim(dart: 'double') =>
+      '($access as Map).map((k, v) => MapEntry(k as String, (v as num).toDouble()))',
+    _Prim(:final dart) => '($access as Map).cast<String, $dart>()',
+    _EnumType(:final name) =>
+      '($access as Map).map((k, v) => MapEntry(k as String, $name.values.byName(v as String)))',
+    _DtoType(:final name) =>
+      '($access as Map).map((k, v) => MapEntry(k as String, $name.fromJson(v as Map<String, Object?>)))',
+    _ => '($access as Map).cast<String, Object?>()',
+  };
   @override
   String toJson(String field, {required bool nullable}) {
     final f = nullable ? '$field!' : field;
@@ -501,17 +535,18 @@ class _MapType extends _FieldType {
   }
 
   @override
-  Object? schemaJson() =>
-      {'type': 'object', 'additionalProperties': value.schemaJson()};
+  Object? schemaJson() => {
+    'type': 'object',
+    'additionalProperties': value.schemaJson(),
+  };
   @override
   void collectDtoRefs(Set<String> into) => value.collectDtoRefs(into);
 }
 
 class _TypeResolver {
+  _TypeResolver(this.enums, this.dtoNames);
   final Map<String, List<String>> enums;
   final Set<String> dtoNames;
-
-  _TypeResolver(this.enums, this.dtoNames);
 
   /// Resolves a field's type within the canonical subset, or null when it can't
   /// be resolved from this file (a cross-file enum, or a non-canonical type).
@@ -520,12 +555,17 @@ class _TypeResolver {
 
   _FieldType? _resolveString(String raw) {
     final nullable = raw.endsWith('?');
-    final base = nullable ? raw.substring(0, raw.length - 1).trim() : raw.trim();
+    final base = nullable
+        ? raw.substring(0, raw.length - 1).trim()
+        : raw.trim();
     if (base.startsWith('List<') && base.endsWith('>')) {
       final item = _resolveString(base.substring(5, base.length - 1).trim());
       // Nested collections and nullable elements are outside the canonical
       // subset (the generated mappers can't express them) — leave untouched.
-      if (item == null || item.nullable || item is _ListType || item is _MapType) {
+      if (item == null ||
+          item.nullable ||
+          item is _ListType ||
+          item is _MapType) {
         return null;
       }
       return _ListType(item, nullable);

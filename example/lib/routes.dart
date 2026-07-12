@@ -24,29 +24,35 @@ void register(App<Env> app) {
     doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user'),
   );
 
-  app.on(root.lit('users')).post(
-    (c, _) async {
-      final dto = UserDto.fromJson(
-          userDtoSchema.require(await c.body()) as Map<String, Object?>);
-      await c.get(txConn).execute(
-        'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
-        [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
-      );
-      return c.text('created', 201);
-    },
-    doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'),
-  );
+  app.on(root.lit('users')).post((c, _) async {
+    final dto = UserDto.fromJson(
+      userDtoSchema.require(await c.body()) as Map<String, Object?>,
+    );
+    await c.get(txConn).execute(
+      'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
+      [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
+    );
+    return c.text('created', 201);
+  }, doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'));
 
-  app.on(root.lit('users').cap(named(str, 'uid')).lit('tags').cap(named(integer, 'index'))).get(
-    (c, (String, int) p) async {
-      final rows = await c.env.db.reader
-          .query('select tags from users where id = ?', [p.$1]);
-      if (rows.isEmpty) throw const KetaException(404, 'user not found');
-      final tags = (rows.first['tags'] as String).split(',');
-      if (p.$2 < 0 || p.$2 >= tags.length) {
-        throw const KetaException(404, 'tag index out of range');
-      }
-      return c.json({'tag': tags[p.$2]});
-    },
-  );
+  app
+      .on(
+        root
+            .lit('users')
+            .cap(named(str, 'uid'))
+            .lit('tags')
+            .cap(named(integer, 'index')),
+      )
+      .get((c, (String, int) p) async {
+        final rows = await c.env.db.reader.query(
+          'select tags from users where id = ?',
+          [p.$1],
+        );
+        if (rows.isEmpty) throw const KetaException(404, 'user not found');
+        final tags = (rows.first['tags'] as String).split(',');
+        if (p.$2 < 0 || p.$2 >= tags.length) {
+          throw const KetaException(404, 'tag index out of range');
+        }
+        return c.json({'tag': tags[p.$2]});
+      });
 }

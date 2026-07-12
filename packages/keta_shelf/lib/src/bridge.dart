@@ -1,6 +1,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show HttpConnectionInfo;
 
 import 'package:keta/keta.dart';
 import 'package:shelf/shelf.dart' as shelf;
@@ -16,9 +17,14 @@ shelf.Handler ketaToShelf<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
     final response = await router.dispatch(_ShelfRequest(request));
     // Drop framing headers keta may have set: the body is re-framed by shelf /
     // the server, and a stale content-length on a stream body corrupts the wire.
-    final headers = {...response.headers}
-      ..removeWhere((k, _) => k == 'content-length' || k == 'transfer-encoding');
-    return shelf.Response(response.status, body: response.body, headers: headers);
+    final headers = {
+      ...response.headers,
+    }..removeWhere((k, _) => k == 'content-length' || k == 'transfer-encoding');
+    return shelf.Response(
+      response.status,
+      body: response.body,
+      headers: headers,
+    );
   };
 }
 
@@ -44,11 +50,16 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
     // transport frames it (a case-mismatched Content-Length would otherwise slip
     // through and corrupt the wire).
     final headers = {...response.headers}
-      ..removeWhere((k, _) =>
-          k.toLowerCase() == 'content-length' ||
-          k.toLowerCase() == 'transfer-encoding');
-    return Response(response.statusCode,
-        headers: headers, body: response.read());
+      ..removeWhere(
+        (k, _) =>
+            k.toLowerCase() == 'content-length' ||
+            k.toLowerCase() == 'transfer-encoding',
+      );
+    return Response(
+      response.statusCode,
+      headers: headers,
+      body: response.read(),
+    );
   };
 }
 
@@ -58,10 +69,9 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
 Uri _absolute(Uri uri, String? host) {
   if (uri.hasScheme) return uri;
   final authority = (host == null || host.isEmpty) ? 'localhost' : host;
-  return Uri.parse('http://$authority').replace(
-    path: uri.path,
-    query: uri.query.isEmpty ? null : uri.query,
-  );
+  return Uri.parse(
+    'http://$authority',
+  ).replace(path: uri.path, query: uri.query.isEmpty ? null : uri.query);
 }
 
 /// Passes [source] through while counting bytes, failing with `KetaException`
@@ -79,9 +89,8 @@ Stream<List<int>> _limited(Stream<List<int>> source, int maxBytes) async* {
 }
 
 class _ShelfRequest implements TransportRequest {
-  final shelf.Request _request;
-
   _ShelfRequest(this._request);
+  final shelf.Request _request;
 
   @override
   String get method => _request.method;
@@ -91,9 +100,9 @@ class _ShelfRequest implements TransportRequest {
 
   @override
   Map<String, String> get headers => {
-        for (final entry in _request.headers.entries)
-          entry.key.toLowerCase(): entry.value,
-      };
+    for (final entry in _request.headers.entries)
+      entry.key.toLowerCase(): entry.value,
+  };
 
   @override
   Stream<List<int>> get bodyStream => _request.read();
@@ -104,15 +113,9 @@ class _ShelfRequest implements TransportRequest {
 
   @override
   String get remoteAddress {
-    // shelf_io stores an HttpConnectionInfo object (not a Map) under this key.
-    // Under any other shelf server that does not populate it, this is '' — IP
-    // features (rate limiting, audit) silently see no peer address.
+    // shelf_io stores a dart:io HttpConnectionInfo here; any other server that
+    // doesn't populate it leaves remoteAddress ''.
     final info = _request.context['shelf.io.connection_info'];
-    if (info == null) return '';
-    try {
-      return (info as dynamic).remoteAddress.address as String? ?? '';
-    } catch (_) {
-      return '';
-    }
+    return info is HttpConnectionInfo ? info.remoteAddress.address : '';
   }
 }

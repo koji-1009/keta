@@ -7,13 +7,13 @@ import 'package:path/path.dart' as p;
 /// A route file discovered under the routes directory. Each is expected to
 /// declare a top-level `void register(App<...> app)`.
 class RouteFile {
+  const RouteFile(this.importPath, this.prefix);
+
   /// The import path relative to the manifest, e.g. `routes/users.dart`.
   final String importPath;
 
   /// The import prefix and call target, e.g. `users`.
   final String prefix;
-
-  const RouteFile(this.importPath, this.prefix);
 }
 
 const _importsMarker = 'keta_files:imports';
@@ -27,25 +27,30 @@ const _startMarkers = {_importsMarker, _routesMarker};
 /// Lists `*.dart` route files directly under [routesDir], sorted by name, with
 /// a unique import prefix for each. [importBase] is the path used in generated
 /// imports (relative to the manifest).
-List<RouteFile> discoverRouteFiles(String routesDir,
-    {String importBase = 'routes'}) {
+List<RouteFile> discoverRouteFiles(
+  String routesDir, {
+  String importBase = 'routes',
+}) {
   final dir = Directory(routesDir);
   if (!dir.existsSync()) return const [];
-  final names = dir
-      .listSync()
-      .whereType<File>()
-      .map((f) => p.basename(f.path))
-      .where((n) => n.endsWith('.dart'))
-      .toList()
-    ..sort();
+  final names =
+      dir
+          .listSync()
+          .whereType<File>()
+          .map((f) => p.basename(f.path))
+          .where((n) => n.endsWith('.dart'))
+          .toList()
+        ..sort();
 
   final used = <String>{};
   return [
     for (final name in names)
       RouteFile(
         p.url.join(importBase, name),
-        _uniquePrefix(_sanitize(name.substring(0, name.length - '.dart'.length)),
-            used),
+        _uniquePrefix(
+          _sanitize(name.substring(0, name.length - '.dart'.length)),
+          used,
+        ),
       ),
   ];
 }
@@ -62,10 +67,12 @@ List<RouteFile> discoverRouteFiles(String routesDir,
 /// context.
 String syncManifest(String source, List<RouteFile> files) {
   var lines = source.split('\n');
-  lines = _replaceRegion(lines, _importsMarker,
-      [for (final f in files) "import '${f.importPath}' as ${f.prefix};"]);
-  lines = _replaceRegion(lines, _routesMarker,
-      [for (final f in files) '${f.prefix}.register(app);']);
+  lines = _replaceRegion(lines, _importsMarker, [
+    for (final f in files) "import '${f.importPath}' as ${f.prefix};",
+  ]);
+  lines = _replaceRegion(lines, _routesMarker, [
+    for (final f in files) '${f.prefix}.register(app);',
+  ]);
   return lines.join('\n');
 }
 
@@ -91,7 +98,10 @@ List<RouteFile> unregistered(String source, List<RouteFile> files) {
 }
 
 List<String> _replaceRegion(
-    List<String> lines, String marker, List<String> content) {
+  List<String> lines,
+  String marker,
+  List<String> content,
+) {
   final start = _uniqueMarker(lines, marker);
   final end = lines.indexWhere((l) => l.trim() == '// $_endMarker', start + 1);
   if (end == -1) {
@@ -105,7 +115,8 @@ List<String> _replaceRegion(
     for (final other in _startMarkers) {
       if (trimmed == '// $other') {
         throw FormatException(
-            'marker "// $marker" region overlaps "// $other"');
+          'marker "// $marker" region overlaps "// $other"',
+        );
       }
     }
   }
@@ -146,14 +157,69 @@ List<String> _regionContent(List<String> lines, String marker) {
 /// Dart reserved words and built-in identifiers that cannot be used as an import
 /// prefix. A sanitized name colliding with one is suffixed with `_`.
 const _reservedWords = {
-  'abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch',
-  'class', 'const', 'continue', 'covariant', 'default', 'deferred', 'do',
-  'dynamic', 'else', 'enum', 'export', 'extends', 'extension', 'external',
-  'factory', 'false', 'final', 'finally', 'for', 'function', 'get', 'hide',
-  'if', 'implements', 'import', 'in', 'interface', 'is', 'late', 'library',
-  'mixin', 'new', 'null', 'on', 'operator', 'part', 'required', 'rethrow',
-  'return', 'sealed', 'set', 'show', 'static', 'super', 'switch', 'sync',
-  'this', 'throw', 'true', 'try', 'typedef', 'var', 'void', 'while', 'with',
+  'abstract',
+  'as',
+  'assert',
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'covariant',
+  'default',
+  'deferred',
+  'do',
+  'dynamic',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'extension',
+  'external',
+  'factory',
+  'false',
+  'final',
+  'finally',
+  'for',
+  'function',
+  'get',
+  'hide',
+  'if',
+  'implements',
+  'import',
+  'in',
+  'interface',
+  'is',
+  'late',
+  'library',
+  'mixin',
+  'new',
+  'null',
+  'on',
+  'operator',
+  'part',
+  'required',
+  'rethrow',
+  'return',
+  'sealed',
+  'set',
+  'show',
+  'static',
+  'super',
+  'switch',
+  'sync',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typedef',
+  'var',
+  'void',
+  'while',
+  'with',
   'yield',
 };
 

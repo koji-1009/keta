@@ -11,11 +11,10 @@ import 'package:keta/keta.dart';
 /// another schema, and `oneOf` + `discriminator` for sealed types. [deps] lists
 /// referenced schemas so a walker can collect them transitively.
 final class Schema {
+  const Schema(this.name, this.json, {this.deps = const []});
   final String name;
   final Map<String, Object?> json;
   final List<Schema> deps;
-
-  const Schema(this.name, this.json, {this.deps = const []});
 
   /// Validates [value] against this schema, returning a violation message per
   /// problem (each carrying a JSON path). An empty list means valid.
@@ -27,8 +26,8 @@ final class Schema {
 
   /// Validates [value] and returns it unchanged, throwing `KetaException(400)`
   /// with the violation list as detail on any problem. Validation is the gate;
-  /// typing the result is the mapper's job (`Dto.fromJson(schema.require(body)
-  /// as Map<String, Object?>)`).
+  /// typing the result is the mapper's job
+  /// (`Dto.fromJson(schema.require(body) as Map<String, Object?>)`).
   Object? require(Object? value) {
     final errors = validate(value);
     if (errors.isNotEmpty) {
@@ -52,8 +51,13 @@ final class Schema {
   }
 }
 
-void _validate(Map<String, Object?> schema, Object? value, String path,
-    List<String> errors, Map<String, Schema> refs) {
+void _validate(
+  Map<String, Object?> schema,
+  Object? value,
+  String path,
+  List<String> errors,
+  Map<String, Schema> refs,
+) {
   final ref = schema[r'$ref'];
   if (ref is String) {
     final target = refs[ref];
@@ -102,8 +106,13 @@ void _validate(Map<String, Object?> schema, Object? value, String path,
   }
 }
 
-void _validateObject(Map<String, Object?> schema, Object? value, String path,
-    List<String> errors, Map<String, Schema> refs) {
+void _validateObject(
+  Map<String, Object?> schema,
+  Object? value,
+  String path,
+  List<String> errors,
+  Map<String, Schema> refs,
+) {
   if (value is! Map) {
     errors.add('$path: expected object, got ${_typeName(value)}');
     return;
@@ -122,8 +131,13 @@ void _validateObject(Map<String, Object?> schema, Object? value, String path,
       // A null for an optional property is accepted — the canonical toJson
       // omits nulls, so an explicit null means "absent".
       if (v == null && !required.contains(entry.key)) continue;
-      _validate(entry.value as Map<String, Object?>, v, '$path.${entry.key}',
-          errors, refs);
+      _validate(
+        entry.value as Map<String, Object?>,
+        v,
+        '$path.${entry.key}',
+        errors,
+        refs,
+      );
     }
   }
   // additionalProperties governs undeclared keys: a schema validates each of
@@ -133,7 +147,8 @@ void _validateObject(Map<String, Object?> schema, Object? value, String path,
     for (final key in value.keys) {
       if (!properties.containsKey(key)) {
         errors.add(
-            '$path.$key: unexpected property (additionalProperties is false)');
+          '$path.$key: unexpected property (additionalProperties is false)',
+        );
       }
     }
   } else if (additional is Map<String, Object?>) {
@@ -145,8 +160,13 @@ void _validateObject(Map<String, Object?> schema, Object? value, String path,
   }
 }
 
-void _validateArray(Map<String, Object?> schema, Object? value, String path,
-    List<String> errors, Map<String, Schema> refs) {
+void _validateArray(
+  Map<String, Object?> schema,
+  Object? value,
+  String path,
+  List<String> errors,
+  Map<String, Schema> refs,
+) {
   if (value is! List) {
     errors.add('$path: expected array, got ${_typeName(value)}');
     return;
@@ -158,8 +178,12 @@ void _validateArray(Map<String, Object?> schema, Object? value, String path,
   }
 }
 
-void _validateEnum(Map<String, Object?> schema, Object? value, String path,
-    List<String> errors) {
+void _validateEnum(
+  Map<String, Object?> schema,
+  Object? value,
+  String path,
+  List<String> errors,
+) {
   final values = schema['enum'];
   // No `.cast<String>()`: comparing against the raw list keeps a malformed
   // enum definition (or a non-string enum) from throwing during validation.
@@ -168,8 +192,13 @@ void _validateEnum(Map<String, Object?> schema, Object? value, String path,
   }
 }
 
-void _validateOneOf(Map<String, Object?> schema, Object? value, String path,
-    List<String> errors, Map<String, Schema> refs) {
+void _validateOneOf(
+  Map<String, Object?> schema,
+  Object? value,
+  String path,
+  List<String> errors,
+  Map<String, Schema> refs,
+) {
   if (value is! Map) {
     errors.add('$path: expected object, got ${_typeName(value)}');
     return;
@@ -210,12 +239,12 @@ void _validateOneOf(Map<String, Object?> schema, Object? value, String path,
 }
 
 String _typeName(Object? value) => switch (value) {
-      null => 'null',
-      String() => 'string',
-      int() => 'integer',
-      double() => 'number',
-      bool() => 'boolean',
-      List() => 'array',
-      Map() => 'object',
-      _ => value.runtimeType.toString(),
-    };
+  null => 'null',
+  String() => 'string',
+  int() => 'integer',
+  double() => 'number',
+  bool() => 'boolean',
+  List() => 'array',
+  Map() => 'object',
+  _ => value.runtimeType.toString(),
+};

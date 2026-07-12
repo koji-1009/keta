@@ -42,5 +42,4 @@ export 'src/routing.dart'
         dbl,
         boolean,
         named;
-export 'src/transport.dart'
-    show Transport, TransportRequest, TransportServer;
+export 'src/transport.dart' show Transport, TransportRequest, TransportServer;

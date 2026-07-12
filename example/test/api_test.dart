@@ -9,7 +9,7 @@ import 'package:test/test.dart';
 Future<Env> bootTestEnv() async {
   final db = SqliteDb.memory();
   await db.writer.execute(
-    "create table users (id text primary key, name text not null, "
+    'create table users (id text primary key, name text not null, '
     "age integer, role text not null, tags text not null default '')",
   );
   return Env(db, StdoutLog(flushInterval: Duration.zero));
@@ -21,12 +21,15 @@ void main() {
     addTearDown(env.close);
     final client = TestClient(buildApp(), env);
 
-    final created = await client.post('/users', json: {
-      'id': '1',
-      'name': 'Ada',
-      'role': 'admin',
-      'tags': ['x', 'y'],
-    });
+    final created = await client.post(
+      '/users',
+      json: {
+        'id': '1',
+        'name': 'Ada',
+        'role': 'admin',
+        'tags': ['x', 'y'],
+      },
+    );
     expect(created.status, 201);
 
     final got = await client.get('/users/1');
@@ -51,9 +54,8 @@ void main() {
   });
 
   test('OpenAPI output mirrors the registered routes', () {
-    final paths = (OpenApi.fromRoutes(buildApp().routes).toJson()['paths']
-            as Map)
-        .keys;
+    final paths =
+        (OpenApi.fromRoutes(buildApp().routes).toJson()['paths'] as Map).keys;
     expect(
       paths,
       containsAll([

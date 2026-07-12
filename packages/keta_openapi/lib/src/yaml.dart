@@ -75,25 +75,33 @@ void _writeList(StringBuffer buffer, List<Object?> list, int indent) {
 String _pad(int indent) => '  ' * indent;
 
 String _scalar(Object? value) => switch (value) {
-      null => 'null',
-      bool() => value.toString(),
-      double() when !value.isFinite =>
-        value.isNaN ? '.nan' : (value.isNegative ? '-.inf' : '.inf'),
-      num() => value.toString(),
-      String() => _quoteIfNeeded(value),
-      _ => _quoteIfNeeded(value.toString()),
-    };
+  null => 'null',
+  bool() => value.toString(),
+  double() when !value.isFinite =>
+    value.isNaN ? '.nan' : (value.isNegative ? '-.inf' : '.inf'),
+  num() => value.toString(),
+  String() => _quoteIfNeeded(value),
+  _ => _quoteIfNeeded(value.toString()),
+};
 
 final RegExp _plainSafe = RegExp(r'^[A-Za-z_][A-Za-z0-9_./-]*$');
 final RegExp _numberLike = RegExp(r'^-?\d+(\.\d+)?$');
 const Set<String> _reserved = {
-  'true', 'false', 'null', 'yes', 'no', 'on', 'off', '~',
+  'true',
+  'false',
+  'null',
+  'yes',
+  'no',
+  'on',
+  'off',
+  '~',
 };
 
 final RegExp _control = RegExp(r'[\x00-\x1f]');
 
 String _quoteIfNeeded(String value) {
-  final needsQuote = value.isEmpty ||
+  final needsQuote =
+      value.isEmpty ||
       !_plainSafe.hasMatch(value) ||
       _numberLike.hasMatch(value) ||
       _control.hasMatch(value) ||

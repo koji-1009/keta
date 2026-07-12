@@ -13,9 +13,8 @@ import 'response.dart';
 /// canonicalization would fuse separate declarations into one instance and
 /// collide. [name] appears in logs and error messages only.
 final class Key<T> {
-  final String name;
-
   Key(this.name);
+  final String name;
 }
 
 /// The mutable per-request state behind [Context].
@@ -23,6 +22,19 @@ final class Key<T> {
 /// Public within the package so the router and middleware can populate it, but
 /// never exported: user code reaches it only through [Context].
 class RequestCtx<E> {
+  RequestCtx({
+    required this.env,
+    required this.method,
+    required this.uri,
+    required this.route,
+    required this.headers,
+    required this.remoteAddress,
+    required this.params,
+    required this.orderedCaptures,
+    required this.log,
+    required this.maxBodyBytes,
+    required Stream<List<int>> body,
+  }) : _bodySource = body;
   final E env;
   final String method;
   final Uri uri;
@@ -61,20 +73,6 @@ class RequestCtx<E> {
 
   /// Whether some route shares this path (distinguishes 405 from 404).
   bool pathMatched = false;
-
-  RequestCtx({
-    required this.env,
-    required this.method,
-    required this.uri,
-    required this.route,
-    required this.headers,
-    required this.remoteAddress,
-    required this.params,
-    required this.orderedCaptures,
-    required this.log,
-    required this.maxBodyBytes,
-    required Stream<List<int>> body,
-  }) : _bodySource = body;
 
   Future<void> get aborted => _aborted.future;
 

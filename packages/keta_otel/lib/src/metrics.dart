@@ -20,7 +20,11 @@ class MetricsRegistry {
   }) {
     final key = _Key(method, route, status);
     _count.update(key, (v) => v + 1, ifAbsent: () => 1);
-    _durationMsSum.update(key, (v) => v + durationMs, ifAbsent: () => durationMs);
+    _durationMsSum.update(
+      key,
+      (v) => v + durationMs,
+      ifAbsent: () => durationMs,
+    );
   }
 
   /// The Prometheus text exposition of the collected series.
@@ -32,8 +36,10 @@ class MetricsRegistry {
       buffer.writeln('keta_requests_total${key.labels} $count');
     });
     buffer
-      ..writeln('# HELP keta_request_duration_ms_sum '
-          'Total request duration in milliseconds.')
+      ..writeln(
+        '# HELP keta_request_duration_ms_sum '
+        'Total request duration in milliseconds.',
+      )
       ..writeln('# TYPE keta_request_duration_ms_sum counter');
     _durationMsSum.forEach((key, sum) {
       buffer.writeln('keta_request_duration_ms_sum${key.labels} $sum');
@@ -43,11 +49,10 @@ class MetricsRegistry {
 }
 
 class _Key {
+  const _Key(this.method, this.route, this.status);
   final String method;
   final String route;
   final int status;
-
-  const _Key(this.method, this.route, this.status);
 
   String get labels =>
       '{method="${_escape(method)}",route="${_escape(route)}",status="$status"}';
@@ -63,5 +68,7 @@ class _Key {
   int get hashCode => Object.hash(method, route, status);
 }
 
-String _escape(String value) =>
-    value.replaceAll(r'\', r'\\').replaceAll('"', r'\"').replaceAll('\n', r'\n');
+String _escape(String value) => value
+    .replaceAll(r'\', r'\\')
+    .replaceAll('"', r'\"')
+    .replaceAll('\n', r'\n');

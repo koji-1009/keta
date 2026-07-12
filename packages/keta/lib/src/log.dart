@@ -10,8 +10,12 @@ abstract interface class Log {
   void debug(String msg, [Map<String, Object?> fields]);
   void info(String msg, [Map<String, Object?> fields]);
   void warn(String msg, [Map<String, Object?> fields]);
-  void error(String msg,
-      [Object? error, StackTrace? st, Map<String, Object?> fields]);
+  void error(
+    String msg, [
+    Object? error,
+    StackTrace? st,
+    Map<String, Object?> fields,
+  ]);
 
   /// Flush buffered lines. Called on a background timer and at shutdown.
   Future<void> flush();
@@ -25,6 +29,18 @@ abstract interface class Log {
 /// Lines are buffered and flushed on a timer to keep log calls off the hot
 /// path. [flush] drains synchronously-accumulated lines to the sink.
 class StdoutLog implements Log {
+  StdoutLog({IOSink? sink, Duration flushInterval = const Duration(seconds: 1)})
+    : _sink = sink ?? stdout,
+      _baked = const {},
+      _buffer = <String>[],
+      _ownsTimer = true {
+    if (flushInterval > Duration.zero) {
+      _timer = Timer.periodic(flushInterval, (_) => flush());
+    }
+  }
+
+  StdoutLog._view(this._sink, this._buffer, this._baked, this._timer)
+    : _ownsTimer = false;
   final IOSink _sink;
   final Map<String, Object?> _baked;
   final List<String> _buffer;
@@ -34,19 +50,6 @@ class StdoutLog implements Log {
   final bool _ownsTimer;
   Future<void> _flushing = Future<void>.value();
 
-  StdoutLog({IOSink? sink, Duration flushInterval = const Duration(seconds: 1)})
-      : _sink = sink ?? stdout,
-        _baked = const {},
-        _buffer = <String>[],
-        _ownsTimer = true {
-    if (flushInterval > Duration.zero) {
-      _timer = Timer.periodic(flushInterval, (_) => flush());
-    }
-  }
-
-  StdoutLog._view(this._sink, this._buffer, this._baked, this._timer)
-      : _ownsTimer = false;
-
   @override
   Log withFields(Map<String, Object?> fields) {
     if (fields.isEmpty) return this;
@@ -55,8 +58,13 @@ class StdoutLog implements Log {
     return StdoutLog._view(_sink, _buffer, {..._baked, ...fields}, _timer);
   }
 
-  void _emit(String level, String msg, Map<String, Object?> fields,
-      {Object? error, StackTrace? st}) {
+  void _emit(
+    String level,
+    String msg,
+    Map<String, Object?> fields, {
+    Object? error,
+    StackTrace? st,
+  }) {
     final line = <String, Object?>{
       'ts': DateTime.now().toUtc().toIso8601String(),
       'level': level,
@@ -82,11 +90,12 @@ class StdoutLog implements Log {
       _emit('warn', msg, fields);
 
   @override
-  void error(String msg,
-      [Object? error,
-      StackTrace? st,
-      Map<String, Object?> fields = const {}]) =>
-      _emit('error', msg, fields, error: error, st: st);
+  void error(
+    String msg, [
+    Object? error,
+    StackTrace? st,
+    Map<String, Object?> fields = const {},
+  ]) => _emit('error', msg, fields, error: error, st: st);
 
   @override
   Future<void> flush() {

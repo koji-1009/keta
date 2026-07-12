@@ -15,15 +15,19 @@ void main(List<String> args) {
     stderr.writeln('no manifest at $manifestPath');
     exit(66);
   }
-  final missing =
-      unregistered(manifest.readAsStringSync(), discoverRouteFiles(routesDir));
+  final missing = unregistered(
+    manifest.readAsStringSync(),
+    discoverRouteFiles(routesDir),
+  );
   if (missing.isEmpty) {
     stdout.writeln('all route files are registered');
     return;
   }
   for (final file in missing) {
-    stdout.writeln('unregistered: ${file.importPath} '
-        '(run keta_files:sync to add ${file.prefix}.register(app))');
+    stdout.writeln(
+      'unregistered: ${file.importPath} '
+      '(run keta_files:sync to add ${file.prefix}.register(app))',
+    );
   }
   exit(1);
 }

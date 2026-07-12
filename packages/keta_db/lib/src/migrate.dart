@@ -7,20 +7,18 @@ import 'db.dart';
 /// One migration file: `NNNN_name.sql`, identified by its numeric [version]
 /// prefix and applied in ascending numeric order.
 class Migration {
+  const Migration(this.version, this.name, this.sql);
   final String version;
   final String name;
   final String sql;
-
-  const Migration(this.version, this.name, this.sql);
 }
 
 /// The outcome of a migration run: the versions applied this run and those
 /// already present.
 class MigrationResult {
+  const MigrationResult(this.applied, this.alreadyApplied);
   final List<String> applied;
   final List<String> alreadyApplied;
-
-  const MigrationResult(this.applied, this.alreadyApplied);
 }
 
 /// Applies pending migrations from [directory] to [db] in ascending version
@@ -82,8 +80,7 @@ List<Migration> loadMigrations(String directory) {
     final stem = base.substring(0, base.length - '.sql'.length);
     final underscore = stem.indexOf('_');
     if (underscore <= 0) {
-      throw FormatException(
-          'migration file must be named NNNN_name.sql', base);
+      throw FormatException('migration file must be named NNNN_name.sql', base);
     }
     final version = stem.substring(0, underscore);
     if (int.tryParse(version) == null) {
@@ -98,12 +95,16 @@ List<Migration> loadMigrations(String directory) {
     }
     migrations.add(Migration(version, stem.substring(underscore + 1), sql));
   }
-  migrations.sort((a, b) => int.parse(a.version).compareTo(int.parse(b.version)));
+  migrations.sort(
+    (a, b) => int.parse(a.version).compareTo(int.parse(b.version)),
+  );
   for (var i = 1; i < migrations.length; i++) {
     if (int.parse(migrations[i].version) ==
         int.parse(migrations[i - 1].version)) {
       throw FormatException(
-          'duplicate migration version', migrations[i].version);
+        'duplicate migration version',
+        migrations[i].version,
+      );
     }
   }
   return migrations;

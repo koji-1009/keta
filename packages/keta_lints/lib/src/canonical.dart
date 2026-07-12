@@ -16,7 +16,10 @@ import 'diagnostic.dart';
 /// A class is a DTO by signal — it has a `Schema` constant, a `fromJson`, or a
 /// `toJson` — never by the shape of its fields, so plain service/value classes
 /// are never flagged. Purely syntactic; no resolution needed.
-List<Diagnostic> canonicalDiagnostics(String source, {String file = '<memory>'}) {
+List<Diagnostic> canonicalDiagnostics(
+  String source, {
+  String file = '<memory>',
+}) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
   final schemaNames = _schemaNames(unit);
   final diagnostics = <Diagnostic>[];
@@ -35,10 +38,18 @@ Set<String> _schemaNames(CompilationUnit unit) {
     for (final variable in declaration.variables.variables) {
       final init = variable.initializer;
       final (name, isSchema) = switch (init) {
-        InstanceCreationExpression(:final constructorName, :final argumentList) =>
-          (_firstStringArg(argumentList), constructorName.type.name.lexeme == 'Schema'),
-        MethodInvocation(:final methodName, :final argumentList) =>
-          (_firstStringArg(argumentList), methodName.name == 'Schema'),
+        InstanceCreationExpression(
+          :final constructorName,
+          :final argumentList,
+        ) =>
+          (
+            _firstStringArg(argumentList),
+            constructorName.type.name.lexeme == 'Schema',
+          ),
+        MethodInvocation(:final methodName, :final argumentList) => (
+          _firstStringArg(argumentList),
+          methodName.name == 'Schema',
+        ),
         _ => (null, false),
       };
       if (isSchema && name != null) names.add(name);
@@ -52,8 +63,12 @@ String? _firstStringArg(ArgumentList args) {
   return first is SimpleStringLiteral ? first.value : null;
 }
 
-void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
-    List<Diagnostic> diagnostics) {
+void _checkClass(
+  ClassDeclaration node,
+  Set<String> schemaNames,
+  String file,
+  List<Diagnostic> diagnostics,
+) {
   final finalFields = <String>[];
   ConstructorDeclaration? fromJson;
   MethodDeclaration? toJson;
@@ -83,14 +98,17 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
   }
 
   if (fromJson == null || toJson == null) {
-    diagnostics.add(Diagnostic(
-      rule: 'keta_canonical_missing',
-      message: 'class $className has final fields but no '
-          '${fromJson == null ? 'fromJson factory' : 'toJson method'}; '
-          'run keta_lints:fix to materialize the canonical mapper',
-      file: file,
-      scope: className,
-    ));
+    diagnostics.add(
+      Diagnostic(
+        rule: 'keta_canonical_missing',
+        message:
+            'class $className has final fields but no '
+            '${fromJson == null ? 'fromJson factory' : 'toJson method'}; '
+            'run keta_lints:fix to materialize the canonical mapper',
+        file: file,
+        scope: className,
+      ),
+    );
     return;
   }
 
@@ -112,13 +130,16 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
       'fromJson reads unknown keys: ${fromKeys.difference(fields).join(', ')}',
   ];
   if (parts.isNotEmpty) {
-    diagnostics.add(Diagnostic(
-      rule: 'keta_canonical_drift',
-      message: 'class $className has drifted (${parts.join('; ')}); '
-          'run keta_lints:fix to reconcile the mapper',
-      file: file,
-      scope: className,
-    ));
+    diagnostics.add(
+      Diagnostic(
+        rule: 'keta_canonical_drift',
+        message:
+            'class $className has drifted (${parts.join('; ')}); '
+            'run keta_lints:fix to reconcile the mapper',
+        file: file,
+        scope: className,
+      ),
+    );
   }
 }
 
@@ -131,8 +152,8 @@ Set<String> _fromJsonKeys(ConstructorDeclaration fromJson) {
 }
 
 class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
-  final Set<String> keys;
   _IndexKeyVisitor(this.keys);
+  final Set<String> keys;
   @override
   void visitIndexExpression(IndexExpression node) {
     final index = node.index;

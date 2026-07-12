@@ -4,11 +4,10 @@ import 'package:test/test.dart';
 
 /// A log that records lines in memory, for asserting on middleware output.
 class MemLog implements Log {
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
-
   MemLog([this.lines = const []]) : _baked = const {};
   MemLog._(this.lines, this._baked);
+  final List<Map<String, Object?>> lines;
+  final Map<String, Object?> _baked;
 
   void _add(String level, String msg, Map<String, Object?> fields) =>
       lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
@@ -23,11 +22,12 @@ class MemLog implements Log {
   void warn(String msg, [Map<String, Object?> fields = const {}]) =>
       _add('warn', msg, fields);
   @override
-  void error(String msg,
-          [Object? error,
-          StackTrace? st,
-          Map<String, Object?> fields = const {}]) =>
-      _add('error', msg, {...fields, if (error != null) 'error': '$error'});
+  void error(
+    String msg, [
+    Object? error,
+    StackTrace? st,
+    Map<String, Object?> fields = const {},
+  ]) => _add('error', msg, {...fields, if (error != null) 'error': '$error'});
   @override
   Future<void> flush() async {}
   @override
@@ -36,9 +36,9 @@ class MemLog implements Log {
 }
 
 class Env implements HasLog {
+  Env(this.log);
   @override
   final Log log;
-  Env(this.log);
 }
 
 Env newEnv() => Env(MemLog(<Map<String, Object?>>[]));
@@ -55,31 +55,37 @@ void main() {
       expect((await client.get('/users/42')).text(), 'user 42');
     });
 
-    test('c.param parses typed values and rejects bad input with 400',
-        () async {
-      final app = App<Env>();
-      app.get('/n/:n', (c) => c.json({'n': c.param<int>('n')}));
-      final client = TestClient(app, newEnv());
+    test(
+      'c.param parses typed values and rejects bad input with 400',
+      () async {
+        final app = App<Env>();
+        app.get('/n/:n', (c) => c.json({'n': c.param<int>('n')}));
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/n/7')).json(), {'n': 7});
-      expect((await client.get('/n/nope')).status, 400);
-    });
+        expect((await client.get('/n/7')).json(), {'n': 7});
+        expect((await client.get('/n/nope')).status, 400);
+      },
+    );
   });
 
   group('routing — typed DSL', () {
     test('captures parse into the handler tuple', () async {
       final app = App<Env>();
       app
-          .on(root
-              .lit('users')
-              .cap(named(str, 'uid'))
-              .lit('posts')
-              .cap(named(integer, 'postId')))
+          .on(
+            root
+                .lit('users')
+                .cap(named(str, 'uid'))
+                .lit('posts')
+                .cap(named(integer, 'postId')),
+          )
           .post((c, p) => c.json({'uid': p.$1, 'postId': p.$2}));
       final client = TestClient(app, newEnv());
 
-      expect((await client.post('/users/ada/posts/9')).json(),
-          {'uid': 'ada', 'postId': 9});
+      expect((await client.post('/users/ada/posts/9')).json(), {
+        'uid': 'ada',
+        'postId': 9,
+      });
     });
 
     test('a non-parsable typed capture yields 400', () async {
@@ -92,24 +98,40 @@ void main() {
   });
 
   group('group prefix captures and path decoding', () {
-    test('a captured group prefix is readable via c.param (string form)',
-        () async {
-      final app = App<Env>();
-      app.group('/tenants/:tid').get('/users/:uid',
-          (c) => c.json({'tid': c.param<String>('tid'), 'uid': c.param<String>('uid')}));
-      final client = TestClient(app, newEnv());
+    test(
+      'a captured group prefix is readable via c.param (string form)',
+      () async {
+        final app = App<Env>();
+        app
+            .group('/tenants/:tid')
+            .get(
+              '/users/:uid',
+              (c) => c.json({
+                'tid': c.param<String>('tid'),
+                'uid': c.param<String>('uid'),
+              }),
+            );
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/tenants/acme/users/42')).json(),
-          {'tid': 'acme', 'uid': '42'});
-    });
+        expect((await client.get('/tenants/acme/users/42')).json(), {
+          'tid': 'acme',
+          'uid': '42',
+        });
+      },
+    );
 
     test('a captured group prefix aligns with the typed tuple', () async {
       final app = App<Env>();
-      app.group('/t/:tid').on(root.lit('p').cap(integer)).get(
-          (c, p) => c.json({'tid': c.param<String>('tid'), 'p': p.$1}));
+      app
+          .group('/t/:tid')
+          .on(root.lit('p').cap(integer))
+          .get((c, p) => c.json({'tid': c.param<String>('tid'), 'p': p.$1}));
       final client = TestClient(app, newEnv());
 
-      expect((await client.get('/t/acme/p/42')).json(), {'tid': 'acme', 'p': 42});
+      expect((await client.get('/t/acme/p/42')).json(), {
+        'tid': 'acme',
+        'p': 42,
+      });
     });
 
     test('captured segments are percent-decoded', () async {
@@ -148,8 +170,10 @@ void main() {
 
     test('duplicate capture names in one path fail fast', () {
       final app = App<Env>();
-      expect(() => app.get('/u/:id/p/:id', (c) => c.text('x')),
-          throwsStateError);
+      expect(
+        () => app.get('/u/:id/p/:id', (c) => c.text('x')),
+        throwsStateError,
+      );
     });
 
     test('duplicate method+template fails fast at compile', () {
@@ -164,11 +188,11 @@ void main() {
     test('app then group middleware run in registration order', () async {
       final order = <String>[];
       Middleware<Env> tag(String name) => (c, next) async {
-            order.add('>$name');
-            final r = await next(c);
-            order.add('<$name');
-            return r;
-          };
+        order.add('>$name');
+        final r = await next(c);
+        order.add('<$name');
+        return r;
+      };
       final app = App<Env>()..use(tag('app'));
       app.group('/admin')
         ..use(tag('grp'))
@@ -189,53 +213,70 @@ void main() {
       expect(r.json(), {'error': 'teapot'});
     });
 
-    test('last-resort fallback converts uncaught errors without recover',
-        () async {
-      final app = App<Env>(); // no recover()
-      app.get('/keta', (c) => throw const KetaException(404, 'gone'));
-      app.get('/other', (c) => throw StateError('leak me'));
-      final client = TestClient(app, newEnv());
+    test(
+      'last-resort fallback converts uncaught errors without recover',
+      () async {
+        final app = App<Env>(); // no recover()
+        app.get('/keta', (c) => throw const KetaException(404, 'gone'));
+        app.get('/other', (c) => throw StateError('leak me'));
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/keta')).json(), {'error': 'gone'});
-      final other = await client.get('/other');
-      expect(other.status, 500);
-      expect(other.text(), '');
-    });
+        expect((await client.get('/keta')).json(), {'error': 'gone'});
+        final other = await client.get('/other');
+        expect(other.status, 500);
+        expect(other.text(), '');
+      },
+    );
 
     test('cors attaches allow-origin for a listed origin', () async {
       final app = App<Env>()..use(cors(allowOrigins: ['https://a.example']));
       app.get('/x', (c) => c.text('ok'));
       final client = TestClient(app, newEnv());
 
-      final r = await client.get('/x', headers: {'origin': 'https://a.example'});
+      final r = await client.get(
+        '/x',
+        headers: {'origin': 'https://a.example'},
+      );
       expect(r.headers['access-control-allow-origin'], 'https://a.example');
 
-      final denied = await client.get('/x', headers: {'origin': 'https://evil'});
-      expect(denied.headers.containsKey('access-control-allow-origin'), isFalse);
+      final denied = await client.get(
+        '/x',
+        headers: {'origin': 'https://evil'},
+      );
+      expect(
+        denied.headers.containsKey('access-control-allow-origin'),
+        isFalse,
+      );
     });
 
-    test('app-level middleware wraps 404/405 (CORS preflight + access log)',
-        () async {
-      final env = newEnv();
-      final app = App<Env>()
-        ..use(accessLog())
-        ..use(cors(allowOrigins: ['https://a.example']));
-      app.get('/x', (c) => c.text('ok'));
-      final client = TestClient(app, env);
+    test(
+      'app-level middleware wraps 404/405 (CORS preflight + access log)',
+      () async {
+        final env = newEnv();
+        final app = App<Env>()
+          ..use(accessLog())
+          ..use(cors(allowOrigins: ['https://a.example']));
+        app.get('/x', (c) => c.text('ok'));
+        final client = TestClient(app, env);
 
-      // Preflight to an unregistered method is answered by cors, not 405.
-      final pre =
-          await client.options('/x', headers: {'origin': 'https://a.example'});
-      expect(pre.status, 204);
-      expect(pre.headers['access-control-allow-origin'], 'https://a.example');
+        // Preflight to an unregistered method is answered by cors, not 405.
+        final pre = await client.options(
+          '/x',
+          headers: {'origin': 'https://a.example'},
+        );
+        expect(pre.status, 204);
+        expect(pre.headers['access-control-allow-origin'], 'https://a.example');
 
-      // A 404 still flows through accessLog.
-      final missing = await client.get('/missing');
-      expect(missing.status, 404);
-      final lines = (env.log as MemLog).lines;
-      expect(lines.any((l) => l['msg'] == 'request' && l['status'] == 404),
-          isTrue);
-    });
+        // A 404 still flows through accessLog.
+        final missing = await client.get('/missing');
+        expect(missing.status, 404);
+        final lines = (env.log as MemLog).lines;
+        expect(
+          lines.any((l) => l['msg'] == 'request' && l['status'] == 404),
+          isTrue,
+        );
+      },
+    );
 
     test('tracing extracts a valid traceparent', () async {
       final app = App<Env>()..use(tracing());
@@ -245,10 +286,13 @@ void main() {
       });
       final client = TestClient(app, newEnv());
 
-      final r = await client.get('/t', headers: {
-        'traceparent':
-            '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
-      });
+      final r = await client.get(
+        '/t',
+        headers: {
+          'traceparent':
+              '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+        },
+      );
       expect(r.json(), {'trace': '0af7651916cd43dd8448eb211c80319c'});
     });
   });
@@ -279,8 +323,10 @@ void main() {
 
   group('Response', () {
     test('rejects an invalid body type unconditionally (not assert-only)', () {
-      expect(() => Response(200, body: {'a': 1}),
-          throwsA(isA<ArgumentError>()));
+      expect(
+        () => Response(200, body: {'a': 1}),
+        throwsA(isA<ArgumentError>()),
+      );
       expect(Response(200, body: 'ok').body, 'ok');
       expect(Response(200, body: const [1, 2]).body, const [1, 2]);
     });

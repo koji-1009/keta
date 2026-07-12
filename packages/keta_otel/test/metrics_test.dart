@@ -18,8 +18,7 @@ void main() {
     expect(registry.prometheus(), contains(r'route="/a\"b\\c\nd"'));
   });
 
-  test('identical keys aggregate; any differing field is a separate series',
-      () {
+  test('identical keys aggregate; any differing field is a separate series', () {
     final registry = MetricsRegistry()
       ..record(method: 'GET', route: '/x', status: 200, durationMs: 5)
       ..record(method: 'GET', route: '/x', status: 200, durationMs: 7)
@@ -28,12 +27,16 @@ void main() {
       ..record(method: 'GET', route: '/x', status: 500, durationMs: 1);
     final body = registry.prometheus();
 
-    expect(body,
-        contains('keta_requests_total{method="GET",route="/x",status="200"} 2'));
     expect(
-        body,
-        contains(
-            'keta_request_duration_ms_sum{method="GET",route="/x",status="200"} 12'));
+      body,
+      contains('keta_requests_total{method="GET",route="/x",status="200"} 2'),
+    );
+    expect(
+      body,
+      contains(
+        'keta_request_duration_ms_sum{method="GET",route="/x",status="200"} 12',
+      ),
+    );
     expect(body, contains('{method="POST",route="/x",status="200"} 1'));
     expect(body, contains('{method="GET",route="/y",status="200"} 1'));
     expect(body, contains('{method="GET",route="/x",status="500"} 1'));

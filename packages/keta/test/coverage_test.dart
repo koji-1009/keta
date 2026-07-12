@@ -15,16 +15,17 @@ class _CaptureSink implements IOSink {
   @override
   Future<void> flush() async {}
   @override
+  Future<void> close() async {}
+  @override
   dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 /// A log that records lines in memory, for asserting on middleware output.
 class MemLog implements Log {
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
-
   MemLog([this.lines = const []]) : _baked = const {};
   MemLog._(this.lines, this._baked);
+  final List<Map<String, Object?>> lines;
+  final Map<String, Object?> _baked;
 
   void _add(String level, String msg, Map<String, Object?> fields) =>
       lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
@@ -39,11 +40,12 @@ class MemLog implements Log {
   void warn(String msg, [Map<String, Object?> fields = const {}]) =>
       _add('warn', msg, fields);
   @override
-  void error(String msg,
-          [Object? error,
-          StackTrace? st,
-          Map<String, Object?> fields = const {}]) =>
-      _add('error', msg, {...fields, if (error != null) 'error': '$error'});
+  void error(
+    String msg, [
+    Object? error,
+    StackTrace? st,
+    Map<String, Object?> fields = const {},
+  ]) => _add('error', msg, {...fields, if (error != null) 'error': '$error'});
   @override
   Future<void> flush() async {}
   @override
@@ -52,23 +54,25 @@ class MemLog implements Log {
 }
 
 class Env implements HasLog {
+  Env(this.log);
   @override
   final Log log;
-  Env(this.log);
 }
 
 Env newEnv() => Env(MemLog(<Map<String, Object?>>[]));
 
 class _FakeTransport implements Transport {
   @override
-  Future<TransportServer> bind(int port,
-          FutureOr<Response> Function(TransportRequest) onRequest) =>
-      throw UnimplementedError();
+  Future<TransportServer> bind(
+    int port,
+    FutureOr<Response> Function(TransportRequest) onRequest,
+  ) => throw UnimplementedError();
 }
 
 /// A request whose connection close can be triggered, to exercise the
 /// transport `closed` → `ctx.abort()` wiring.
 class _CloseableRequest implements TransportRequest {
+  _CloseableRequest(this.method, this.uri, this.headers);
   @override
   final String method;
   @override
@@ -79,8 +83,6 @@ class _CloseableRequest implements TransportRequest {
   final String remoteAddress = 'test';
   final Completer<void> _closed = Completer<void>();
 
-  _CloseableRequest(this.method, this.uri, this.headers);
-
   @override
   Stream<List<int>> get bodyStream => const Stream.empty();
   @override
@@ -90,33 +92,38 @@ class _CloseableRequest implements TransportRequest {
 
 void main() {
   group('timeout middleware', () {
-    test('fires 504, completes c.aborted, and warns on late completion',
-        () async {
-      final env = newEnv();
-      final gate = Completer<void>();
-      final sawAbort = Completer<void>();
-      final app = App<Env>()..use(timeout(const Duration(milliseconds: 20)));
-      app.get('/slow', (c) async {
-        unawaited(c.aborted.then((_) => sawAbort.complete()));
-        await gate.future;
-        return c.text('late');
-      });
-      final client = TestClient(app, env);
+    test(
+      'fires 504, completes c.aborted, and warns on late completion',
+      () async {
+        final env = newEnv();
+        final gate = Completer<void>();
+        final sawAbort = Completer<void>();
+        final app = App<Env>()..use(timeout(const Duration(milliseconds: 20)));
+        app.get('/slow', (c) async {
+          unawaited(c.aborted.then((_) => sawAbort.complete()));
+          await gate.future;
+          return c.text('late');
+        });
+        final client = TestClient(app, env);
 
-      final r = await client.get('/slow');
-      expect(r.status, 504);
-      expect(r.json(), {'error': 'request timeout'});
-      await sawAbort.future.timeout(const Duration(seconds: 1));
+        final r = await client.get('/slow');
+        expect(r.status, 504);
+        expect(r.json(), {'error': 'request timeout'});
+        await sawAbort.future.timeout(const Duration(seconds: 1));
 
-      gate.complete();
-      await pumpEventQueue();
-      final lines = (env.log as MemLog).lines;
-      expect(
-          lines.any((l) =>
-              l['level'] == 'warn' &&
-              l['msg'] == 'handler completed after timeout'),
-          isTrue);
-    });
+        gate.complete();
+        await pumpEventQueue();
+        final lines = (env.log as MemLog).lines;
+        expect(
+          lines.any(
+            (l) =>
+                l['level'] == 'warn' &&
+                l['msg'] == 'handler completed after timeout',
+          ),
+          isTrue,
+        );
+      },
+    );
 
     test('a synchronous handler result passes through untouched', () {
       final c = testContext(newEnv());
@@ -134,29 +141,39 @@ void main() {
   });
 
   group('request body', () {
-    test('exceeding maxBodyBytes is a 413, the exact limit is allowed',
-        () async {
-      final under = testContext(newEnv(),
-          method: 'POST', rawBody: utf8.encode('12345678'), maxBodyBytes: 8);
-      expect((await under.bodyBytes()).length, 8);
+    test(
+      'exceeding maxBodyBytes is a 413, the exact limit is allowed',
+      () async {
+        final under = testContext(
+          newEnv(),
+          method: 'POST',
+          rawBody: utf8.encode('12345678'),
+          maxBodyBytes: 8,
+        );
+        expect((await under.bodyBytes()).length, 8);
 
-      final over = testContext(newEnv(),
-          method: 'POST', rawBody: utf8.encode('123456789'), maxBodyBytes: 8);
-      await expectLater(
-        over.bodyBytes(),
-        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-      );
-      // A retry must re-throw the 413, not an opaque "stream already listened"
-      // StateError (which would escape as a 500).
-      await expectLater(
-        over.bodyBytes(),
-        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-      );
-      await expectLater(
-        over.body(),
-        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-      );
-    });
+        final over = testContext(
+          newEnv(),
+          method: 'POST',
+          rawBody: utf8.encode('123456789'),
+          maxBodyBytes: 8,
+        );
+        await expectLater(
+          over.bodyBytes(),
+          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+        );
+        // A retry must re-throw the 413, not an opaque "stream already listened"
+        // StateError (which would escape as a 500).
+        await expectLater(
+          over.bodyBytes(),
+          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+        );
+        await expectLater(
+          over.body(),
+          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+        );
+      },
+    );
 
     test('invalid JSON is a 400, and a retry still throws', () async {
       final c = testContext(newEnv(), rawBody: utf8.encode('{not json'));
@@ -198,8 +215,10 @@ void main() {
 
   group('c.param typing', () {
     test('parses double and bool, rejecting bad input with 400', () {
-      final c = testContext(newEnv(),
-          params: {'d': '2.5', 't': 'true', 'f': 'false', 'bad': 'TRUE'});
+      final c = testContext(
+        newEnv(),
+        params: {'d': '2.5', 't': 'true', 'f': 'false', 'bad': 'TRUE'},
+      );
       expect(c.param<double>('d'), 2.5);
       expect(c.param<bool>('t'), isTrue);
       expect(c.param<bool>('f'), isFalse);
@@ -217,18 +236,20 @@ void main() {
     });
   });
 
-  test('typed-DSL double and bool captures parse, rejecting bad input',
-      () async {
-    final app = App<Env>();
-    app
-        .on(root.lit('m').cap(dbl).cap(boolean))
-        .get((c, p) => c.json({'d': p.$1, 'b': p.$2}));
-    final client = TestClient(app, newEnv());
+  test(
+    'typed-DSL double and bool captures parse, rejecting bad input',
+    () async {
+      final app = App<Env>();
+      app
+          .on(root.lit('m').cap(dbl).cap(boolean))
+          .get((c, p) => c.json({'d': p.$1, 'b': p.$2}));
+      final client = TestClient(app, newEnv());
 
-    expect((await client.get('/m/2.5/true')).json(), {'d': 2.5, 'b': true});
-    expect((await client.get('/m/x/true')).status, 400);
-    expect((await client.get('/m/2.5/yes')).status, 400);
-  });
+      expect((await client.get('/m/2.5/true')).json(), {'d': 2.5, 'b': true});
+      expect((await client.get('/m/x/true')).status, 400);
+      expect((await client.get('/m/2.5/yes')).status, 400);
+    },
+  );
 
   group('per-request store', () {
     test('get/set/tryGet with identity-compared keys', () {
@@ -249,49 +270,57 @@ void main() {
     });
   });
 
-  test('put/delete/patch/head register and dispatch; other verbs are 405',
-      () async {
-    final app = App<Env>();
-    app.put('/r', (c) => c.text('put'));
-    app.delete('/r', (c) => c.text('delete'));
-    app.patch('/r', (c) => c.text('patch'));
-    app.head('/r', (c) => c.text(''));
-    final client = TestClient(app, newEnv());
+  test(
+    'put/delete/patch/head register and dispatch; other verbs are 405',
+    () async {
+      final app = App<Env>();
+      app.put('/r', (c) => c.text('put'));
+      app.delete('/r', (c) => c.text('delete'));
+      app.patch('/r', (c) => c.text('patch'));
+      app.head('/r', (c) => c.text(''));
+      final client = TestClient(app, newEnv());
 
-    expect((await client.put('/r')).text(), 'put');
-    expect((await client.delete('/r')).text(), 'delete');
-    expect((await client.patch('/r')).text(), 'patch');
-    expect((await client.head('/r')).status, 200);
-    expect((await client.get('/r')).status, 405);
-  });
+      expect((await client.put('/r')).text(), 'put');
+      expect((await client.delete('/r')).text(), 'delete');
+      expect((await client.patch('/r')).text(), 'patch');
+      expect((await client.head('/r')).status, 200);
+      expect((await client.get('/r')).status, 405);
+    },
+  );
 
   test('App.routes exposes registered routes in order with their docs', () {
     final app = App<Env>();
     app.get('/users/:id', (c) => c.text(''), doc: 'get-user');
-    app.on(root.lit('p').cap(integer)).post((c, p) => c.text(''), doc: 'post-p');
+    app
+        .on(root.lit('p').cap(integer))
+        .post((c, p) => c.text(''), doc: 'post-p');
     final routes = app.routes;
-    expect([for (final r in routes) (r.method, r.template)],
-        [('GET', '/users/:id'), ('POST', '/p/:p0')]);
+    expect(
+      [for (final r in routes) (r.method, r.template)],
+      [('GET', '/users/:id'), ('POST', '/p/:p0')],
+    );
     expect(routes[0].doc, 'get-user');
     expect(routes[1].doc, 'post-p');
   });
 
-  test('serve rejects isolates < 1 and a transport with isolates > 1',
-      () async {
-    final app = App<Env>();
-    var booted = false;
-    Future<Env> boot() async {
-      booted = true;
-      return newEnv();
-    }
+  test(
+    'serve rejects isolates < 1 and a transport with isolates > 1',
+    () async {
+      final app = App<Env>();
+      var booted = false;
+      Future<Env> boot() async {
+        booted = true;
+        return newEnv();
+      }
 
-    await expectLater(app.serve(boot, isolates: 0), throwsArgumentError);
-    await expectLater(
-      app.serve(boot, isolates: 2, transport: _FakeTransport()),
-      throwsArgumentError,
-    );
-    expect(booted, isFalse);
-  });
+      await expectLater(app.serve(boot, isolates: 0), throwsArgumentError);
+      await expectLater(
+        app.serve(boot, isolates: 2, transport: _FakeTransport()),
+        throwsArgumentError,
+      );
+      expect(booted, isFalse);
+    },
+  );
 
   test('an empty capture name in a pattern fails fast', () {
     final app = App<Env>();
@@ -302,14 +331,20 @@ void main() {
   group('cors wildcard', () {
     test('answers any origin with * and custom method/header lists', () async {
       final app = App<Env>()
-        ..use(cors(
+        ..use(
+          cors(
             allowOrigins: ['*'],
             allowMethods: ['GET', 'PUT'],
-            allowHeaders: ['x-custom']));
+            allowHeaders: ['x-custom'],
+          ),
+        );
       app.get('/x', (c) => c.text('ok'));
       final client = TestClient(app, newEnv());
 
-      final r = await client.get('/x', headers: {'origin': 'https://any.example'});
+      final r = await client.get(
+        '/x',
+        headers: {'origin': 'https://any.example'},
+      );
       expect(r.headers['access-control-allow-origin'], '*');
       expect(r.headers['access-control-allow-methods'], 'GET, PUT');
       expect(r.headers['access-control-allow-headers'], 'x-custom');
@@ -342,7 +377,10 @@ void main() {
       final app = App<Env>()..use(tracing());
       app.get('/t', (c) => c.json({'set': c.tryGet(traceKey) != null}));
       final client = TestClient(app, newEnv());
-      final r = await client.get('/t', headers: {'traceparent': '00-short-bad-01'});
+      final r = await client.get(
+        '/t',
+        headers: {'traceparent': '00-short-bad-01'},
+      );
       expect(r.json(), {'set': false});
     });
   });
@@ -350,17 +388,28 @@ void main() {
   testBothModes('accessLog emits the error status then rethrows', (mode) async {
     final env = newEnv();
     final app = App<Env>()..use(accessLog());
-    app.get('/keta',
-        (Context<Env> c) => mode.wrap(() => throw const KetaException(418, 'teapot'))());
-    app.get('/other',
-        (Context<Env> c) => mode.wrap(() => throw StateError('boom'))());
+    app.get(
+      '/keta',
+      (Context<Env> c) =>
+          mode.wrap(() => throw const KetaException(418, 'teapot'))(),
+    );
+    app.get(
+      '/other',
+      (Context<Env> c) => mode.wrap(() => throw StateError('boom'))(),
+    );
     final client = TestClient(app, env);
 
     expect((await client.get('/keta')).status, 418);
     expect((await client.get('/other')).status, 500);
     final lines = (env.log as MemLog).lines;
-    expect(lines.any((l) => l['msg'] == 'request' && l['status'] == 418), isTrue);
-    expect(lines.any((l) => l['msg'] == 'request' && l['status'] == 500), isTrue);
+    expect(
+      lines.any((l) => l['msg'] == 'request' && l['status'] == 418),
+      isTrue,
+    );
+    expect(
+      lines.any((l) => l['msg'] == 'request' && l['status'] == 500),
+      isTrue,
+    );
     // The rethrow reached the router's last-resort fallback.
     expect(lines.any((l) => l['msg'] == 'unhandled exception'), isTrue);
   });
@@ -374,9 +423,14 @@ void main() {
   });
 
   test('Response rejects control characters in header names/values', () {
-    expect(() => Response(200, headers: {'x-foo': 'a\r\nSet-Cookie: evil=1'}),
-        throwsArgumentError);
-    expect(() => Response(200, headers: {'x-foo': 'a\nb'}), throwsArgumentError);
+    expect(
+      () => Response(200, headers: {'x-foo': 'a\r\nSet-Cookie: evil=1'}),
+      throwsArgumentError,
+    );
+    expect(
+      () => Response(200, headers: {'x-foo': 'a\nb'}),
+      throwsArgumentError,
+    );
     // A normal header is still accepted.
     expect(Response(200, headers: {'x-foo': 'bar'}).headers['x-foo'], 'bar');
   });
@@ -398,18 +452,23 @@ void main() {
     await sawAbort.future.timeout(const Duration(seconds: 1));
   });
 
-  test('disposing a per-request log view leaves the shared timer running',
-      () async {
-    final sink = _CaptureSink();
-    final base =
-        StdoutLog(sink: sink, flushInterval: const Duration(milliseconds: 20));
-    addTearDown(base.dispose);
+  test(
+    'disposing a per-request log view leaves the shared timer running',
+    () async {
+      final sink = _CaptureSink();
+      addTearDown(sink.close);
+      final base = StdoutLog(
+        sink: sink,
+        flushInterval: const Duration(milliseconds: 20),
+      );
+      addTearDown(base.dispose);
 
-    final view = base.withFields({'reqId': 'x'});
-    (view as StdoutLog).dispose(); // must be a no-op — the timer is shared
+      final view = base.withFields({'reqId': 'x'});
+      (view as StdoutLog).dispose(); // must be a no-op — the timer is shared
 
-    base.info('after-dispose');
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(sink.text, contains('after-dispose')); // base still auto-flushed
-  });
+      base.info('after-dispose');
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(sink.text, contains('after-dispose')); // base still auto-flushed
+    },
+  );
 }

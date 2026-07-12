@@ -70,13 +70,14 @@ class FakeDb implements Db {
 
 /// Reader/writer connection outside a transaction: `execute` commits directly.
 class _DirectConn implements DbConn {
-  final FakeDb _db;
   _DirectConn(this._db);
+  final FakeDb _db;
 
   @override
-  Future<List<Map<String, Object?>>> query(String sql,
-          [List<Object?> params = const []]) async =>
-      _db._select(sql);
+  Future<List<Map<String, Object?>>> query(
+    String sql, [
+    List<Object?> params = const [],
+  ]) async => _db._select(sql);
 
   @override
   Future<int> execute(String sql, [List<Object?> params = const []]) async {
@@ -89,14 +90,15 @@ class _DirectConn implements DbConn {
 /// Transaction connection: `execute` stages the statement so a later throw
 /// discards it — mirroring how a real engine rolls the whole transaction back.
 class _StagedConn implements DbConn {
+  _StagedConn(this._db, this._staged);
   final FakeDb _db;
   final List<(String, List<Object?>)> _staged;
-  _StagedConn(this._db, this._staged);
 
   @override
-  Future<List<Map<String, Object?>>> query(String sql,
-          [List<Object?> params = const []]) =>
-      throw UnsupportedError('applyMigrations must not query inside a tx');
+  Future<List<Map<String, Object?>>> query(
+    String sql, [
+    List<Object?> params = const [],
+  ]) => throw UnsupportedError('applyMigrations must not query inside a tx');
 
   @override
   Future<int> execute(String sql, [List<Object?> params = const []]) async {

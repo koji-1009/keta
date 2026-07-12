@@ -26,9 +26,11 @@ Future<void> main(List<String> args) async {
       db,
       directory: args.isNotEmpty ? args.first : 'migrations',
     );
-    stdout.writeln(result.applied.isEmpty
-        ? 'no pending migrations (${result.alreadyApplied.length} already applied)'
-        : 'applied ${result.applied.length}: ${result.applied.join(', ')}');
+    stdout.writeln(
+      result.applied.isEmpty
+          ? 'no pending migrations (${result.alreadyApplied.length} already applied)'
+          : 'applied ${result.applied.length}: ${result.applied.join(', ')}',
+    );
   } finally {
     await db.close();
   }

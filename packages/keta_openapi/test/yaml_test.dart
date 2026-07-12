@@ -27,16 +27,21 @@ void main() {
     });
 
     test('empty {} and [] render inline', () {
-      expect(encodeYaml({'a': <String, Object?>{}, 'b': <Object?>[]}),
-          'a: {}\nb: []\n');
+      expect(
+        encodeYaml({'a': <String, Object?>{}, 'b': <Object?>[]}),
+        'a: {}\nb: []\n',
+      );
       expect(encodeYaml([<String, Object?>{}, <Object?>[]]), '- {}\n- []\n');
     });
 
     test('a list nested in a list indents one level', () {
-      expect(encodeYaml([
-        ['a', 'b'],
-        [1],
-      ]), '-\n  - a\n  - b\n-\n  - 1\n');
+      expect(
+        encodeYaml([
+          ['a', 'b'],
+          [1],
+        ]),
+        '-\n  - a\n  - b\n-\n  - 1\n',
+      );
     });
   });
 
@@ -67,13 +72,26 @@ void main() {
       expect(encodeYaml('say "hi"'), '"say \\"hi\\""\n');
       expect(encodeYaml(r'C:\path'), '"C:\\\\path"\n');
       for (final s in cases) {
-        expect(loadYaml(encodeYaml(s)), s, reason: 'round-trip of ${s.codeUnits}');
+        expect(
+          loadYaml(encodeYaml(s)),
+          s,
+          reason: 'round-trip of ${s.codeUnits}',
+        );
       }
     });
 
     test('reserved words are quoted (case-insensitively)', () {
       const words = [
-        'true', 'false', 'null', 'yes', 'no', 'on', 'off', '~', 'True', 'YES',
+        'true',
+        'false',
+        'null',
+        'yes',
+        'no',
+        'on',
+        'off',
+        '~',
+        'True',
+        'YES',
       ];
       for (final s in words) {
         expect(encodeYaml(s), '"$s"\n');

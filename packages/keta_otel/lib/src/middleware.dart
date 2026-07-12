@@ -20,10 +20,11 @@ final Random _random = Random.secure();
 /// The upstream sampled flag is honored by default: an incoming traceparent
 /// with the sampled bit clear is not exported. Pass [exportUnsampled] `true` to
 /// export every request's span regardless of the upstream decision.
-Middleware<E> otel<E>(
-    {OtlpExporter? exporter,
-    MetricsRegistry? metrics,
-    bool exportUnsampled = false}) {
+Middleware<E> otel<E>({
+  OtlpExporter? exporter,
+  MetricsRegistry? metrics,
+  bool exportUnsampled = false,
+}) {
   return (Context<E> c, Handler<E> next) {
     final startNano = _unixNano();
     final watch = Stopwatch()..start();
@@ -95,6 +96,6 @@ Handler<E> metricsHandler<E>(MetricsRegistry registry) =>
 int _unixNano() => DateTime.now().microsecondsSinceEpoch * 1000;
 
 String _hex(int bytes) => [
-      for (var i = 0; i < bytes; i++)
-        _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-    ].join();
+  for (var i = 0; i < bytes; i++)
+    _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+].join();

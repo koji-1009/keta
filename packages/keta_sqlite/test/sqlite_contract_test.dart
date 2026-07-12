@@ -27,27 +27,39 @@ void main() {
       // The connection survives: the insert rolled back and writes still work.
       expect(await db.reader.query('select k from t'), isEmpty);
       await db.writer.execute("insert into t values ('after')");
-      expect((await db.reader.query('select count(*) n from t')).single['n'], 1);
+      expect(
+        (await db.reader.query('select count(*) n from t')).single['n'],
+        1,
+      );
     });
   });
 
   group('error propagation', () {
-    test('malformed SQL and constraint violations surface as SqliteException',
-        () async {
-      final db = SqliteDb.memory();
-      addTearDown(db.close);
+    test(
+      'malformed SQL and constraint violations surface as SqliteException',
+      () async {
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
 
-      await expectLater(
-          db.reader.query('selec nonsense'), throwsA(isA<SqliteException>()));
+        await expectLater(
+          db.reader.query('selec nonsense'),
+          throwsA(isA<SqliteException>()),
+        );
 
-      await db.writer.execute('create table u (name text not null unique)');
-      await db.writer.execute("insert into u values ('a')");
-      await expectLater(
-        db.writer.execute("insert into u values ('a')"),
-        throwsA(isA<SqliteException>()
-            .having((e) => e.resultCode, 'resultCode', 19)),
-      );
-    });
+        await db.writer.execute('create table u (name text not null unique)');
+        await db.writer.execute("insert into u values ('a')");
+        await expectLater(
+          db.writer.execute("insert into u values ('a')"),
+          throwsA(
+            isA<SqliteException>().having(
+              (e) => e.resultCode,
+              'resultCode',
+              19,
+            ),
+          ),
+        );
+      },
+    );
   });
 
   group('SqliteDb.open', () {
@@ -63,8 +75,10 @@ void main() {
 
       final db2 = SqliteDb.open(path);
       addTearDown(db2.close);
-      expect((await db2.reader.query('select k from t')).single['k'],
-          'persisted');
+      expect(
+        (await db2.reader.query('select k from t')).single['k'],
+        'persisted',
+      );
     });
   });
 
@@ -101,29 +115,33 @@ void main() {
       expect(row['b'], isNull);
     });
 
-    test('decimal/numeric columns come back as double for fractional values',
-        () async {
-      final db = SqliteDb.memory();
-      addTearDown(db.close);
-      await db.writer.execute('create table d (v decimal(10, 2), n numeric)');
-      await db.writer.execute('insert into d values (?, ?)', [12.34, 0.5]);
-      final row = (await db.reader.query('select v, n from d')).single;
-      expect(row['v'], isA<double>());
-      expect(row['v'], 12.34);
-      expect(row['n'], isA<double>());
+    test(
+      'decimal/numeric columns come back as double for fractional values',
+      () async {
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
+        await db.writer.execute('create table d (v decimal(10, 2), n numeric)');
+        await db.writer.execute('insert into d values (?, ?)', [12.34, 0.5]);
+        final row = (await db.reader.query('select v, n from d')).single;
+        expect(row['v'], isA<double>());
+        expect(row['v'], 12.34);
+        expect(row['n'], isA<double>());
 
-      // NUMERIC affinity collapses a lossless double to int — recorded as spec.
-      await db.writer.execute('insert into d values (?, ?)', [5.0, 5.0]);
-      expect((await db.reader.query('select v from d where v = 5')).single['v'],
-          isA<int>());
-    });
+        // NUMERIC affinity collapses a lossless double to int — recorded as spec.
+        await db.writer.execute('insert into d values (?, ?)', [5.0, 5.0]);
+        expect(
+          (await db.reader.query('select v from d where v = 5')).single['v'],
+          isA<int>(),
+        );
+      },
+    );
 
     test('BLOB results are fixed-length lists', () async {
       final db = SqliteDb.memory();
       addTearDown(db.close);
       await db.writer.execute('create table b (x blob)');
       await db.writer.execute('insert into b values (?)', [
-        [1, 2, 3]
+        [1, 2, 3],
       ]);
       final blob =
           (await db.reader.query('select x from b')).single['x'] as List<int>;
@@ -133,16 +151,20 @@ void main() {
   });
 
   group('lifecycle', () {
-    test('close is idempotent and post-close operations throw StateError',
-        () async {
-      final db = SqliteDb.memory();
-      await db.writer.execute('create table t (k text)');
-      await db.close();
-      await db.close(); // idempotent: must not throw
-      await expectLater(db.reader.query('select 1'), throwsStateError);
-      await expectLater(
-          db.writer.execute("insert into t values ('x')"), throwsStateError);
-    });
+    test(
+      'close is idempotent and post-close operations throw StateError',
+      () async {
+        final db = SqliteDb.memory();
+        await db.writer.execute('create table t (k text)');
+        await db.close();
+        await db.close(); // idempotent: must not throw
+        await expectLater(db.reader.query('select 1'), throwsStateError);
+        await expectLater(
+          db.writer.execute("insert into t values ('x')"),
+          throwsStateError,
+        );
+      },
+    );
   });
 
   group('run<T> serialization', () {
@@ -160,90 +182,103 @@ void main() {
       expect(order, ['a-start', 'a-end', 'b']);
     });
 
-    test('inside the transaction zone does not re-lock (no deadlock)', () async {
-      final db = SqliteDb.memory();
-      addTearDown(db.close);
-      final result = await db.transaction((c) {
-        return db.run(() => db.rawQuery('select 1 as one', []));
-      }).timeout(const Duration(seconds: 5));
-      expect(result.single['one'], 1);
-    });
+    test(
+      'inside the transaction zone does not re-lock (no deadlock)',
+      () async {
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
+        final result = await db
+            .transaction((c) {
+              return db.run(() => db.rawQuery('select 1 as one', []));
+            })
+            .timeout(const Duration(seconds: 5));
+        expect(result.single['one'], 1);
+      },
+    );
 
-    test('a captured transaction zone cannot bypass the lock to dirty-read',
-        () async {
-      final db = SqliteDb.memory();
-      addTearDown(db.close);
-      await db.writer.execute('create table t (n integer)');
+    test(
+      'a captured transaction zone cannot bypass the lock to dirty-read',
+      () async {
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
+        await db.writer.execute('create table t (n integer)');
 
-      // Capture a zone from inside a committed transaction.
-      late Zone stale;
-      await db.transaction((c) async {
-        stale = Zone.current;
-        return 0;
-      });
+        // Capture a zone from inside a committed transaction.
+        late Zone stale;
+        await db.transaction((c) async {
+          stale = Zone.current;
+          return 0;
+        });
 
-      // A second transaction inserts, then rolls back, held open by the gate.
-      final gate = Completer<void>();
-      final tx2 = db.transaction<int>((c) async {
-        await c.execute('insert into t values (1)');
-        await gate.future;
-        throw StateError('roll back');
-      });
+        // A second transaction inserts, then rolls back, held open by the gate.
+        final gate = Completer<void>();
+        final tx2 = db.transaction<int>((c) async {
+          await c.execute('insert into t values (1)');
+          await gate.future;
+          throw StateError('roll back');
+        });
 
-      // Reading via the stale zone must queue behind tx2 (not take the shortcut),
-      // so it sees committed state (0 rows), never tx2's uncommitted row.
-      var seen = -1;
-      final probe = stale
-          .run(() => db.reader.query('select count(*) n from t'))
-          .then((rows) => seen = rows.single['n'] as int);
+        // Reading via the stale zone must queue behind tx2 (not take the shortcut),
+        // so it sees committed state (0 rows), never tx2's uncommitted row.
+        var seen = -1;
+        final probe = stale
+            .run(() => db.reader.query('select count(*) n from t'))
+            .then((rows) => seen = rows.single['n'] as int);
 
-      gate.complete();
-      await tx2.catchError((Object _) => 0);
-      await probe;
-      expect(seen, 0);
-    });
+        gate.complete();
+        await tx2.catchError((Object _) => 0);
+        await probe;
+        expect(seen, 0);
+      },
+    );
   });
 
   group('lock acquisition timeout', () {
-    test('a hung transaction makes a waiting statement 503, not deadlock',
-        () async {
-      final db = SqliteDb.memory(lockTimeout: const Duration(milliseconds: 50));
-      await db.writer.execute('create table t (n integer)');
-      final gate = Completer<void>();
-      // A transaction that does not return holds the single-writer lock.
-      final hung = db.transaction<int>((c) async {
-        await c.execute('insert into t values (1)');
-        await gate.future;
-        return 0;
-      });
+    test(
+      'a hung transaction makes a waiting statement 503, not deadlock',
+      () async {
+        final db = SqliteDb.memory(
+          lockTimeout: const Duration(milliseconds: 50),
+        );
+        await db.writer.execute('create table t (n integer)');
+        final gate = Completer<void>();
+        // A transaction that does not return holds the single-writer lock.
+        final hung = db.transaction<int>((c) async {
+          await c.execute('insert into t values (1)');
+          await gate.future;
+          return 0;
+        });
 
-      // A statement that cannot acquire the lock within lockTimeout fails loud.
-      await expectLater(
-        db.reader.query('select 1'),
-        throwsA(isA<KetaException>().having((e) => e.status, 'status', 503)),
-      );
+        // A statement that cannot acquire the lock within lockTimeout fails loud.
+        await expectLater(
+          db.reader.query('select 1'),
+          throwsA(isA<KetaException>().having((e) => e.status, 'status', 503)),
+        );
 
-      gate.complete(); // release the hung tx so the test ends cleanly
-      await hung;
-      await db.close();
-    });
+        gate.complete(); // release the hung tx so the test ends cleanly
+        await hung;
+        await db.close();
+      },
+    );
   });
 
   group('close ordering', () {
-    test('close waits for an in-flight transaction (does not kill it)',
-        () async {
-      final db = SqliteDb.memory();
-      await db.writer.execute('create table t (n integer)');
-      final gate = Completer<void>();
-      final tx = db.transaction((c) async {
-        await c.execute('insert into t values (1)');
-        await gate.future;
-        return 'ok';
-      });
-      final closed = db.close(); // must queue behind the tx, not preempt it
-      gate.complete();
-      expect(await tx, 'ok'); // committed, not killed mid-flight
-      await closed;
-    });
+    test(
+      'close waits for an in-flight transaction (does not kill it)',
+      () async {
+        final db = SqliteDb.memory();
+        await db.writer.execute('create table t (n integer)');
+        final gate = Completer<void>();
+        final tx = db.transaction((c) async {
+          await c.execute('insert into t values (1)');
+          await gate.future;
+          return 'ok';
+        });
+        final closed = db.close(); // must queue behind the tx, not preempt it
+        gate.complete();
+        expect(await tx, 'ok'); // committed, not killed mid-flight
+        await closed;
+      },
+    );
   });
 }

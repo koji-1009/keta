@@ -16,10 +16,15 @@ void main() {
       final missing = '${dir.path}/nope';
       expect(
         () => loadMigrations(missing),
-        throwsA(isA<FileSystemException>()
-            .having((e) => e.message, 'message',
-                'migrations directory not found')
-            .having((e) => e.path, 'path', missing)),
+        throwsA(
+          isA<FileSystemException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'migrations directory not found',
+              )
+              .having((e) => e.path, 'path', missing),
+        ),
       );
     });
 
@@ -49,17 +54,26 @@ void main() {
       m('10_j.sql');
       m('2_b.sql');
       m('0001_a.sql');
-      expect(loadMigrations(dir.path).map((x) => x.version), ['0001', '2', '10']);
+      expect(loadMigrations(dir.path).map((x) => x.version), [
+        '0001',
+        '2',
+        '10',
+      ]);
     });
 
     test('a filename without an underscore is a FormatException', () {
       m('0001.sql');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message',
-                'migration file must be named NNNN_name.sql')
-            .having((e) => e.source, 'source', '0001.sql')),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'migration file must be named NNNN_name.sql',
+              )
+              .having((e) => e.source, 'source', '0001.sql'),
+        ),
       );
     });
 
@@ -67,10 +81,15 @@ void main() {
       m('_init.sql');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message',
-                'migration file must be named NNNN_name.sql')
-            .having((e) => e.source, 'source', '_init.sql')),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'migration file must be named NNNN_name.sql',
+              )
+              .having((e) => e.source, 'source', '_init.sql'),
+        ),
       );
     });
 
@@ -78,8 +97,13 @@ void main() {
       m('0001_empty.sql', '   \n  \t\n');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>().having(
-            (e) => e.message, 'message', 'migration file is empty')),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            'migration file is empty',
+          ),
+        ),
       );
     });
 
@@ -87,10 +111,15 @@ void main() {
       m('abc_init.sql');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message',
-                'migration version must be numeric')
-            .having((e) => e.source, 'source', 'abc')),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'migration version must be numeric',
+              )
+              .having((e) => e.source, 'source', 'abc'),
+        ),
       );
     });
 
@@ -99,9 +128,15 @@ void main() {
       m('0001_b.sql');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message', 'duplicate migration version')
-            .having((e) => e.source, 'source', '0001')),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'duplicate migration version',
+              )
+              .having((e) => e.source, 'source', '0001'),
+        ),
       );
     });
 
@@ -110,9 +145,19 @@ void main() {
       m('1_b.sql');
       expect(
         () => loadMigrations(dir.path),
-        throwsA(isA<FormatException>()
-            .having((e) => e.message, 'message', 'duplicate migration version')
-            .having((e) => int.parse(e.source as String), 'numeric version', 1)),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                'duplicate migration version',
+              )
+              .having(
+                (e) => int.parse(e.source as String),
+                'numeric version',
+                1,
+              ),
+        ),
       );
     });
   });

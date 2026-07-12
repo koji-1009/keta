@@ -18,23 +18,28 @@ import 'diagnostic.dart';
 List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
   final diagnostics = <Diagnostic>[];
-  unit.accept(_CascadeVisitor((offset) {
-    diagnostics.add(Diagnostic(
-      rule: 'keta_tx_outside_recover',
-      message: 'use(tx()) is registered outside use(recover()): the inner '
-          'recover() converts a thrown error to a Response before it reaches '
-          'tx(), so the transaction commits a failed request. Register '
-          'recover() first — ..use(recover())..use(tx())',
-      file: file,
-      scope: 'tx@$offset',
-    ));
-  }));
+  unit.accept(
+    _CascadeVisitor((offset) {
+      diagnostics.add(
+        Diagnostic(
+          rule: 'keta_tx_outside_recover',
+          message:
+              'use(tx()) is registered outside use(recover()): the inner '
+              'recover() converts a thrown error to a Response before it reaches '
+              'tx(), so the transaction commits a failed request. Register '
+              'recover() first — ..use(recover())..use(tx())',
+          file: file,
+          scope: 'tx@$offset',
+        ),
+      );
+    }),
+  );
   return diagnostics;
 }
 
 class _CascadeVisitor extends RecursiveAstVisitor<void> {
-  final void Function(int txOffset) report;
   _CascadeVisitor(this.report);
+  final void Function(int txOffset) report;
 
   @override
   void visitCascadeExpression(CascadeExpression node) {

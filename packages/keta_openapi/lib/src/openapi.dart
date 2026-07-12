@@ -10,8 +10,6 @@ import 'yaml.dart';
 /// the running routes and their [RouteDoc]s are the source, this document the
 /// shadow.
 class OpenApi {
-  final Map<String, Object?> document;
-
   const OpenApi._(this.document);
 
   /// Walks [routes], extracting paths and parameters mechanically from the
@@ -31,7 +29,10 @@ class OpenApi {
 
     for (final route in routes) {
       final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
-      final pathItem = paths.putIfAbsent(_openApiPath(route.segments), () => {});
+      final pathItem = paths.putIfAbsent(
+        _openApiPath(route.segments),
+        () => {},
+      );
       pathItem[route.method.toLowerCase()] = _operation(route, doc);
       if (doc != null) {
         for (final schema in doc.schemas) {
@@ -48,6 +49,7 @@ class OpenApi {
     };
     return OpenApi._(override == null ? document : override(document));
   }
+  final Map<String, Object?> document;
 
   Map<String, Object?> toJson() => document;
 
@@ -71,8 +73,9 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
   for (final param in parameters) {
     if (!seenNames.add(param['name'] as String)) {
       throw StateError(
-          'duplicate path parameter "${param['name']}" in '
-          '${_openApiPath(route.segments)}');
+        'duplicate path parameter "${param['name']}" in '
+        '${_openApiPath(route.segments)}',
+      );
     }
   }
   final responses = <String, Object?>{};
@@ -81,7 +84,10 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
   }
   if (doc?.responses != null) {
     for (final entry in doc!.responses!.entries) {
-      responses['${entry.key}'] = {'description': '', ..._jsonBody(entry.value)};
+      responses['${entry.key}'] = {
+        'description': '',
+        ..._jsonBody(entry.value),
+      };
     }
   }
   // Only fabricate a 200 when the route documents no response at all.
@@ -92,21 +98,18 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
     if (doc?.summary != null) 'summary': doc!.summary,
     if (parameters.isNotEmpty) 'parameters': parameters,
     if (doc?.requestBody != null)
-      'requestBody': {
-        'required': true,
-        ..._jsonBody(doc!.requestBody!),
-      },
+      'requestBody': {'required': true, ..._jsonBody(doc!.requestBody!)},
     'responses': responses,
   };
 }
 
 Map<String, Object?> _jsonBody(Schema schema) => {
-      'content': {
-        'application/json': {
-          'schema': {r'$ref': '#/components/schemas/${schema.name}'},
-        },
-      },
-    };
+  'content': {
+    'application/json': {
+      'schema': {r'$ref': '#/components/schemas/${schema.name}'},
+    },
+  },
+};
 
 Iterable<(String, String)> _pathParameters(List<Segment> segments) sync* {
   var index = 0;

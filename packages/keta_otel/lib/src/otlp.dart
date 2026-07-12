@@ -20,13 +20,8 @@ typedef OtlpSender = Future<void> Function(String jsonPayload);
 /// implements keta's [Disposable] so an env that owns an exporter is drained on
 /// `Server.shutdown` — call `close()` there so pending spans are not dropped.
 class OtlpExporter implements Disposable {
-  final OtlpSender _send;
-  final String serviceName;
-  final void Function()? _releaseResources;
-  final Set<Future<void>> _inFlight = {};
-
   OtlpExporter(this._send, {this.serviceName = 'keta'})
-      : _releaseResources = null;
+    : _releaseResources = null;
 
   OtlpExporter._(this._send, this.serviceName, this._releaseResources);
 
@@ -50,13 +45,18 @@ class OtlpExporter implements Disposable {
         await response.drain<void>();
         if (response.statusCode < 200 || response.statusCode >= 300) {
           throw HttpException(
-              'OTLP export rejected: HTTP ${response.statusCode}');
+            'OTLP export rejected: HTTP ${response.statusCode}',
+          );
         }
       },
       serviceName,
       client.close,
     );
   }
+  final OtlpSender _send;
+  final String serviceName;
+  final void Function()? _releaseResources;
+  final Set<Future<void>> _inFlight = {};
 
   /// Encodes and sends [spans], returning a future that completes when the send
   /// finishes. Tracked so [flush] can await it.
@@ -68,8 +68,10 @@ class OtlpExporter implements Disposable {
   /// Fire-and-forget export scheduled OFF the caller's hot path: the encode and
   /// send run in a later event-loop task, never on the response path. Failures
   /// go to [onError] (never to the caller). Tracked so [flush] awaits it.
-  void enqueue(List<OtelSpan> spans,
-      {void Function(Object error, StackTrace stack)? onError}) {
+  void enqueue(
+    List<OtelSpan> spans, {
+    void Function(Object error, StackTrace stack)? onError,
+  }) {
     if (spans.isEmpty) return;
     final completer = Completer<void>();
     _inFlight.add(completer.future);
@@ -107,43 +109,43 @@ class OtlpExporter implements Disposable {
 
 /// Encodes [spans] into an OTLP/JSON `ExportTraceServiceRequest` body.
 Map<String, Object?> encodeOtlp(List<OtelSpan> spans, String serviceName) => {
-      'resourceSpans': [
+  'resourceSpans': [
+    {
+      'resource': {
+        'attributes': [_attribute('service.name', serviceName)],
+      },
+      'scopeSpans': [
         {
-          'resource': {
-            'attributes': [_attribute('service.name', serviceName)],
-          },
-          'scopeSpans': [
-            {
-              'scope': {'name': 'keta_otel'},
-              'spans': [for (final span in spans) _encodeSpan(span)],
-            },
-          ],
+          'scope': {'name': 'keta_otel'},
+          'spans': [for (final span in spans) _encodeSpan(span)],
         },
       ],
-    };
+    },
+  ],
+};
 
 Map<String, Object?> _encodeSpan(OtelSpan span) => {
-      'traceId': span.traceId,
-      'spanId': span.spanId,
-      if (span.parentSpanId != null) 'parentSpanId': span.parentSpanId,
-      'name': span.name,
-      'kind': 2, // SPAN_KIND_SERVER
-      'startTimeUnixNano': '${span.startUnixNano}',
-      'endTimeUnixNano': '${span.endUnixNano}',
-      'attributes': [
-        for (final entry in span.attributes.entries)
-          _attribute(entry.key, entry.value),
-      ],
-      'status': {'code': span.status.index},
-    };
+  'traceId': span.traceId,
+  'spanId': span.spanId,
+  if (span.parentSpanId != null) 'parentSpanId': span.parentSpanId,
+  'name': span.name,
+  'kind': 2, // SPAN_KIND_SERVER
+  'startTimeUnixNano': '${span.startUnixNano}',
+  'endTimeUnixNano': '${span.endUnixNano}',
+  'attributes': [
+    for (final entry in span.attributes.entries)
+      _attribute(entry.key, entry.value),
+  ],
+  'status': {'code': span.status.index},
+};
 
 Map<String, Object?> _attribute(String key, Object? value) => {
-      'key': key,
-      'value': switch (value) {
-        String() => {'stringValue': value},
-        bool() => {'boolValue': value},
-        int() => {'intValue': '$value'},
-        double() => {'doubleValue': value},
-        _ => {'stringValue': '$value'},
-      },
-    };
+  'key': key,
+  'value': switch (value) {
+    String() => {'stringValue': value},
+    bool() => {'boolValue': value},
+    int() => {'intValue': '$value'},
+    double() => {'doubleValue': value},
+    _ => {'stringValue': '$value'},
+  },
+};

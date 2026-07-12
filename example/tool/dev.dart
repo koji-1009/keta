@@ -8,11 +8,10 @@ Future<void> main() async {
   Process? child;
 
   Future<void> start() async {
-    child = await Process.start(
-      Platform.resolvedExecutable,
-      ['run', 'bin/main.dart'],
-      mode: ProcessStartMode.inheritStdio,
-    );
+    child = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      'bin/main.dart',
+    ], mode: ProcessStartMode.inheritStdio);
   }
 
   await start();

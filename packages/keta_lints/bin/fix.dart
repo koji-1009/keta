@@ -4,7 +4,9 @@ import 'package:keta_lints/keta_lints.dart';
 
 /// Applies materializing repair fixes to source, in place.
 ///
-///   dart run keta_lints:fix canonical <file-or-dir> ...
+/// ```
+/// dart run keta_lints:fix canonical <file-or-dir> ...
+/// ```
 ///
 /// `canonical` materializes missing mappers, reconciles drifted ones, and
 /// updates the matching Schema constant so OpenAPI reflects the change.
