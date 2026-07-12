@@ -23,6 +23,23 @@ class Response {
       throw ArgumentError.value(body, 'body',
           'must be String, List<int>, or Stream<List<int>>');
     }
+    // Reject CR/LF and other control characters in header names/values here, at
+    // the semantic layer — not every Transport rejects them, and a value built
+    // from user input must not carry a header-injection (response-splitting)
+    // primitive past this boundary.
+    for (final e in this.headers.entries) {
+      if (_hasControlChar(e.key) || _hasControlChar(e.value)) {
+        throw ArgumentError.value('${e.key}: ${e.value}', 'headers',
+            'header name/value must not contain control characters');
+      }
+    }
+  }
+
+  static bool _hasControlChar(String s) {
+    for (final u in s.codeUnits) {
+      if (u < 0x20 || u == 0x7f) return true;
+    }
+    return false;
   }
 
   static Map<String, String> _lowerCased(Map<String, String>? headers) {

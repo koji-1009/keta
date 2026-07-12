@@ -31,6 +31,13 @@ abstract interface class TransportRequest {
 
   /// The peer address.
   String get remoteAddress;
+
+  /// Completes when the Transport observes the connection close before the
+  /// response is finished (a client disconnect). The core wires this to
+  /// `ctx.abort()`, fulfilling the client-disconnect clause of `c.aborted`. A
+  /// transport that cannot detect disconnect returns a future that never
+  /// completes.
+  Future<void> get closed;
 }
 
 /// A running server bound by a [Transport].

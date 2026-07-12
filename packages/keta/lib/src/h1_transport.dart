@@ -111,8 +111,19 @@ class _H1Server implements TransportServer {
 
 class _H1Request implements TransportRequest {
   final HttpRequest _request;
+  final Completer<void> _closed = Completer<void>();
 
-  _H1Request(this._request);
+  _H1Request(this._request) {
+    // A client dropping the connection surfaces as an error on response.done;
+    // signal cancellation then. A normal completion leaves `closed` pending
+    // (the request finished on its own — nothing to cancel).
+    _request.response.done.then((_) {}, onError: (Object _) {
+      if (!_closed.isCompleted) _closed.complete();
+    });
+  }
+
+  @override
+  Future<void> get closed => _closed.future;
 
   @override
   String get method => _request.method;

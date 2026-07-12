@@ -14,6 +14,10 @@ import 'src/response.dart';
 import 'src/transport.dart';
 
 /// Builds a [Context] for unit-testing a handler in isolation, without routing.
+///
+/// [rawBody], when given, is used as the request body verbatim (taking
+/// precedence over [jsonBody]) so a malformed-JSON or over-limit body can be
+/// exercised; [maxBodyBytes] sets the body-size ceiling.
 Context<E> testContext<E>(
   E env, {
   String method = 'GET',
@@ -21,6 +25,8 @@ Context<E> testContext<E>(
   Map<String, String> params = const {},
   Map<String, String> headers = const {},
   Object? jsonBody,
+  List<int>? rawBody,
+  int maxBodyBytes = 1 << 20,
 }) {
   final baseLog = env is HasLog ? (env as HasLog).log : StdoutLog(flushInterval: Duration.zero);
   final ctx = RequestCtx<E>(
@@ -35,10 +41,12 @@ Context<E> testContext<E>(
     params: params,
     orderedCaptures: params.values.toList(),
     log: baseLog.withFields({'reqId': 'test', 'route': path}),
-    maxBodyBytes: 1 << 20,
-    body: jsonBody == null
-        ? const Stream.empty()
-        : Stream.value(utf8.encode(jsonEncode(jsonBody))),
+    maxBodyBytes: maxBodyBytes,
+    body: rawBody != null
+        ? Stream.value(rawBody)
+        : jsonBody == null
+            ? const Stream.empty()
+            : Stream.value(utf8.encode(jsonEncode(jsonBody))),
   );
   return Context<E>(ctx);
 }
@@ -157,4 +165,8 @@ class _TestRequest implements TransportRequest {
 
   @override
   String get remoteAddress => 'test';
+
+  // The in-process client never disconnects.
+  @override
+  Future<void> get closed => Completer<void>().future;
 }

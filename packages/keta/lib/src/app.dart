@@ -248,8 +248,23 @@ class App<E> {
       return _Server<E>(env, router.baseLog, server);
     }
     final workers = <_Worker>[];
-    for (var i = 1; i < isolates; i++) {
-      workers.add(await _spawnWorker<E>(this, boot, port, maxBodyBytes));
+    try {
+      for (var i = 1; i < isolates; i++) {
+        workers.add(await _spawnWorker<E>(this, boot, port, maxBodyBytes));
+      }
+    } catch (_) {
+      // Partial startup: worker 0 already bound its socket and booted its env.
+      // Tear both down (and kill any workers that did spawn) before rethrowing,
+      // so a failed spawn never leaks a live listener and an un-closed env with
+      // no Server handle to release them.
+      for (final worker in workers) {
+        worker.isolate.kill(priority: Isolate.immediate);
+      }
+      await server.close(grace: Duration.zero);
+      if (env is Disposable) await (env as Disposable).close();
+      await router.baseLog.flush();
+      if (router.baseLog is StdoutLog) (router.baseLog as StdoutLog).dispose();
+      rethrow;
     }
     return _MultiServer<E>(env, router.baseLog, server, workers);
   }
@@ -408,6 +423,10 @@ class Router<E> {
       ..matched = compiled?.handler
       ..pathMatched = pathMatched;
     final c = Context<E>(ctx);
+    // Client-disconnect → cooperative cancellation. abort() is idempotent, so a
+    // later timeout (or vice versa) is harmless; a never-completing `closed`
+    // (transports that can't detect disconnect) simply never fires.
+    unawaited(request.closed.then((_) => ctx.abort()));
     return guard(() => _appHandler(c), (e, st) => _fallback(e, st, ctx));
   }
 

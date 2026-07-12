@@ -53,6 +53,7 @@ class RequestCtx<E> {
   Object? _json;
   bool _jsonDecoded = false;
   bool _streamTaken = false;
+  KetaException? _bodyError;
 
   /// The matched route's composed handler, or null when nothing matched — set
   /// by dispatch so app-level middleware can wrap the 404/405 synthesis too.
@@ -123,17 +124,28 @@ class RequestCtx<E> {
   Future<List<int>> bodyBytes() async {
     final cached = _bytes;
     if (cached != null) return cached;
+    // A prior over-limit read is sticky: the single-subscription source is
+    // spent, so re-read must reproduce the 413 rather than surface an opaque
+    // "Stream already listened" StateError (which would escape as a 500).
+    final priorError = _bodyError;
+    if (priorError != null) throw priorError;
     if (_streamTaken) {
       throw StateError('body stream already taken; cannot read bytes');
     }
     final builder = BytesBuilder(copy: false);
     var total = 0;
-    await for (final chunk in _bodySource) {
-      total += chunk.length;
-      if (total > maxBodyBytes) {
-        throw KetaException(413, 'request body exceeds $maxBodyBytes bytes');
+    try {
+      await for (final chunk in _bodySource) {
+        total += chunk.length;
+        if (total > maxBodyBytes) {
+          throw KetaException(413, 'request body exceeds $maxBodyBytes bytes');
+        }
+        builder.add(chunk);
       }
-      builder.add(chunk);
+    } on KetaException catch (e) {
+      _bodyError = e;
+      _streamTaken = true; // the source is consumed; block a re-listen
+      rethrow;
     }
     return _bytes = builder.takeBytes();
   }

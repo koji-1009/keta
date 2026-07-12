@@ -92,8 +92,10 @@ Middleware<E> cors<E>({
 }
 
 /// Fails a request that outlives [d] with `KetaException(504)` and completes
-/// `c.aborted`. Cancellation is cooperative: a handler ignoring `c.aborted`
-/// runs to completion after the response is sent, and a warning is logged.
+/// `c.aborted`. Cancellation is cooperative and does NOT stop the handler: a
+/// handler ignoring `c.aborted` runs to completion after the 504 is sent — its
+/// side effects (writes, resource use) still happen, and its late result is
+/// dropped with a warning. Observe `c.aborted` to abandon work early.
 Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
       final result = next(c);
       if (result is! Future<Response>) return result;

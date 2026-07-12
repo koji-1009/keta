@@ -29,18 +29,23 @@ class StdoutLog implements Log {
   final Map<String, Object?> _baked;
   final List<String> _buffer;
   Timer? _timer;
+  // Only the StdoutLog that created the timer may cancel it; a per-request view
+  // (from withFields) shares the timer and must never dispose it.
+  final bool _ownsTimer;
   Future<void> _flushing = Future<void>.value();
 
   StdoutLog({IOSink? sink, Duration flushInterval = const Duration(seconds: 1)})
       : _sink = sink ?? stdout,
         _baked = const {},
-        _buffer = <String>[] {
+        _buffer = <String>[],
+        _ownsTimer = true {
     if (flushInterval > Duration.zero) {
       _timer = Timer.periodic(flushInterval, (_) => flush());
     }
   }
 
-  StdoutLog._view(this._sink, this._buffer, this._baked, this._timer);
+  StdoutLog._view(this._sink, this._buffer, this._baked, this._timer)
+      : _ownsTimer = false;
 
   @override
   Log withFields(Map<String, Object?> fields) {
@@ -107,8 +112,11 @@ class StdoutLog implements Log {
   }
 
   /// Stops the background flush timer. Call once at shutdown, after a final
-  /// [flush]; per-request views must not be disposed (they share this timer).
+  /// [flush]. A per-request view (from [withFields]) shares the owner's timer,
+  /// so calling this on a view is a safe no-op rather than killing isolate-wide
+  /// flushing.
   void dispose() {
+    if (!_ownsTimer) return;
     _timer?.cancel();
     _timer = null;
   }
