@@ -2,6 +2,12 @@ library;
 
 /// An in-process registry of request counts and total durations, keyed by
 /// method, route template, and status, rendered in Prometheus text format.
+///
+/// Cardinality is unbounded by design: every distinct (method, route, status)
+/// is a permanent series with no cap or eviction. This is safe only because
+/// `route` is the low-cardinality route *template* (`/users/:id`, not
+/// `/users/42`). Do not `record` with a high-cardinality or attacker-controlled
+/// route — it grows memory without bound.
 class MetricsRegistry {
   final Map<_Key, int> _count = {};
   final Map<_Key, int> _durationMsSum = {};

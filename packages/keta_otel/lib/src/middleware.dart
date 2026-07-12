@@ -16,12 +16,25 @@ final Random _random = Random.secure();
 /// starts a new trace) and is named `METHOD /route/template` for low
 /// cardinality. Export and metric recording happen after the response is
 /// produced and never block or fail the request.
-Middleware<E> otel<E>({OtlpExporter? exporter, MetricsRegistry? metrics}) {
+///
+/// The upstream sampled flag is honored by default: an incoming traceparent
+/// with the sampled bit clear is not exported. Pass [exportUnsampled] `true` to
+/// export every request's span regardless of the upstream decision.
+Middleware<E> otel<E>(
+    {OtlpExporter? exporter,
+    MetricsRegistry? metrics,
+    bool exportUnsampled = false}) {
   return (Context<E> c, Handler<E> next) {
     final startNano = _unixNano();
     final watch = Stopwatch()..start();
     final incoming = c.header('traceparent');
     final parent = incoming == null ? null : TraceContext.parse(incoming);
+    // Honor the upstream sampling decision: a valid parent whose sampled bit
+    // (traceparent flags bit 0) is clear means "not sampled", so this span is
+    // not exported (metrics are recorded regardless). A root request defaults
+    // to sampled. exportUnsampled overrides this to always export.
+    final sampled =
+        exportUnsampled || parent == null || (parent.flags & 0x01) != 0;
     final traceId = parent?.traceId ?? _hex(16);
     final spanId = _hex(8);
 
@@ -34,7 +47,7 @@ Middleware<E> otel<E>({OtlpExporter? exporter, MetricsRegistry? metrics}) {
         durationMs: watch.elapsedMilliseconds,
       );
       final export = exporter;
-      if (export != null) {
+      if (export != null && sampled) {
         final span = OtelSpan(
           traceId: traceId,
           spanId: spanId,
@@ -47,11 +60,17 @@ Middleware<E> otel<E>({OtlpExporter? exporter, MetricsRegistry? metrics}) {
             'http.route': c.route,
             'http.response.status_code': status,
           },
-          status: status >= 500 ? SpanStatus.error : SpanStatus.ok,
+          // OTel SERVER-span convention: Error only for 5xx; otherwise Unset
+          // (a 4xx is a client problem, not a server error).
+          status: status >= 500 ? SpanStatus.error : SpanStatus.unset,
         );
-        // Future.sync so a synchronously-throwing sender is caught too and
-        // never fails the request.
-        Future.sync(() => export.export([span])).catchError((Object _) {});
+        // Enqueued off the response hot path; a failing collector is logged
+        // (not silently dropped) and never fails the request.
+        export.enqueue(
+          [span],
+          onError: (error, _) =>
+              c.log.warn('span export failed', {'error': '$error'}),
+        );
       }
     }
 

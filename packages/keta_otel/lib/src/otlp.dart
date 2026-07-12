@@ -1,7 +1,10 @@
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:keta/keta.dart';
 
 import 'span.dart';
 
@@ -11,20 +14,33 @@ typedef OtlpSender = Future<void> Function(String jsonPayload);
 
 /// A minimal OTLP/HTTP exporter. It encodes spans as OTLP/JSON and hands the
 /// payload to a [OtlpSender]; it depends on no external OpenTelemetry SDK.
-class OtlpExporter {
+///
+/// It has a lifecycle: [export]/[enqueue] register in-flight sends that [flush]
+/// awaits, and [close] flushes then releases resources (the HTTP client). It
+/// implements keta's [Disposable] so an env that owns an exporter is drained on
+/// `Server.shutdown` — call `close()` there so pending spans are not dropped.
+class OtlpExporter implements Disposable {
   final OtlpSender _send;
   final String serviceName;
+  final void Function()? _releaseResources;
+  final Set<Future<void>> _inFlight = {};
 
-  OtlpExporter(this._send, {this.serviceName = 'keta'});
+  OtlpExporter(this._send, {this.serviceName = 'keta'})
+      : _releaseResources = null;
 
-  /// An exporter that POSTs to an OTLP/HTTP `v1/traces` [endpoint].
+  OtlpExporter._(this._send, this.serviceName, this._releaseResources);
+
+  /// An exporter that POSTs to an OTLP/HTTP `v1/traces` [endpoint]. A non-2xx
+  /// response is treated as a failure (so a persistently-down collector is
+  /// visible to the caller), and the underlying [HttpClient] is released by
+  /// [close].
   factory OtlpExporter.http(
     Uri endpoint, {
     String serviceName = 'keta',
     Map<String, String> headers = const {},
   }) {
     final client = HttpClient();
-    return OtlpExporter(
+    return OtlpExporter._(
       (payload) async {
         final request = await client.postUrl(endpoint);
         request.headers.contentType = ContentType.json;
@@ -32,14 +48,60 @@ class OtlpExporter {
         request.add(utf8.encode(payload));
         final response = await request.close();
         await response.drain<void>();
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw HttpException(
+              'OTLP export rejected: HTTP ${response.statusCode}');
+        }
       },
-      serviceName: serviceName,
+      serviceName,
+      client.close,
     );
   }
 
+  /// Encodes and sends [spans], returning a future that completes when the send
+  /// finishes. Tracked so [flush] can await it.
   Future<void> export(List<OtelSpan> spans) {
     if (spans.isEmpty) return Future.value();
-    return _send(jsonEncode(encodeOtlp(spans, serviceName)));
+    return _track(_send(jsonEncode(encodeOtlp(spans, serviceName))));
+  }
+
+  /// Fire-and-forget export scheduled OFF the caller's hot path: the encode and
+  /// send run in a later event-loop task, never on the response path. Failures
+  /// go to [onError] (never to the caller). Tracked so [flush] awaits it.
+  void enqueue(List<OtelSpan> spans,
+      {void Function(Object error, StackTrace stack)? onError}) {
+    if (spans.isEmpty) return;
+    final completer = Completer<void>();
+    _inFlight.add(completer.future);
+    completer.future.catchError((_) {}); // never an unhandled rejection
+    Future<void>(() async {
+      try {
+        await _send(jsonEncode(encodeOtlp(spans, serviceName)));
+      } catch (e, st) {
+        onError?.call(e, st);
+      } finally {
+        _inFlight.remove(completer.future);
+        completer.complete();
+      }
+    });
+  }
+
+  Future<void> _track(Future<void> future) {
+    _inFlight.add(future);
+    future.whenComplete(() => _inFlight.remove(future)).catchError((_) {});
+    return future;
+  }
+
+  /// Awaits every in-flight export. Call before shutdown so pending spans land.
+  Future<void> flush() =>
+      Future.wait(_inFlight.toList()).then((_) {}).catchError((_) {});
+
+  /// Flushes, then releases resources (the HTTP client). Idempotent-ish; safe to
+  /// call from `Server.shutdown` via [Disposable].
+  @override
+  Future<void> close() async {
+    await flush();
+    _releaseResources?.call();
   }
 }
 
