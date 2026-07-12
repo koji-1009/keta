@@ -5,5 +5,10 @@ library;
 
 export 'src/db.dart' show Db, DbConn, HasDb;
 export 'src/migrate.dart'
-    show Migration, MigrationResult, applyMigrations, loadMigrations;
+    show
+        Migration,
+        MigrationResult,
+        VerifyMigrations,
+        applyMigrations,
+        loadMigrations;
 export 'src/tx.dart' show tx, txConn;

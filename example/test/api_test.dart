@@ -1,5 +1,6 @@
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
+import 'package:keta_db/keta_db.dart';
 import 'package:keta_example/app.dart';
 import 'package:keta_example/env.dart';
 import 'package:keta_openapi/keta_openapi.dart';
@@ -7,11 +8,10 @@ import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 
 Future<Env> bootTestEnv() async {
+  // Build the schema from the same migrations the server runs, so the migration
+  // files are the single source of truth and are exercised by the suite.
   final db = SqliteDb.memory();
-  await db.writer.execute(
-    'create table users (id text primary key, name text not null, '
-    "age integer, role text not null, tags text not null default '')",
-  );
+  await applyMigrations(db, directory: 'migrations');
   return Env(db, StdoutLog(flushInterval: Duration.zero));
 }
 

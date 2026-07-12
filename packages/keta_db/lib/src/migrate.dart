@@ -109,3 +109,37 @@ List<Migration> loadMigrations(String directory) {
   }
   return migrations;
 }
+
+/// A read-only check that every migration in [directory] is recorded in the
+/// `_keta_migrations` ledger — meant to be called inside `Env.boot`.
+extension VerifyMigrations on Db {
+  /// Throws a [StateError] naming the unapplied versions (and the command to
+  /// apply them) when the schema is behind [directory], so an out-of-date
+  /// database fails loudly once at boot rather than as a rain of per-request
+  /// 500s. Unlike [applyMigrations] it never writes, so running it in every
+  /// isolate concurrently is safe.
+  Future<void> verifyMigrations([String directory = 'migrations']) async {
+    final onDisk = loadMigrations(directory);
+    Set<String> applied;
+    try {
+      final rows = await reader.query('select version from _keta_migrations');
+      applied = {for (final row in rows) row['version'] as String};
+    } on Object {
+      // The ledger table does not exist yet (nothing has ever been applied):
+      // treat it as empty rather than leaking a driver error. The pending list
+      // below reports every migration as unapplied, which is the truth.
+      applied = const {};
+    }
+    final pending = [
+      for (final m in onDisk)
+        if (!applied.contains(m.version)) m.version,
+    ];
+    if (pending.isNotEmpty) {
+      throw StateError(
+        'database schema is out of date: ${pending.length} unapplied '
+        "migration(s) [${pending.join(', ')}]. Apply them with the driver's "
+        'migrate tool, e.g. `dart run keta_sqlite:migrate`.',
+      );
+    }
+  }
+}

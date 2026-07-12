@@ -175,5 +175,45 @@ end;
         expect((await db.reader.query('select n from audit')).single['n'], 5);
       },
     );
+
+    test(
+      'verifyMigrations throws on a never-migrated db (no ledger table)',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('keta_verify');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        File('${dir.path}/0001_one.sql').writeAsStringSync(
+          'create table one (id integer);',
+        );
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
+
+        // The `_keta_migrations` table does not exist yet, so the ledger read
+        // throws inside verifyMigrations — it must surface as the pending-schema
+        // StateError, not the raw driver error.
+        await expectLater(
+          db.verifyMigrations(dir.path),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('0001'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('verifyMigrations passes once migrations are applied', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_verify_ok');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      File(
+        '${dir.path}/0001_one.sql',
+      ).writeAsStringSync('create table one (id integer);');
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await applyMigrations(db, directory: dir.path);
+
+      await expectLater(db.verifyMigrations(dir.path), completes);
+    });
   });
 }

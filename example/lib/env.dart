@@ -12,7 +12,14 @@ class Env implements HasLog, HasDb, Disposable {
   @override
   final Log log;
 
-  static Future<Env> boot() async => Env(SqliteDb.open('app.db'), StdoutLog());
+  static Future<Env> boot() async {
+    final db = SqliteDb.open('app.db');
+    // Read-only guard: if the schema is behind, fail loudly here instead of as
+    // per-request 500s. main applies migrations before serve; this catches a
+    // server started against an unmigrated database.
+    await db.verifyMigrations('migrations');
+    return Env(db, StdoutLog());
+  }
 
   @override
   Future<void> close() => db.close();
