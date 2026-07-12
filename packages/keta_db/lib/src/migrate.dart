@@ -89,8 +89,14 @@ List<Migration> loadMigrations(String directory) {
     if (int.tryParse(version) == null) {
       throw FormatException('migration version must be numeric', version);
     }
-    migrations.add(
-        Migration(version, stem.substring(underscore + 1), file.readAsStringSync()));
+    final sql = file.readAsStringSync();
+    // An empty (or whitespace-only) migration is almost always a truncated or
+    // unsaved file. Recording it as "applied" would silently make it a no-op
+    // that can never be re-run, so reject it up front.
+    if (sql.trim().isEmpty) {
+      throw FormatException('migration file is empty', base);
+    }
+    migrations.add(Migration(version, stem.substring(underscore + 1), sql));
   }
   migrations.sort((a, b) => int.parse(a.version).compareTo(int.parse(b.version)));
   for (var i = 1; i < migrations.length; i++) {
