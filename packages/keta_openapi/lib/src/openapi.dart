@@ -64,6 +64,17 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
         'schema': {'type': param.$2},
       },
   ];
+  // OpenAPI forbids two path parameters with the same name; a user-named
+  // capture colliding with an auto-generated `pN` would emit an invalid
+  // template like `/{p0}/{p0}`. Fail fast instead.
+  final seenNames = <String>{};
+  for (final param in parameters) {
+    if (!seenNames.add(param['name'] as String)) {
+      throw StateError(
+          'duplicate path parameter "${param['name']}" in '
+          '${_openApiPath(route.segments)}');
+    }
+  }
   final responses = <String, Object?>{};
   if (doc?.response != null) {
     responses['200'] = {'description': 'OK', ..._jsonBody(doc!.response!)};

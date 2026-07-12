@@ -6,9 +6,19 @@ library;
 String encodeYaml(Object? value) {
   final buffer = StringBuffer();
   if (value is Map) {
-    _writeMap(buffer, value, 0);
+    // An empty map/list must be emitted explicitly at the root, otherwise the
+    // output is blank and parses back as null instead of `{}`/`[]`.
+    if (value.isEmpty) {
+      buffer.writeln('{}');
+    } else {
+      _writeMap(buffer, value, 0);
+    }
   } else if (value is List) {
-    _writeList(buffer, value, 0);
+    if (value.isEmpty) {
+      buffer.writeln('[]');
+    } else {
+      _writeList(buffer, value, 0);
+    }
   } else {
     buffer.writeln(_scalar(value));
   }
@@ -17,8 +27,16 @@ String encodeYaml(Object? value) {
 
 void _writeMap(StringBuffer buffer, Map<Object?, Object?> map, int indent) {
   final pad = _pad(indent);
+  // Keys are stringified; two keys that stringify identically (e.g. int 1 and
+  // string '1') would emit a duplicate-key document that no parser accepts.
+  // Refuse rather than produce invalid YAML.
+  final seen = <String>{};
   map.forEach((key, value) {
-    final label = '$pad${_scalar(key.toString())}:';
+    final keyText = _scalar(key.toString());
+    if (!seen.add(keyText)) {
+      throw ArgumentError('duplicate YAML key: ${key.toString()}');
+    }
+    final label = '$pad$keyText:';
     if (value is Map && value.isNotEmpty) {
       buffer.writeln(label);
       _writeMap(buffer, value, indent + 1);
