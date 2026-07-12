@@ -11,6 +11,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  keta: ^0.1.0
   keta_db: ^0.1.0
   sqlite3: ^3.3.0
 
