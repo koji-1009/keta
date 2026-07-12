@@ -93,7 +93,7 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
   if (node.abstractKeyword != null || node.sealedKeyword != null) return;
 
   final fields = <_Field>[];
-  var hasGenerativeCtor = false;
+  ConstructorDeclaration? genCtor;
   var unresolvable = false;
   ConstructorDeclaration? fromJson;
   MethodDeclaration? toJson;
@@ -113,7 +113,7 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
       }
     } else if (member is ConstructorDeclaration) {
       if (member.factoryKeyword == null) {
-        hasGenerativeCtor = true;
+        genCtor = member;
       } else if (member.name?.lexeme == 'fromJson') {
         fromJson = member;
       }
@@ -124,7 +124,15 @@ void _fixClass(ClassDeclaration node, _TypeResolver resolver,
   // A field type we can't resolve within the file (a cross-file enum, or a
   // non-canonical type like DateTime) is out of scope — regenerating would
   // guess, so leave the class untouched.
-  if (unresolvable || fields.isEmpty || !hasGenerativeCtor) return;
+  if (unresolvable || fields.isEmpty || genCtor == null) return;
+  // The generated fromJson calls the ctor with NAMED args, so the class must
+  // have a canonical named-parameter ctor covering every field. A positional
+  // (or otherwise non-matching) ctor is left untouched rather than miscompiled.
+  final ctorNamed = {
+    for (final p in genCtor.parameters.parameters)
+      if (p.isNamed) p.name?.lexeme,
+  };
+  if (!fields.every((f) => ctorNamed.contains(f.name))) return;
   if (toJson != null && !_isCanonicalMap(toJson)) return; // hand-modified.
 
   final fieldNames = {for (final f in fields) f.name};
@@ -219,8 +227,9 @@ Set<String> _schemaPropertyNames(Expression init) {
 }
 
 /// Regenerates the whole `Schema(...)` initializer, preserving each existing
-/// property definition verbatim (so enums/formats survive) and re-deriving
-/// `required` and `deps` from the field model.
+/// property definition verbatim (so enums/formats survive), preserving any
+/// other top-level schema key (`description`, `additionalProperties`, …), and
+/// re-deriving `required` and `deps` from the field model.
 String _schemaSource(
     String className, List<_Field> fields, Expression init, String source) {
   final map = _schemaMap(init);
@@ -234,12 +243,28 @@ String _schemaSource(
       }
     }
   }
+  // Preserve top-level keys the regeneration doesn't own (so a `description` or
+  // `additionalProperties` is not silently dropped), verbatim and in order.
+  final extras = <String>[];
+  const owned = {'type', 'required', 'properties'};
+  if (map != null) {
+    for (final e in map.elements) {
+      if (e is MapLiteralEntry && e.key is SimpleStringLiteral) {
+        final key = (e.key as SimpleStringLiteral).value;
+        if (owned.contains(key)) continue;
+        extras.add(source.substring(e.key.offset, e.value.end));
+      }
+    }
+  }
 
   final properties = [
     for (final f in fields)
-      "'${f.name}': ${existing[f.name] ?? dartLiteral(f.type.schemaJson())}",
+      "'${f._keyLiteral}': ${existing[f.name] ?? dartLiteral(f.type.schemaJson())}",
   ];
-  final required = [for (final f in fields) if (!f.type.nullable) "'${f.name}'"];
+  final required = [
+    for (final f in fields)
+      if (!f.type.nullable) "'${f._keyLiteral}'",
+  ];
   final deps = <String>{};
   for (final f in fields) {
     f.type.collectDtoRefs(deps);
@@ -247,7 +272,11 @@ String _schemaSource(
 
   final buffer = StringBuffer("Schema('$className', {'type': 'object'");
   if (required.isNotEmpty) buffer.write(", 'required': [${required.join(', ')}]");
-  buffer.write(", 'properties': {${properties.join(', ')}}}");
+  buffer.write(", 'properties': {${properties.join(', ')}}");
+  for (final extra in extras) {
+    buffer.write(', $extra');
+  }
+  buffer.write('}');
   final depList = deps.toList()..sort();
   if (depList.isNotEmpty) {
     buffer.write(
@@ -326,21 +355,29 @@ class _Field {
 
   _Field(this.name, this.type);
 
+  /// The field name escaped for embedding inside a generated single-quoted
+  /// string literal — a name containing `$`, `'`, or `\` (all legal in a Dart
+  /// identifier) must not become interpolation or an unterminated literal.
+  String get _keyLiteral => name
+      .replaceAll(r'\', r'\\')
+      .replaceAll("'", r"\'")
+      .replaceAll(r'$', r'\$');
+
   String fromJsonExpr() {
     final t = type;
+    final key = _keyLiteral;
     if (t is _Prim && t.dart != 'double') {
-      return t.nullable
-          ? "json['$name'] as ${t.dart}?"
-          : "json['$name'] as ${t.dart}";
+      return t.nullable ? "json['$key'] as ${t.dart}?" : "json['$key'] as ${t.dart}";
     }
-    final expr = t.fromJson("json['$name']");
-    return t.nullable ? "json['$name'] == null ? null : $expr" : expr;
+    final expr = t.fromJson("json['$key']");
+    return t.nullable ? "json['$key'] == null ? null : $expr" : expr;
   }
 
   String toJsonEntry() {
     final value = type.toJson(name, nullable: type.nullable);
-    if (!type.nullable) return "        '$name': $value,";
-    return "        if ($name != null) '$name': $value,";
+    final key = _keyLiteral;
+    if (!type.nullable) return "        '$key': $value,";
+    return "        if ($name != null) '$key': $value,";
   }
 }
 
@@ -486,14 +523,25 @@ class _TypeResolver {
     final base = nullable ? raw.substring(0, raw.length - 1).trim() : raw.trim();
     if (base.startsWith('List<') && base.endsWith('>')) {
       final item = _resolveString(base.substring(5, base.length - 1).trim());
-      return item == null ? null : _ListType(item, nullable);
+      // Nested collections and nullable elements are outside the canonical
+      // subset (the generated mappers can't express them) — leave untouched.
+      if (item == null || item.nullable || item is _ListType || item is _MapType) {
+        return null;
+      }
+      return _ListType(item, nullable);
     }
     if (base.startsWith('Map<') && base.endsWith('>')) {
       final inner = base.substring(4, base.length - 1);
       final comma = inner.indexOf(',');
       if (comma > 0 && inner.substring(0, comma).trim() == 'String') {
         final value = _resolveString(inner.substring(comma + 1).trim());
-        return value == null ? null : _MapType(value, nullable);
+        if (value == null ||
+            value.nullable ||
+            value is _ListType ||
+            value is _MapType) {
+          return null;
+        }
+        return _MapType(value, nullable);
       }
       return null;
     }

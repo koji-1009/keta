@@ -2,6 +2,7 @@ library;
 
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
 
 import 'diagnostic.dart';
 
@@ -54,7 +55,7 @@ String? _firstStringArg(ArgumentList args) {
 void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
     List<Diagnostic> diagnostics) {
   final finalFields = <String>[];
-  var hasFromJson = false;
+  ConstructorDeclaration? fromJson;
   MethodDeclaration? toJson;
 
   for (final member in node.body.members) {
@@ -66,7 +67,7 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
       }
     } else if (member is ConstructorDeclaration) {
       if (member.factoryKeyword != null && member.name?.lexeme == 'fromJson') {
-        hasFromJson = true;
+        fromJson = member;
       }
     } else if (member is MethodDeclaration && member.name.lexeme == 'toJson') {
       toJson = member;
@@ -75,16 +76,17 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
 
   final className = node.namePart.typeName.lexeme;
   // A DTO by signal only; abstract/sealed carriers are never canonical DTOs.
-  final isDto = schemaNames.contains(className) || hasFromJson || toJson != null;
+  final isDto =
+      schemaNames.contains(className) || fromJson != null || toJson != null;
   if (!isDto || node.abstractKeyword != null || node.sealedKeyword != null) {
     return;
   }
 
-  if (!hasFromJson || toJson == null) {
+  if (fromJson == null || toJson == null) {
     diagnostics.add(Diagnostic(
       rule: 'keta_canonical_missing',
       message: 'class $className has final fields but no '
-          '${!hasFromJson ? 'fromJson factory' : 'toJson method'}; '
+          '${fromJson == null ? 'fromJson factory' : 'toJson method'}; '
           'run keta_lints:fix to materialize the canonical mapper',
       file: file,
       scope: className,
@@ -95,13 +97,21 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
   final jsonKeys = _toJsonKeys(toJson);
   if (jsonKeys == null) return; // hand-modified shape; not verified.
   final fields = finalFields.toSet();
-  final missing = fields.difference(jsonKeys);
-  final extra = jsonKeys.difference(fields);
-  if (missing.isNotEmpty || extra.isNotEmpty) {
-    final parts = [
-      if (missing.isNotEmpty) 'fields not in toJson: ${missing.join(', ')}',
-      if (extra.isNotEmpty) 'toJson keys not fields: ${extra.join(', ')}',
-    ];
+  // Verify BOTH directions of the round-trip: toJson writes exactly the fields,
+  // and fromJson reads exactly the fields. A half-done rename (fromJson still
+  // reading the old key) round-trips broken but a toJson-only check misses it.
+  final fromKeys = _fromJsonKeys(fromJson);
+  final parts = [
+    if (fields.difference(jsonKeys).isNotEmpty)
+      'fields not in toJson: ${fields.difference(jsonKeys).join(', ')}',
+    if (jsonKeys.difference(fields).isNotEmpty)
+      'toJson keys not fields: ${jsonKeys.difference(fields).join(', ')}',
+    if (fields.difference(fromKeys).isNotEmpty)
+      'fields not read by fromJson: ${fields.difference(fromKeys).join(', ')}',
+    if (fromKeys.difference(fields).isNotEmpty)
+      'fromJson reads unknown keys: ${fromKeys.difference(fields).join(', ')}',
+  ];
+  if (parts.isNotEmpty) {
     diagnostics.add(Diagnostic(
       rule: 'keta_canonical_drift',
       message: 'class $className has drifted (${parts.join('; ')}); '
@@ -109,6 +119,25 @@ void _checkClass(ClassDeclaration node, Set<String> schemaNames, String file,
       file: file,
       scope: className,
     ));
+  }
+}
+
+/// The string keys read via `…['key']` inside the fromJson factory (regardless
+/// of the map parameter's name), i.e. the wire keys fromJson consumes.
+Set<String> _fromJsonKeys(ConstructorDeclaration fromJson) {
+  final keys = <String>{};
+  fromJson.visitChildren(_IndexKeyVisitor(keys));
+  return keys;
+}
+
+class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
+  final Set<String> keys;
+  _IndexKeyVisitor(this.keys);
+  @override
+  void visitIndexExpression(IndexExpression node) {
+    final index = node.index;
+    if (index is SimpleStringLiteral) keys.add(index.value);
+    super.visitIndexExpression(node);
   }
 }
 

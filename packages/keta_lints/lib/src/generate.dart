@@ -23,6 +23,8 @@ class Scaffold {
 /// the canonical subset; out-of-scope constructs raise [ScaffoldError].
 Scaffold generateScaffold(Map<String, Object?> document) {
   final schemas = _namedSchemas(document);
+  _checkSchemaNames(schemas);
+  _checkRefCycles(schemas);
   final dtos = _generateDtos(schemas);
   final routes = _generateRoutes(document, schemas);
   return Scaffold(
@@ -80,6 +82,15 @@ String _generateDtos(Map<String, Map<String, Object?>> schemas) {
 
 void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
   final values = (schema['enum'] as List).cast<String>();
+  // Enum constants map name↔wire via `.name`/`.byName`, so each value must be a
+  // valid, non-reserved Dart identifier as-is. Reject (don't emit broken code).
+  for (final v in values) {
+    if (!_isValidIdentifier(v) || _reservedWords.contains(v)) {
+      throw ScaffoldError(
+          'enum "$name" value "$v" is not a valid Dart identifier; '
+          'materialize this enum by hand');
+    }
+  }
   buffer.writeln('enum $name { ${values.join(', ')} }');
   buffer.writeln();
 }
@@ -89,10 +100,14 @@ void _writeClass(StringBuffer buffer, String name, Map<String, Object?> schema,
   final required = (schema['required'] as List?)?.cast<String>() ?? const [];
   final properties =
       (schema['properties'] as Map?)?.cast<String, Object?>() ?? const {};
+  // JSON property names become valid, unique Dart identifiers; the original
+  // wire key is kept for the fromJson/toJson maps.
+  final usedNames = <String>{};
   final fields = [
     for (final entry in properties.entries)
       _Field(
         entry.key,
+        _uniqueIdent(_sanitizeIdentifier(entry.key), usedNames),
         _resolve((entry.value as Map).cast<String, Object?>(), schemas),
         required.contains(entry.key),
       ),
@@ -102,13 +117,17 @@ void _writeClass(StringBuffer buffer, String name, Map<String, Object?> schema,
   for (final f in fields) {
     buffer.writeln('  final ${f.dartType} ${f.dartName};');
   }
-  buffer.writeln('  $name({');
-  for (final f in fields) {
-    buffer.writeln(f.required
-        ? '    required this.${f.dartName},'
-        : '    this.${f.dartName},');
+  if (fields.isEmpty) {
+    buffer.writeln('  $name();');
+  } else {
+    buffer.writeln('  $name({');
+    for (final f in fields) {
+      buffer.writeln(f.required
+          ? '    required this.${f.dartName},'
+          : '    this.${f.dartName},');
+    }
+    buffer.writeln('  });');
   }
-  buffer.writeln('  });');
   buffer.writeln();
 
   buffer.writeln('  factory $name.fromJson(Map<String, Object?> json) => $name(');
@@ -197,12 +216,12 @@ String _dartType(_Type type) => switch (type) {
 
 class _Field {
   final String jsonKey;
+  final String dartName;
   final _Type type;
   final bool required;
 
-  _Field(this.jsonKey, this.type, this.required);
+  _Field(this.jsonKey, this.dartName, this.type, this.required);
 
-  String get dartName => jsonKey;
   String get dartType => required ? _dartType(type) : '${_dartType(type)}?';
 
   String fromJson(String access) {
@@ -400,3 +419,81 @@ Iterable<String> _refsIn(Object? node) sync* {
 
 String _lowerFirst(String s) =>
     s.isEmpty ? s : '${s[0].toLowerCase()}${s.substring(1)}';
+
+/// Rejects schema names that aren't valid Dart type identifiers, and any two
+/// whose `xSchema` const names collide (e.g. `Foo` and `foo`).
+void _checkSchemaNames(Map<String, Map<String, Object?>> schemas) {
+  final constNames = <String, String>{};
+  for (final name in schemas.keys) {
+    if (!_isValidIdentifier(name) || _reservedWords.contains(name)) {
+      throw ScaffoldError(
+          'schema name "$name" is not a valid Dart type name; rename it');
+    }
+    final constName = '${_lowerFirst(name)}Schema';
+    final existing = constNames[constName];
+    if (existing != null) {
+      throw ScaffoldError(
+          'schemas "$existing" and "$name" both map to const "$constName"');
+    }
+    constNames[constName] = name;
+  }
+}
+
+/// Rejects self- or mutually-recursive `$ref` graphs: a recursive const Schema
+/// is a compile-time cycle and a recursive contract-test sample never
+/// terminates, so recursion is outside the const-Schema subset.
+void _checkRefCycles(Map<String, Map<String, Object?>> schemas) {
+  final done = <String>{};
+  final stack = <String>{};
+  void visit(String name) {
+    if (done.contains(name)) return;
+    if (!stack.add(name)) {
+      throw ScaffoldError(
+          'schema "$name" is part of a reference cycle; the const Schema '
+          'subset does not support recursive types');
+    }
+    for (final ref in _refsIn(schemas[name] ?? const {})) {
+      if (schemas.containsKey(ref)) visit(ref);
+    }
+    stack.remove(name);
+    done.add(name);
+  }
+
+  for (final name in schemas.keys) {
+    visit(name);
+  }
+}
+
+final RegExp _identifierPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+bool _isValidIdentifier(String s) => _identifierPattern.hasMatch(s);
+
+/// Maps an arbitrary JSON name to a valid, non-reserved Dart identifier.
+String _sanitizeIdentifier(String name) {
+  var cleaned = name.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '_');
+  if (cleaned.isEmpty) cleaned = 'field';
+  if (RegExp(r'^[0-9]').hasMatch(cleaned)) cleaned = 'f$cleaned';
+  if (_reservedWords.contains(cleaned)) cleaned = '${cleaned}_';
+  return cleaned;
+}
+
+String _uniqueIdent(String base, Set<String> used) {
+  var candidate = base;
+  var i = 1;
+  while (!used.add(candidate)) {
+    candidate = '$base$i';
+    i++;
+  }
+  return candidate;
+}
+
+const _reservedWords = {
+  'abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch',
+  'class', 'const', 'continue', 'covariant', 'default', 'deferred', 'do',
+  'dynamic', 'else', 'enum', 'export', 'extends', 'extension', 'external',
+  'factory', 'false', 'final', 'finally', 'for', 'function', 'get', 'hide',
+  'if', 'implements', 'import', 'in', 'interface', 'is', 'late', 'library',
+  'mixin', 'new', 'null', 'on', 'operator', 'part', 'required', 'rethrow',
+  'return', 'sealed', 'set', 'show', 'static', 'super', 'switch', 'sync',
+  'this', 'throw', 'true', 'try', 'typedef', 'var', 'void', 'while', 'with',
+  'yield',
+};
