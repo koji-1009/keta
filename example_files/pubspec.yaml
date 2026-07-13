@@ -1,0 +1,21 @@
+name: keta_files_example
+description: >-
+  A standalone keta app whose routes are registered by file convention
+  (keta_files): each file under lib/routes/ exposes register(app), and the
+  manifest's marked regions are materialized by `dart run keta_files:sync`.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+  keta_db: ^0.1.0
+  keta_sqlite: ^0.1.0
+  keta_openapi: ^0.1.0
+
+dev_dependencies:
+  keta_files: ^0.1.0
+  test: ^1.25.0

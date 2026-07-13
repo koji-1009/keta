@@ -21,3 +21,4 @@ workspace:
   - packages/keta_files
   - packages/keta_otel
   - example
+  - example_files
