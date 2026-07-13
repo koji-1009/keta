@@ -22,3 +22,4 @@ workspace:
   - packages/keta_otel
   - example
   - example_files
+  - example_auth

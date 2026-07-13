@@ -1,0 +1,18 @@
+name: keta_auth_example
+description: >-
+  A reference implementation of app-defined authentication for keta: a
+  bearer-token middleware and a role guard, built on Key + Context and the named
+  Unauthorized/Forbidden exceptions. keta ships no auth by design — this shows
+  the pattern to copy, not a framework feature.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+
+dev_dependencies:
+  test: ^1.25.0
