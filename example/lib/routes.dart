@@ -18,7 +18,7 @@ void register(App<Env> app) {
         'select id, name, age, role, tags from users where id = ?',
         [c.param<String>('id')],
       );
-      if (rows.isEmpty) throw const KetaException(404, 'user not found');
+      if (rows.isEmpty) throw const NotFound('user not found');
       return c.json(UserDto.fromRow(rows.first).toJson());
     },
     doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user'),
@@ -48,10 +48,10 @@ void register(App<Env> app) {
           'select tags from users where id = ?',
           [p.$1],
         );
-        if (rows.isEmpty) throw const KetaException(404, 'user not found');
+        if (rows.isEmpty) throw const NotFound('user not found');
         final tags = (rows.first['tags'] as String).split(',');
         if (p.$2 < 0 || p.$2 >= tags.length) {
-          throw const KetaException(404, 'tag index out of range');
+          throw const NotFound('tag index out of range');
         }
         return c.json({'tag': tags[p.$2]});
       });

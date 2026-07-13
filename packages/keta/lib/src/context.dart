@@ -103,7 +103,7 @@ class RequestCtx<E> {
         };
       }
     } on FormatException {
-      throw KetaException(400, 'invalid path parameter "$name"');
+      throw BadRequest('invalid path parameter "$name"');
     }
     throw ArgumentError('unsupported param type $T for "$name"');
   }
@@ -136,7 +136,7 @@ class RequestCtx<E> {
       await for (final chunk in _bodySource) {
         total += chunk.length;
         if (total > maxBodyBytes) {
-          throw KetaException(413, 'request body exceeds $maxBodyBytes bytes');
+          throw PayloadTooLarge('request body exceeds $maxBodyBytes bytes');
         }
         builder.add(chunk);
       }
@@ -160,7 +160,7 @@ class RequestCtx<E> {
       _jsonDecoded = true; // cache only on success, so a retry still throws 400
       return _json = decoded;
     } on FormatException catch (e) {
-      throw KetaException(400, 'invalid JSON body', e.message);
+      throw BadRequest('invalid JSON body', e.message);
     }
   }
 
@@ -202,8 +202,7 @@ extension type Context<E>(RequestCtx<E> _raw) {
   Map<String, String> get headers => Map.unmodifiable(_raw.headers);
 
   /// The path parameter [name] parsed as `T` (String, int, double, or bool).
-  /// An unsupported `T` is an `ArgumentError`; a parse failure is a
-  /// `KetaException(400)`.
+  /// An unsupported `T` is an `ArgumentError`; a parse failure is a [BadRequest].
   T param<T>(String name) => _raw.param<T>(name);
 
   /// The value bound to [key]. Unset is a `StateError` (a programming error).
@@ -214,8 +213,8 @@ extension type Context<E>(RequestCtx<E> _raw) {
   void set<T>(Key<T> key, T value) => _raw.set<T>(key, value);
 
   /// The request body decoded as JSON (UTF-8 then `jsonDecode`), cached across
-  /// calls. Invalid JSON is a `KetaException(400)`; exceeding the body limit is
-  /// a `KetaException(413)`.
+  /// calls. Invalid JSON is a [BadRequest]; exceeding the body limit is a
+  /// [PayloadTooLarge].
   Future<Object?> body() => _raw.body();
 
   /// The raw request body, subject to the same size limit as [body].

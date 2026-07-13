@@ -2,17 +2,20 @@
 /// single [Path] value whose type parameter is the tuple of its captures.
 library;
 
+import 'response.dart';
+
 /// A single capture in a path — the public extension point for typed path
 /// parameters.
 ///
-/// [parse] turns the raw segment string into `T`; a [FormatException] it throws
-/// becomes a `KetaException(400)` at the request boundary. [name] labels the
-/// parameter for OpenAPI (default `p0`, `p1`, …). [schema] is the JSON-Schema
-/// fragment projected onto the OpenAPI parameter, carried as data. A custom
-/// capture is a `parse` + `schema` pair:
+/// [parse] turns the raw segment string into `T`. Its contract: throw
+/// [BadRequest] on invalid input (→ 400); every other exception is a defect
+/// (→ 500). [name] labels the parameter for OpenAPI (default `p0`, `p1`, …).
+/// [schema] is the JSON-Schema fragment projected onto the OpenAPI parameter,
+/// carried as data. A custom capture is a `parse` + `schema` pair:
 ///
 /// ```dart
-/// final role = Capture<Role>((s) => Role.values.byName(s),
+/// final role = Capture<Role>(
+///     (s) => Role.values.asNameMap()[s] ?? (throw BadRequest('unknown role: $s')),
 ///     schema: {'type': 'string', 'enum': ['admin', 'member']});
 /// ```
 class Capture<T> {
@@ -27,13 +30,18 @@ class Capture<T> {
       Capture<T>(parse, name: name, schema: schema);
 }
 
+// Built-in captures wrap the SDK's parse failures into a [BadRequest] here, once
+// and inside the framework, so the parse contract (invalid input → 400) holds
+// without the router special-casing FormatException.
 String _identity(String s) => s;
-int _toInt(String s) => int.parse(s);
-double _toDouble(String s) => double.parse(s);
+int _toInt(String s) =>
+    int.tryParse(s) ?? (throw BadRequest('not an integer: "$s"'));
+double _toDouble(String s) =>
+    double.tryParse(s) ?? (throw BadRequest('not a number: "$s"'));
 bool _toBool(String s) => switch (s) {
   'true' => true,
   'false' => false,
-  _ => throw FormatException('not a bool', s),
+  _ => throw BadRequest('not a boolean: "$s"'),
 };
 
 /// Built-in captures, exposed as top-level constants. The four names match the

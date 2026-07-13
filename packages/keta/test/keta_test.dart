@@ -117,9 +117,11 @@ void main() {
       expect(() => root.segments(':id'), throwsArgumentError); // capture vocab
     });
 
-    test('a custom capture (parse + schema pair) drives the typed tuple', () async {
+    test('a custom capture drives the tuple and BadRequest becomes 400', () async {
       final shade = Capture<Shade>(
-        Shade.values.byName,
+        (s) =>
+            Shade.values.asNameMap()[s] ??
+            (throw BadRequest('unknown shade: $s')),
         schema: {
           'type': 'string',
           'enum': ['red', 'green'],
@@ -132,6 +134,7 @@ void main() {
       final client = TestClient(app, newEnv());
 
       expect((await client.get('/c/green')).text(), 'green');
+      expect((await client.get('/c/purple')).status, 400);
     });
   });
 
@@ -243,7 +246,7 @@ void main() {
 
     test('recover maps KetaException to its status and body', () async {
       final app = App<Env>()..use(recover());
-      app.get('/boom', (c) => throw const KetaException(418, 'teapot'));
+      app.get('/boom', (c) => throw const KetaException.status(418, 'teapot'));
       final client = TestClient(app, newEnv());
 
       final r = await client.get('/boom');
@@ -255,7 +258,7 @@ void main() {
       'last-resort fallback converts uncaught errors without recover',
       () async {
         final app = App<Env>(); // no recover()
-        app.get('/keta', (c) => throw const KetaException(404, 'gone'));
+        app.get('/keta', (c) => throw const NotFound('gone'));
         app.get('/other', (c) => throw StateError('leak me'));
         final client = TestClient(app, newEnv());
 
@@ -349,7 +352,7 @@ void main() {
       app.get(
         '/f',
         (Context<Env> c) =>
-            mode.wrap(() => throw const KetaException(400, 'bad'))(),
+            mode.wrap(() => throw const BadRequest('bad'))(),
       );
       final client = TestClient(app, newEnv());
 

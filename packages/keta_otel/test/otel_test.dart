@@ -182,11 +182,11 @@ void main() {
   });
 
   group('span status', () {
-    test('a thrown KetaException(404) yields a 4xx unset span', () async {
+    test('a thrown NotFound (404) yields a 4xx unset span', () async {
       final captured = <String>[];
       final app = App<Env>()
         ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
-      app.get('/missing', (c) => throw const KetaException(404, 'nope'));
+      app.get('/missing', (c) => throw const NotFound('nope'));
       final res = await TestClient(app, Env()).get('/missing');
       await pumpEventQueue();
 
@@ -196,11 +196,11 @@ void main() {
       expect(_attrsOf(span)['http.response.status_code'], {'intValue': '404'});
     });
 
-    test('a thrown KetaException(503) yields an error span', () async {
+    test('a thrown Unavailable (503) yields an error span', () async {
       final captured = <String>[];
       final app = App<Env>()
         ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
-      app.get('/down', (c) => throw const KetaException(503, 'down'));
+      app.get('/down', (c) => throw const Unavailable('down'));
       await TestClient(app, Env()).get('/down');
       await pumpEventQueue();
 

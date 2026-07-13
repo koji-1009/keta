@@ -109,7 +109,7 @@ void main() {
           await c.get(txConn).execute('insert into users (name) values (?)', [
             'nope',
           ]);
-          throw const KetaException(400, 'rejected');
+          throw const BadRequest('rejected');
         })(),
       );
       final client = TestClient(app, env);

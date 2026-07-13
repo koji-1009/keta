@@ -67,17 +67,104 @@ class Response {
   }
 }
 
-/// The framework's single exception type.
+/// keta's exception hierarchy — everything a user throws or receives, as one
+/// sealed set so an exhaustive `switch` works and there is nothing to guess.
 ///
-/// [status] is the HTTP status to surface, [message] the safe user-facing
-/// text, and [detail] optional structured context (such as a validation
-/// violation list) that a boundary may choose to include or withhold.
-class KetaException implements Exception {
-  const KetaException(this.status, this.message, [this.detail]);
-  final int status;
+/// The rule is one sentence: throw a [KetaException] subtype and the response
+/// carries its [status]; every other exception (ArgumentError, StateError,
+/// FormatException, …) is a defect that becomes a 500. [message] is the safe
+/// user-facing text; [detail] is optional structured context (such as a
+/// validation violation list) that a boundary may include or withhold.
+sealed class KetaException implements Exception {
+  const KetaException(this.message, [this.detail]);
+
+  /// An arbitrary-status exception, for a code without a named subtype.
+  const factory KetaException.status(
+    int status,
+    String message, [
+    Object? detail,
+  ]) = _StatusException;
+
+  int get status;
   final String message;
   final Object? detail;
 
   @override
   String toString() => 'KetaException($status, $message)';
+}
+
+/// 400 — the canonical parse/validation failure.
+final class BadRequest extends KetaException {
+  const BadRequest(super.message, [super.detail]);
+  @override
+  int get status => 400;
+}
+
+/// 401.
+final class Unauthorized extends KetaException {
+  const Unauthorized(super.message, [super.detail]);
+  @override
+  int get status => 401;
+}
+
+/// 403.
+final class Forbidden extends KetaException {
+  const Forbidden(super.message, [super.detail]);
+  @override
+  int get status => 403;
+}
+
+/// 404.
+final class NotFound extends KetaException {
+  const NotFound(super.message, [super.detail]);
+  @override
+  int get status => 404;
+}
+
+/// 409.
+final class Conflict extends KetaException {
+  const Conflict(super.message, [super.detail]);
+  @override
+  int get status => 409;
+}
+
+/// 413 — `maxBodyBytes` exceeded.
+final class PayloadTooLarge extends KetaException {
+  const PayloadTooLarge(super.message, [super.detail]);
+  @override
+  int get status => 413;
+}
+
+/// 422.
+final class UnprocessableEntity extends KetaException {
+  const UnprocessableEntity(super.message, [super.detail]);
+  @override
+  int get status => 422;
+}
+
+/// 501 — scaffold stubs.
+final class NotImplementedYet extends KetaException {
+  const NotImplementedYet(super.message, [super.detail]);
+  @override
+  int get status => 501;
+}
+
+/// 503 — lockTimeout and other transient unavailability.
+final class Unavailable extends KetaException {
+  const Unavailable(super.message, [super.detail]);
+  @override
+  int get status => 503;
+}
+
+/// 504 — `timeout()`.
+final class GatewayTimeout extends KetaException {
+  const GatewayTimeout(super.message, [super.detail]);
+  @override
+  int get status => 504;
+}
+
+final class _StatusException extends KetaException {
+  const _StatusException(this.status, super.message, [super.detail]);
+  @override
+  final int status;
 }

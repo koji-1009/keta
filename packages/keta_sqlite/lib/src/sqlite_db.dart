@@ -3,7 +3,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keta/keta.dart' show KetaException;
+import 'package:keta/keta.dart' show Unavailable;
 import 'package:keta_db/keta_db.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -113,8 +113,7 @@ class SqliteDb implements Db {
       // Give up our slot without jumping the queue: successors still wait for
       // the holder that is actually running, then run in order.
       unawaited(previous.whenComplete(done.complete));
-      throw const KetaException(
-        503,
+      throw const Unavailable(
         'database busy: could not acquire the lock in time',
       );
     }

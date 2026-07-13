@@ -24,14 +24,14 @@ final class Schema {
     return errors;
   }
 
-  /// Validates [value] and returns it unchanged, throwing `KetaException(400)`
-  /// with the violation list as detail on any problem. Validation is the gate;
+  /// Validates [value] and returns it unchanged, throwing a [BadRequest] with
+  /// the violation list as detail on any problem. Validation is the gate;
   /// typing the result is the mapper's job
   /// (`Dto.fromJson(schema.require(body) as Map<String, Object?>)`).
   Object? require(Object? value) {
     final errors = validate(value);
     if (errors.isNotEmpty) {
-      throw KetaException(400, 'validation failed', errors);
+      throw BadRequest('validation failed', errors);
     }
     return value;
   }

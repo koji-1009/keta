@@ -85,7 +85,7 @@ void main() {
       expect(routes, contains("app.get('/users/:id',"));
       expect(
         routes,
-        contains("throw const KetaException(501, 'not implemented')"),
+        contains("throw const NotImplementedYet('not implemented')"),
       );
       expect(routes, contains('response: userDtoSchema'));
       expect(routes, contains("app.post('/users',"));

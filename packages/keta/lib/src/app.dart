@@ -195,9 +195,10 @@ class App<E> {
     _ => throw ArgumentError.value(path, 'path', 'must be a String or Path'),
   };
 
-  /// Wraps a typed handler so it presents as a plain [Handler]: captures are
-  /// parsed at the boundary (a [FormatException] becomes 400) and delivered as
-  /// the path's typed tuple.
+  /// Wraps a typed handler so it presents as a plain [Handler]: each capture
+  /// parses at the boundary (its contract turns invalid input into a
+  /// [BadRequest]; any other exception is a defect → 500) and the values are
+  /// delivered as the path's typed tuple.
   Handler<E> _typedAdapter<T>(
     Path<T> path,
     List<Capture<Object?>> captures,
@@ -208,14 +209,7 @@ class App<E> {
       final raw = ctxOf(c).orderedCaptures;
       final parsed = List<Object?>.filled(captures.length, null);
       for (var i = 0; i < captures.length; i++) {
-        try {
-          parsed[i] = captures[i].parse(raw[offset + i]);
-        } on FormatException {
-          throw KetaException(
-            400,
-            'invalid path parameter "${raw[offset + i]}"',
-          );
-        }
+        parsed[i] = captures[i].parse(raw[offset + i]);
       }
       return handler(c, path.buildTuple(parsed));
     };

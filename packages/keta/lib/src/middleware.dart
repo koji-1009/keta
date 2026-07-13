@@ -88,7 +88,7 @@ Middleware<E> cors<E>({
   };
 }
 
-/// Fails a request that outlives [d] with `KetaException(504)` and completes
+/// Fails a request that outlives [d] with a [GatewayTimeout] (504) and completes
 /// `c.aborted`. Cancellation is cooperative and does NOT stop the handler: a
 /// handler ignoring `c.aborted` runs to completion after the 504 is sent — its
 /// side effects (writes, resource use) still happen, and its late result is
@@ -102,7 +102,7 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
     if (completer.isCompleted) return;
     ctxOf(c).abort();
     completer.completeError(
-      const KetaException(504, 'request timeout'),
+      const GatewayTimeout('request timeout'),
       StackTrace.current,
     );
   });

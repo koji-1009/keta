@@ -34,7 +34,7 @@ shelf.Handler ketaToShelf<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
 /// Request and response bodies are streamed through unbuffered, so large
 /// uploads and long-lived responses (SSE, chunked) work. The request stream
 /// handed to the shelf handler is wrapped in a counting limiter that enforces
-/// [maxBodyBytes] as a `KetaException(413)` stream error (set it to the app's
+/// [maxBodyBytes] as a [PayloadTooLarge] stream error (set it to the app's
 /// `maxBodyBytes`). Websocket hijack is not supported — keta's [Transport]
 /// exposes no socket — and a `request.hijack()` surfaces as a `StateError`.
 Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
@@ -74,15 +74,15 @@ Uri _absolute(Uri uri, String? host) {
   ).replace(path: uri.path, query: uri.query.isEmpty ? null : uri.query);
 }
 
-/// Passes [source] through while counting bytes, failing with `KetaException`
-/// (413) once the cumulative size exceeds [maxBytes] — so App.maxBodyBytes is
+/// Passes [source] through while counting bytes, failing with a [PayloadTooLarge]
+/// once the cumulative size exceeds [maxBytes] — so App.maxBodyBytes is
 /// enforced at the transport-ingestion point, bridge-independently.
 Stream<List<int>> _limited(Stream<List<int>> source, int maxBytes) async* {
   var total = 0;
   await for (final chunk in source) {
     total += chunk.length;
     if (total > maxBytes) {
-      throw KetaException(413, 'request body exceeds $maxBytes bytes');
+      throw PayloadTooLarge('request body exceeds $maxBytes bytes');
     }
     yield chunk;
   }

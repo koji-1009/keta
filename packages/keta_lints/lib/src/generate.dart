@@ -316,7 +316,7 @@ String _generateRoutes(
       final doc = _routeDoc(op);
       buffer.writeln("  app.$method('${_ketaPath(pathEntry.key)}',");
       buffer.writeln(
-        "      (c) => throw const KetaException(501, 'not implemented')"
+        "      (c) => throw const NotImplementedYet('not implemented')"
         '${doc == null ? '' : ','}',
       );
       if (doc != null) buffer.writeln('      doc: $doc,');

@@ -133,7 +133,10 @@ void main() {
 
     test('an error before the deadline propagates unchanged', () async {
       final app = App<Env>()..use(timeout(const Duration(seconds: 5)));
-      app.get('/boom', (c) async => throw const KetaException(418, 'teapot'));
+      app.get(
+        '/boom',
+        (c) async => throw const KetaException.status(418, 'teapot'),
+      );
       final client = TestClient(app, newEnv());
       final r = await client.get('/boom');
       expect(r.status, 418);
@@ -391,7 +394,7 @@ void main() {
     app.get(
       '/keta',
       (Context<Env> c) =>
-          mode.wrap(() => throw const KetaException(418, 'teapot'))(),
+          mode.wrap(() => throw const KetaException.status(418, 'teapot'))(),
     );
     app.get(
       '/other',
@@ -414,12 +417,14 @@ void main() {
     expect(lines.any((l) => l['msg'] == 'unhandled exception'), isTrue);
   });
 
-  test('KetaException carries detail and hides it from toString', () {
-    const e = KetaException(422, 'invalid', ['field a']);
+  test('KetaException subtypes carry detail and hide it from toString', () {
+    const e = UnprocessableEntity('invalid', ['field a']);
     expect(e.status, 422);
     expect(e.detail, ['field a']);
     expect(e.toString(), 'KetaException(422, invalid)');
-    expect(const KetaException(400, 'x').detail, isNull);
+    expect(const BadRequest('x').detail, isNull);
+    // The arbitrary-status factory keeps its status.
+    expect(const KetaException.status(418, 'teapot').status, 418);
   });
 
   test('Response rejects control characters in header names/values', () {

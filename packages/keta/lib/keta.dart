@@ -23,7 +23,20 @@ export 'src/h1_transport.dart' show H1Transport;
 export 'src/log.dart' show Log, StdoutLog;
 export 'src/middleware.dart'
     show accessLog, recover, cors, timeout, tracing, TraceContext, traceKey;
-export 'src/response.dart' show Response, KetaException;
+export 'src/response.dart'
+    show
+        Response,
+        KetaException,
+        BadRequest,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Conflict,
+        PayloadTooLarge,
+        UnprocessableEntity,
+        NotImplementedYet,
+        Unavailable,
+        GatewayTimeout;
 export 'src/routing.dart'
     show
         Capture,
