@@ -203,7 +203,7 @@ void main() {
         doc: const RouteDoc(response: userDtoSchema, summary: 'get user'),
       );
       app
-          .on(root.lit('users'))
+          .on(root.segments('users'))
           .post(
             (c, _) => c.text('x'),
             doc: const RouteDoc(
@@ -252,7 +252,7 @@ void main() {
       () {
         final app = App<Ignored>();
         app
-            .on(root.lit('users'))
+            .on(root.segments('users'))
             .post(
               (c, _) => c.text('x', 201),
               doc: const RouteDoc(responses: {201: userDtoSchema}),

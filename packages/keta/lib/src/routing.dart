@@ -2,17 +2,29 @@
 /// single [Path] value whose type parameter is the tuple of its captures.
 library;
 
-/// A single capture in a path.
+/// A single capture in a path — the public extension point for typed path
+/// parameters.
 ///
-/// [parse] turns the raw segment string into `T`; a [FormatException] it
-/// throws becomes a `KetaException(400)` at the request boundary. [name]
-/// labels the parameter for OpenAPI (default `p0`, `p1`, …). [schemaType] is
-/// the JSON-Schema primitive the capture maps to.
+/// [parse] turns the raw segment string into `T`; a [FormatException] it throws
+/// becomes a `KetaException(400)` at the request boundary. [name] labels the
+/// parameter for OpenAPI (default `p0`, `p1`, …). [schema] is the JSON-Schema
+/// fragment projected onto the OpenAPI parameter, carried as data. A custom
+/// capture is a `parse` + `schema` pair:
+///
+/// ```dart
+/// final role = Capture<Role>((s) => Role.values.byName(s),
+///     schema: {'type': 'string', 'enum': ['admin', 'member']});
+/// ```
 class Capture<T> {
-  const Capture(this.parse, {this.name, this.schemaType = 'string'});
+  const Capture(this.parse, {this.name, required this.schema});
   final T Function(String) parse;
   final String? name;
-  final String schemaType;
+  final Map<String, Object?> schema;
+
+  /// A named copy, for OpenAPI parameter naming: `integer('id')`. Calling the
+  /// capture is the one naming form — there is no separate `named()` helper.
+  Capture<T> call(String name) =>
+      Capture<T>(parse, name: name, schema: schema);
 }
 
 String _identity(String s) => s;
@@ -24,15 +36,12 @@ bool _toBool(String s) => switch (s) {
   _ => throw FormatException('not a bool', s),
 };
 
-/// Built-in captures, exposed as top-level constants.
-const Capture<String> str = Capture(_identity);
-const Capture<int> integer = Capture(_toInt, schemaType: 'integer');
-const Capture<double> dbl = Capture(_toDouble, schemaType: 'number');
-const Capture<bool> boolean = Capture(_toBool, schemaType: 'boolean');
-
-/// Returns a copy of [base] carrying [name] (for OpenAPI parameter naming).
-Capture<T> named<T>(Capture<T> base, String name) =>
-    Capture<T>(base.parse, name: name, schemaType: base.schemaType);
+/// Built-in captures, exposed as top-level constants. The four names match the
+/// OpenAPI types they project — a convenience, not a separate vocabulary.
+const Capture<String> string = Capture(_identity, schema: {'type': 'string'});
+const Capture<int> integer = Capture(_toInt, schema: {'type': 'integer'});
+const Capture<double> number = Capture(_toDouble, schema: {'type': 'number'});
+const Capture<bool> boolean = Capture(_toBool, schema: {'type': 'boolean'});
 
 /// One path segment: a fixed literal or a capture.
 sealed class Segment {
@@ -50,18 +59,43 @@ class CaptureSegment extends Segment {
 }
 
 /// A path whose type parameter `T` is the tuple of its captures. Built by
-/// chaining [lit] and `cap` from [root]; only [root] is `const`.
+/// chaining [segments] and `capture` from [root]; only [root] is `const`.
 class Path<T> {
-  const Path._(this.segments, this.buildTuple);
-  final List<Segment> segments;
+  const Path._(this.parts, this.buildTuple);
+
+  /// The ordered path parts (literals and captures).
+  final List<Segment> parts;
 
   /// Rebuilds the tuple `T` from the ordered, already-parsed capture values.
-  /// Arity-specific; supplied by the `cap` extensions.
+  /// Arity-specific; supplied by the `capture` extensions.
   final T Function(List<Object?> parsed) buildTuple;
+
+  /// Appends one or more literal segments from a `/`-separated [run]
+  /// (`'api/v1/users'`). Arity-preserving, so one call may swallow any number of
+  /// segments without touching the type machinery. An empty part (a leading,
+  /// trailing, or doubled `/`) or a `:`-prefixed part (string-syntax vocabulary)
+  /// is an [ArgumentError] at construction.
+  Path<T> segments(String run) {
+    final added = <Segment>[];
+    for (final part in run.split('/')) {
+      if (part.isEmpty) {
+        throw ArgumentError.value(run, 'run', 'empty path segment');
+      }
+      if (part.startsWith(':')) {
+        throw ArgumentError.value(
+          run,
+          'run',
+          'segments() takes literals; use capture() for parameters',
+        );
+      }
+      added.add(LiteralSegment(part));
+    }
+    return Path<T>._([...parts, ...added], buildTuple);
+  }
 
   /// The captures, in path order.
   Iterable<Capture<Object?>> get captures =>
-      segments.whereType<CaptureSegment>().map((s) => s.capture);
+      parts.whereType<CaptureSegment>().map((s) => s.capture);
 }
 
 () _unit(List<Object?> parsed) => ();
@@ -69,39 +103,33 @@ class Path<T> {
 /// The empty path. Everything else is chained from here.
 const Path<()> root = Path<()>._(<Segment>[], _unit);
 
-/// `lit` preserves arity, so the tuple builder is unchanged.
-extension PathLit<T> on Path<T> {
-  Path<T> lit(String segment) =>
-      Path<T>._([...segments, LiteralSegment(segment)], buildTuple);
-}
-
 // Arity-transition extensions, fixed 0–4. Each rebuilds the whole tuple from
-// the full ordered capture list, so indices stay stable across `lit`.
+// the full ordered capture list, so indices stay stable across `segments`.
 
-extension PathCap0 on Path<()> {
-  Path<(A,)> cap<A>(Capture<A> capture) => Path<(A,)>._([
-    ...segments,
+extension PathCapture0 on Path<()> {
+  Path<(A,)> capture<A>(Capture<A> capture) => Path<(A,)>._([
+    ...parts,
     CaptureSegment(capture),
   ], (parsed) => (parsed[0] as A,));
 }
 
-extension PathCap1<A> on Path<(A,)> {
-  Path<(A, B)> cap<B>(Capture<B> capture) => Path<(A, B)>._([
-    ...segments,
+extension PathCapture1<A> on Path<(A,)> {
+  Path<(A, B)> capture<B>(Capture<B> capture) => Path<(A, B)>._([
+    ...parts,
     CaptureSegment(capture),
   ], (parsed) => (parsed[0] as A, parsed[1] as B));
 }
 
-extension PathCap2<A, B> on Path<(A, B)> {
-  Path<(A, B, C)> cap<C>(Capture<C> capture) => Path<(A, B, C)>._([
-    ...segments,
+extension PathCapture2<A, B> on Path<(A, B)> {
+  Path<(A, B, C)> capture<C>(Capture<C> capture) => Path<(A, B, C)>._([
+    ...parts,
     CaptureSegment(capture),
   ], (parsed) => (parsed[0] as A, parsed[1] as B, parsed[2] as C));
 }
 
-extension PathCap3<A, B, C> on Path<(A, B, C)> {
-  Path<(A, B, C, D)> cap<D>(Capture<D> capture) => Path<(A, B, C, D)>._(
-    [...segments, CaptureSegment(capture)],
+extension PathCapture3<A, B, C> on Path<(A, B, C)> {
+  Path<(A, B, C, D)> capture<D>(Capture<D> capture) => Path<(A, B, C, D)>._(
+    [...parts, CaptureSegment(capture)],
     (parsed) =>
         (parsed[0] as A, parsed[1] as B, parsed[2] as C, parsed[3] as D),
   );
@@ -119,9 +147,9 @@ Path<dynamic> parsePathString(String pattern) {
       if (name.isEmpty) {
         throw ArgumentError.value(pattern, 'pattern', 'empty capture name');
       }
-      path = _appendCapture(path, named(str, name));
+      path = _appendCapture(path, string(name));
     } else {
-      path = path.lit(raw);
+      path = path.segments(raw);
     }
   }
   return path;
@@ -131,7 +159,7 @@ Path<dynamic> parsePathString(String pattern) {
 /// (the string syntax carries no tuple; captures are read via `c.param`).
 Path<dynamic> _appendCapture(Path<dynamic> path, Capture<Object?> capture) =>
     Path<dynamic>._([
-      ...path.segments,
+      ...path.parts,
       CaptureSegment(capture),
     ], path.buildTuple);
 

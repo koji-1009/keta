@@ -24,7 +24,7 @@ void register(App<Env> app) {
     doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user'),
   );
 
-  app.on(root.lit('users')).post((c, _) async {
+  app.on(root.segments('users')).post((c, _) async {
     final dto = UserDto.fromJson(
       userDtoSchema.require(await c.body()) as Map<String, Object?>,
     );
@@ -38,10 +38,10 @@ void register(App<Env> app) {
   app
       .on(
         root
-            .lit('users')
-            .cap(named(str, 'uid'))
-            .lit('tags')
-            .cap(named(integer, 'index')),
+            .segments('users')
+            .capture(string('uid'))
+            .segments('tags')
+            .capture(integer('index')),
       )
       .get((c, (String, int) p) async {
         final rows = await c.env.db.reader.query(

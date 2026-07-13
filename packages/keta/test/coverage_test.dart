@@ -241,7 +241,7 @@ void main() {
     () async {
       final app = App<Env>();
       app
-          .on(root.lit('m').cap(dbl).cap(boolean))
+          .on(root.segments('m').capture(number).capture(boolean))
           .get((c, p) => c.json({'d': p.$1, 'b': p.$2}));
       final client = TestClient(app, newEnv());
 
@@ -292,7 +292,7 @@ void main() {
     final app = App<Env>();
     app.get('/users/:id', (c) => c.text(''), doc: 'get-user');
     app
-        .on(root.lit('p').cap(integer))
+        .on(root.segments('p').capture(integer))
         .post((c, p) => c.text(''), doc: 'post-p');
     final routes = app.routes;
     expect(

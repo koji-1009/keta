@@ -101,10 +101,10 @@ void main() {
     });
   });
 
-  test('nameless captures become p{index} with their schemaType', () {
+  test('nameless captures become p{index} with their schema fragment', () {
     final app = App<Ignored>();
     app
-        .on(root.lit('users').cap(integer).lit('score').cap(dbl))
+        .on(root.segments('users').capture(integer).segments('score').capture(number))
         .get((c, p) => c.text('x'));
     final doc = OpenApi.fromRoutes(app.routes).toJson();
     final paths = doc['paths'] as Map;
@@ -117,12 +117,36 @@ void main() {
     expect(((params[1] as Map)['schema'] as Map)['type'], 'number');
   });
 
+  test('a custom capture projects its schema fragment verbatim', () {
+    final color = Capture<String>(
+      (s) => s,
+      schema: {
+        'type': 'string',
+        'enum': ['red', 'green'],
+      },
+    );
+    final app = App<Ignored>();
+    app
+        .on(root.segments('c').capture(color('shade')))
+        .get((c, p) => c.text('x'));
+    final params =
+        (((OpenApi.fromRoutes(app.routes).toJson()['paths']
+                        as Map)['/c/{shade}']
+                    as Map)['get']
+                as Map)['parameters']
+            as List;
+    expect((params.single as Map)['schema'], {
+      'type': 'string',
+      'enum': ['red', 'green'],
+    });
+  });
+
   test(
     'a mixed named/nameless capture path counts every capture in the index',
     () {
       final app = App<Ignored>();
       app
-          .on(root.cap(named(integer, 'id')).cap(dbl))
+          .on(root.capture(integer('id')).capture(number))
           .get((c, p) => c.text('x'));
       final paths = OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map;
       expect(paths.keys, ['/{id}/{p1}']);
@@ -143,7 +167,7 @@ void main() {
     // RouteEntry to prove the emitter guards it independently.)
     final route = RouteEntry(
       'GET',
-      [const CaptureSegment(integer), CaptureSegment(named(dbl, 'p0'))],
+      [const CaptureSegment(integer), CaptureSegment(number('p0'))],
       null,
       '/:p0/:p0',
     );

@@ -28,18 +28,16 @@ export 'src/routing.dart'
     show
         Capture,
         Path,
-        PathLit,
-        PathCap0,
-        PathCap1,
-        PathCap2,
-        PathCap3,
+        PathCapture0,
+        PathCapture1,
+        PathCapture2,
+        PathCapture3,
         Segment,
         LiteralSegment,
         CaptureSegment,
         root,
-        str,
+        string,
         integer,
-        dbl,
-        boolean,
-        named;
+        number,
+        boolean;
 export 'src/transport.dart' show Transport, TransportRequest, TransportServer;

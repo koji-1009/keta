@@ -43,6 +43,8 @@ class Env implements HasLog {
 
 Env newEnv() => Env(MemLog(<Map<String, Object?>>[]));
 
+enum Shade { red, green }
+
 void main() {
   group('routing — string syntax', () {
     test('static and captured paths dispatch', () async {
@@ -74,10 +76,10 @@ void main() {
       app
           .on(
             root
-                .lit('users')
-                .cap(named(str, 'uid'))
-                .lit('posts')
-                .cap(named(integer, 'postId')),
+                .segments('users')
+                .capture(string('uid'))
+                .segments('posts')
+                .capture(integer('postId')),
           )
           .post((c, p) => c.json({'uid': p.$1, 'postId': p.$2}));
       final client = TestClient(app, newEnv());
@@ -90,10 +92,46 @@ void main() {
 
     test('a non-parsable typed capture yields 400', () async {
       final app = App<Env>();
-      app.on(root.lit('n').cap(integer)).get((c, p) => c.json({'n': p.$1}));
+      app
+          .on(root.segments('n').capture(integer))
+          .get((c, p) => c.json({'n': p.$1}));
       final client = TestClient(app, newEnv());
 
       expect((await client.get('/n/x')).status, 400);
+    });
+
+    test('segments batches a "/"-separated run into literal segments', () async {
+      final app = App<Env>();
+      app
+          .on(root.segments('api/v1/ping'))
+          .get((c, _) => c.text('pong'));
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/api/v1/ping')).text(), 'pong');
+    });
+
+    test('segments rejects empty parts and ":"-prefixed literals', () {
+      expect(() => root.segments('a//b'), throwsArgumentError); // doubled slash
+      expect(() => root.segments('/a'), throwsArgumentError); // leading slash
+      expect(() => root.segments('a/'), throwsArgumentError); // trailing slash
+      expect(() => root.segments(':id'), throwsArgumentError); // capture vocab
+    });
+
+    test('a custom capture (parse + schema pair) drives the typed tuple', () async {
+      final shade = Capture<Shade>(
+        Shade.values.byName,
+        schema: {
+          'type': 'string',
+          'enum': ['red', 'green'],
+        },
+      );
+      final app = App<Env>();
+      app
+          .on(root.segments('c').capture(shade('shade')))
+          .get((c, (Shade,) p) => c.text(p.$1.name));
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/c/green')).text(), 'green');
     });
   });
 
@@ -124,7 +162,7 @@ void main() {
       final app = App<Env>();
       app
           .group('/t/:tid')
-          .on(root.lit('p').cap(integer))
+          .on(root.segments('p').capture(integer))
           .get((c, p) => c.json({'tid': c.param<String>('tid'), 'p': p.$1}));
       final client = TestClient(app, newEnv());
 

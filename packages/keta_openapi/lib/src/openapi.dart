@@ -63,7 +63,7 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
         'name': param.$1,
         'in': 'path',
         'required': true,
-        'schema': {'type': param.$2},
+        'schema': param.$2,
       },
   ];
   // OpenAPI forbids two path parameters with the same name; a user-named
@@ -111,11 +111,13 @@ Map<String, Object?> _jsonBody(Schema schema) => {
   },
 };
 
-Iterable<(String, String)> _pathParameters(List<Segment> segments) sync* {
+Iterable<(String, Map<String, Object?>)> _pathParameters(
+  List<Segment> segments,
+) sync* {
   var index = 0;
   for (final segment in segments) {
     if (segment is CaptureSegment) {
-      yield (segment.capture.name ?? 'p$index', segment.capture.schemaType);
+      yield (segment.capture.name ?? 'p$index', segment.capture.schema);
       index++;
     }
   }

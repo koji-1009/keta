@@ -110,7 +110,7 @@ class App<E> {
     List<Middleware<E>> groupMiddleware,
   ) {
     final base = _basePath(path);
-    final segments = [...prefixSegments, ...base.segments];
+    final segments = [...prefixSegments, ...base.parts];
     // Captures from the whole path — a captured group prefix must be readable
     // via c.param too.
     _register(
@@ -131,7 +131,7 @@ class App<E> {
     List<Segment> prefixSegments,
     List<Middleware<E>> groupMiddleware,
   ) {
-    final segments = [...prefixSegments, ...path.segments];
+    final segments = [...prefixSegments, ...path.parts];
     // The tuple carries only the base path's captures; any group-prefix
     // captures precede them in match order, so the adapter reads the base
     // captures starting past the prefix ones.
@@ -344,7 +344,7 @@ class App<E> {
 }
 
 List<Segment> _prefixSegments(String prefix) =>
-    parsePathString(prefix).segments;
+    parsePathString(prefix).parts;
 
 /// A prefixed child router with its own confined middleware.
 class RouteGroup<E> {
