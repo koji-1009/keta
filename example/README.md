@@ -32,6 +32,7 @@ The middleware stack shows the common cross-cutting concerns: `accessLog`,
 | PUT    | `/users/:id`               | Replace a user (404 if absent)       |
 | DELETE | `/users/:id`               | Delete a user (204; 404 if absent)   |
 | GET    | `/users/:uid/tags/:index`  | Read one tag by index                |
+| POST   | `/uploads`                 | multipart/form-data upload (keta_multipart) |
 | GET    | `/metrics`                 | Prometheus-format request metrics    |
 
 ```bash

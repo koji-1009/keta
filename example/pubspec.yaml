@@ -13,6 +13,7 @@ dependencies:
   keta_sqlite: ^0.1.0
   keta_openapi: ^0.1.0
   keta_otel: ^0.1.0
+  keta_multipart: ^0.1.0
 
 dev_dependencies:
   test: ^1.25.0

@@ -20,6 +20,7 @@ workspace:
   - packages/keta_shelf
   - packages/keta_files
   - packages/keta_otel
+  - packages/keta_multipart
   - example
   - example_files
   - example_auth
