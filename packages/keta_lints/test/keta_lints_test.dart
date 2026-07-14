@@ -100,6 +100,71 @@ void main() {
       expect(scaffold.contractTest, contains('userDtoSchema.validate'));
     });
 
+    test('a declared scheme flows into the route doc and a 401 contract test', () {
+      final doc = {
+        ..._doc,
+        'paths': {
+          '/users': {
+            'post': {
+              'security': [
+                {'bearer': <String>[]},
+              ],
+              'responses': {'200': <String, Object?>{}},
+            },
+          },
+          '/users/{id}': {
+            'get': {
+              'security': [
+                {'bearer': <String>[]},
+              ],
+              'responses': {'200': <String, Object?>{}},
+            },
+          },
+        },
+      };
+      final s = generateScaffold(doc);
+      expect(s.routes, contains('security: [bearer]'));
+      // routes.dart exposes the shared assembly point the tests and tool call.
+      expect(s.routes, contains('App<Object?> buildApp()'));
+      // The 401 tests drive buildApp — green by wiring enforcement there, never
+      // by editing the test.
+      expect(
+        s.contractTest,
+        contains('POST /users rejects a request without credentials'),
+      );
+      expect(
+        s.contractTest,
+        contains('TestClient(buildApp(), null)'),
+      );
+      expect(s.contractTest, contains("client.post('/users')).status, 401"));
+      expect(s.contractTest, contains("client.get('/users/x')).status, 401"));
+      expect(s.contractTest, isNot(contains('register(app)')));
+      // The tool builds through the same buildApp seam.
+      expect(s.openapiTool, contains('OpenApi.fromRoutes(buildApp().routes)'));
+      // Both outputs parse cleanly (test discipline: generated code is valid).
+      parseString(content: s.routes, throwIfDiagnostics: true);
+      parseString(content: s.contractTest, throwIfDiagnostics: true);
+    });
+
+    test('an unknown security scheme is outside the canonical subset', () {
+      expect(
+        () => generateScaffold({
+          ..._doc,
+          'paths': {
+            '/x': {
+              'get': {
+                'security': [
+                  {'oauth2': <String>[]},
+                ],
+                'responses': {'200': <String, Object?>{}},
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
     test('escapes newlines and \$ in generated strings', () {
       final doc = {
         'openapi': '3.1.0',

@@ -3,5 +3,7 @@
 library;
 
 export 'src/openapi.dart' show OpenApi;
-export 'src/route_doc.dart' show RouteDoc;
+export 'src/route_doc.dart'
+    show RouteDoc, SecurityScheme, bearer, apiKey;
 export 'src/schema.dart' show Schema;
+export 'src/security.dart' show SecurityPolicy, enforceSecurity;

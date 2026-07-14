@@ -71,6 +71,10 @@ class RequestCtx<E> {
   /// by dispatch so app-level middleware can wrap the 404/405 synthesis too.
   FutureOr<Response> Function(Context<E>)? matched;
 
+  /// The matched route's opaque `doc` (a keta_openapi `RouteDoc`, or null). The
+  /// core carries it without interpreting it; Ring 2 (`enforceSecurity`) reads it.
+  Object? matchedDoc;
+
   /// Whether some route shares this path (distinguishes 405 from 404).
   bool pathMatched = false;
 
@@ -190,6 +194,10 @@ extension type Context<E>(RequestCtx<E> _raw) {
   String get remoteAddress => _raw.remoteAddress;
 
   Log get log => _raw.log;
+
+  /// The matched route's doc (a keta_openapi `RouteDoc`, or null), returned
+  /// opaquely — the core holds no doc vocabulary; Ring 2 interprets it.
+  Object? get routeDoc => _raw.matchedDoc;
 
   /// Completes when the request is cancelled (timeout or client disconnect).
   /// Observing it is optional — cancellation is cooperative.

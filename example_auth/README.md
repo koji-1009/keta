@@ -1,29 +1,35 @@
 # keta_auth_example
 
-A reference implementation of **app-defined authentication** for keta. keta
-ships no auth (spec §10) — this is the pattern to copy, not a framework feature.
-It is deliberately built from primitives keta already gives you:
+A reference for **declaration-driven authentication** in keta. keta ships no
+auth (spec §10) — you declare what a route requires and wire one gate; keta owns
+only the plumbing that matches declarations to your verifiers.
 
-- `Middleware<E>` — compose `auth()` then a `requireRole(...)` guard on a group
-- `Key<T>` + `Context.set/get` — carry the authenticated role downstream
-- `c.header('authorization')` — read the credential
-- `Unauthorized` (401) / `Forbidden` (403) — short-circuit with the right status
-- `app.group(prefix)..use(...)` — apply the guards to a subtree, on match only
+One line per route drives three things from a single source:
 
-`lib/auth.dart` is ~30 lines. A real app swaps the stand-in token table for a
-JWT or session check — the middleware shape is unchanged.
+- **OpenAPI** — `RouteDoc(security: [bearer])` emits `security: [{bearer: []}]`,
+  an automatic `401`, and a `bearer` entry under `components/securitySchemes`.
+- **Runtime** — a single upstream `app.use(enforceSecurity(policy))` reads the
+  matched route's declaration from `c.routeDoc` and raises `Unauthorized` (401)
+  when no verifier passes. "declared but unenforced" is structurally impossible.
+- **Authorization** stays ordinary app middleware: a `requireRole('admin')`
+  guard raises `Forbidden` (403). keta never owns the credential check itself.
+
+`lib/auth.dart` is the app's part: a `SecurityPolicy` whose `bearer` verifier
+resolves a token to a role (swap the stand-in table for a JWT or session
+unchanged) and the role guard.
 
 ## Run
 
 ```bash
-dart run bin/main.dart   # serves on :8080 (no database)
+dart run bin/main.dart              # serves on :8080 (no database)
+dart run tool/openapi.dart          # prints the OpenAPI, security included
 ```
 
 ## Try it
 
 ```bash
-curl -s localhost:8080/public                                              # 200, open
-curl -s localhost:8080/admin/whoami                                        # 401, no token
+curl -s localhost:8080/public                                                # 200, public
+curl -s localhost:8080/admin/whoami                                          # 401, no token
 curl -s localhost:8080/admin/whoami -H 'authorization: Bearer member-token'  # 403, wrong role
 curl -s localhost:8080/admin/whoami -H 'authorization: Bearer admin-token'   # 200 {"role":"admin"}
 ```

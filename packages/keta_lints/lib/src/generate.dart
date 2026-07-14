@@ -30,7 +30,7 @@ Scaffold generateScaffold(Map<String, Object?> document) {
     dtos: dtos,
     routes: routes,
     openapiTool: _openapiTool,
-    contractTest: _generateContractTest(schemas),
+    contractTest: _generateContractTest(document, schemas),
   );
 }
 
@@ -324,6 +324,19 @@ String _generateRoutes(
     }
   }
   buffer.writeln('}');
+  buffer
+    ..writeln()
+    ..writeln('/// The single assembly point for the app: main, the contract')
+    ..writeln('/// tests, and tool/openapi.dart all build it here, so middleware')
+    ..writeln('/// wired once below covers all three.')
+    ..writeln('App<Object?> buildApp() {')
+    ..writeln('  final app = App<Object?>();')
+    ..writeln('  // TODO: wire middleware here -- recover(), tx(), and for the')
+    ..writeln('  // declared security app.use(enforceSecurity(policy)). The')
+    ..writeln('  // "no credentials -> 401" contract tests stay red until you do.')
+    ..writeln('  register(app);')
+    ..writeln('  return app;')
+    ..writeln('}');
   return buffer.toString();
 }
 
@@ -336,8 +349,32 @@ String? _routeDoc(Map<String, Object?> op) {
   final ok = (op['responses'] as Map?)?['200'];
   final response = _schemaRefName((ok as Map?)?['content']);
   if (response != null) parts.add('response: ${_lowerFirst(response)}Schema');
+  final security = _securityDecl(op['security']);
+  if (security != null) parts.add('security: $security');
   if (parts.isEmpty) return null;
   return 'RouteDoc(${parts.join(', ')})';
+}
+
+/// The `security:` argument for a generated RouteDoc, or null when the operation
+/// declares none. `[]` is preserved as `const []` (explicit publicness); each
+/// requirement's scheme maps to a provided constant (bearer/apiKey). A scheme
+/// outside that set is outside the canonical subset.
+String? _securityDecl(Object? security) {
+  if (security is! List) return null;
+  if (security.isEmpty) return 'const []';
+  final schemes = [
+    for (final req in security)
+      if (req is Map && req.isNotEmpty)
+        switch (req.keys.first.toString()) {
+          'bearer' => 'bearer',
+          'apiKey' => 'apiKey',
+          final name => throw ScaffoldError(
+            'security scheme "$name" is outside the provided set '
+            '(bearer, apiKey); inject it via the OpenApi override hatch',
+          ),
+        },
+  ];
+  return schemes.isEmpty ? null : '[${schemes.join(', ')}]';
 }
 
 String? _schemaRefName(Object? content) {
@@ -348,11 +385,22 @@ String? _schemaRefName(Object? content) {
   return ref is String ? _refName(ref) : null;
 }
 
-String _generateContractTest(Map<String, Map<String, Object?>> schemas) {
-  final buffer = StringBuffer()
-    ..writeln("import 'package:test/test.dart';")
+String _generateContractTest(
+  Map<String, Object?> document,
+  Map<String, Map<String, Object?>> schemas,
+) {
+  final secured = _securedEndpoints(document);
+  final buffer = StringBuffer();
+  // Endpoint tests drive the app through buildApp, so they need the test client
+  // and the routes; import them only when there are such tests, so the output
+  // always passes analyze.
+  if (secured.isNotEmpty) buffer.writeln("import 'package:keta/test.dart';");
+  buffer.writeln("import 'package:test/test.dart';");
+  buffer
     ..writeln()
-    ..writeln("import '../lib/dtos.dart';")
+    ..writeln("import '../lib/dtos.dart';");
+  if (secured.isNotEmpty) buffer.writeln("import '../lib/routes.dart';");
+  buffer
     ..writeln()
     ..writeln('void main() {');
   for (final entry in schemas.entries) {
@@ -369,8 +417,47 @@ String _generateContractTest(Map<String, Map<String, Object?>> schemas) {
     );
     buffer.writeln('  });');
   }
+  // For each endpoint that declares security, a "no credentials → 401" test.
+  // It drives the shared buildApp, so the path to green is wiring enforcement
+  // once there — never editing this test (over-claiming security is caught too).
+  for (final e in secured) {
+    buffer.writeln(
+      "  test('${e.method.toUpperCase()} ${e.path} rejects a request "
+      "without credentials', () async {",
+    );
+    buffer.writeln('    final client = TestClient(buildApp(), null);');
+    buffer.writeln(
+      "    expect((await client.${e.method}('${e.samplePath}')).status, 401);",
+    );
+    buffer.writeln('  });');
+  }
   buffer.writeln('}');
   return buffer.toString();
+}
+
+/// One route+method that declares a non-empty `security` in [document].
+class _SecuredEndpoint {
+  _SecuredEndpoint(this.method, this.path, this.samplePath);
+  final String method; // lower-case, e.g. 'post'
+  final String path; // OpenAPI path, e.g. '/users/{id}'
+  final String samplePath; // params filled, e.g. '/users/x'
+}
+
+List<_SecuredEndpoint> _securedEndpoints(Map<String, Object?> document) {
+  final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
+  return [
+    for (final pathEntry in paths.entries)
+      for (final opEntry
+          in (pathEntry.value as Map).cast<String, Object?>().entries)
+        if (_httpMethods.contains(opEntry.key))
+          if ((opEntry.value as Map).cast<String, Object?>()['security']
+              case final List<Object?> s when s.isNotEmpty)
+            _SecuredEndpoint(
+              opEntry.key,
+              pathEntry.key,
+              pathEntry.key.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x'),
+            ),
+  ];
 }
 
 Object? _sample(
@@ -424,15 +511,12 @@ const _httpMethods = {
 const _openapiTool = '''
 import 'dart:io';
 
-import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
 import '../lib/routes.dart';
 
 void main() {
-  final app = App<Object?>();
-  register(app);
-  stdout.write(OpenApi.fromRoutes(app.routes).toYaml());
+  stdout.write(OpenApi.fromRoutes(buildApp().routes).toYaml());
 }
 ''';
 

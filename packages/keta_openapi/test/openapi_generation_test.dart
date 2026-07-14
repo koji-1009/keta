@@ -182,4 +182,61 @@ void main() {
       ),
     );
   });
+
+  group('security', () {
+    Map<String, Object?> op(Map<String, Object?> doc, String path) =>
+        ((doc['paths'] as Map)[path] as Map)['get'] as Map<String, Object?>;
+
+    test('a declared scheme emits per-op security, the component, and a 401', () {
+      final app = App<Ignored>()
+        ..get(
+          '/secret',
+          (c) => c.text('x'),
+          doc: const RouteDoc(security: [bearer]),
+        );
+      final doc = OpenApi.fromRoutes(app.routes).toJson();
+      final o = op(doc, '/secret');
+      expect(o['security'], [
+        {'bearer': <String>[]},
+      ]);
+      expect((o['responses'] as Map).containsKey('401'), isTrue);
+      expect(((doc['components'] as Map)['securitySchemes'] as Map)['bearer'], {
+        'type': 'http',
+        'scheme': 'bearer',
+      });
+    });
+
+    test('the global default applies where a route declares none', () {
+      final app = App<Ignored>()..get('/x', (c) => c.text('x'));
+      final doc = OpenApi.fromRoutes(app.routes, security: [bearer]).toJson();
+      expect(op(doc, '/x')['security'], [
+        {'bearer': <String>[]},
+      ]);
+    });
+
+    test('an empty security list overrides the default to public', () {
+      final app = App<Ignored>()
+        ..get('/open', (c) => c.text('x'), doc: const RouteDoc(security: []));
+      final doc = OpenApi.fromRoutes(app.routes, security: [bearer]).toJson();
+      final o = op(doc, '/open');
+      expect(o.containsKey('security'), isFalse);
+      expect((o['responses'] as Map).containsKey('401'), isFalse);
+      expect(doc.containsKey('components'), isFalse);
+    });
+
+    test('a user-declared 401 wins over the automatic one', () {
+      final app = App<Ignored>()
+        ..get(
+          '/s',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            security: [bearer],
+            responses: {401: createdSchema},
+          ),
+        );
+      final doc = OpenApi.fromRoutes(app.routes).toJson();
+      final r401 = (op(doc, '/s')['responses'] as Map)['401'] as Map;
+      expect(r401.containsKey('content'), isTrue); // the user's body, not bare
+    });
+  });
 }

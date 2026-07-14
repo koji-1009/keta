@@ -22,30 +22,41 @@ class OpenApi {
     List<RouteEntry> routes, {
     String title = 'API',
     String version = '0.1.0',
+    List<SecurityScheme> security = const [],
     Map<String, Object?> Function(Map<String, Object?> document)? override,
   }) {
     final paths = <String, Map<String, Object?>>{};
     final schemas = <String, Map<String, Object?>>{};
+    final securitySchemes = <String, Map<String, Object?>>{};
 
     for (final route in routes) {
       final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
+      // null follows the global default; an empty list is explicitly public.
+      final effective = doc?.security ?? security;
       final pathItem = paths.putIfAbsent(
         _openApiPath(route.segments),
         () => {},
       );
-      pathItem[route.method.toLowerCase()] = _operation(route, doc);
+      pathItem[route.method.toLowerCase()] = _operation(route, doc, effective);
       if (doc != null) {
         for (final schema in doc.schemas) {
           _collect(schema, schemas);
         }
       }
+      for (final scheme in effective) {
+        securitySchemes[scheme.name] = scheme.json;
+      }
     }
 
+    final components = <String, Object?>{
+      if (schemas.isNotEmpty) 'schemas': schemas,
+      if (securitySchemes.isNotEmpty) 'securitySchemes': securitySchemes,
+    };
     final document = <String, Object?>{
       'openapi': '3.1.0',
       'info': {'title': title, 'version': version},
       'paths': paths,
-      if (schemas.isNotEmpty) 'components': {'schemas': schemas},
+      if (components.isNotEmpty) 'components': components,
     };
     return OpenApi._(override == null ? document : override(document));
   }
@@ -56,7 +67,11 @@ class OpenApi {
   String toYaml() => encodeYaml(document);
 }
 
-Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
+Map<String, Object?> _operation(
+  RouteEntry route,
+  RouteDoc? doc,
+  List<SecurityScheme> security,
+) {
   final parameters = [
     for (final param in _pathParameters(route.segments))
       {
@@ -90,8 +105,14 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
       };
     }
   }
+  final documentedAny = responses.isNotEmpty;
+  // A secured operation gains a 401 automatically — a deterministic projection
+  // of the declaration — unless the user documented 401 themselves (theirs wins).
+  if (security.isNotEmpty && !responses.containsKey('401')) {
+    responses['401'] = {'description': 'Unauthorized'};
+  }
   // Only fabricate a 200 when the route documents no response at all.
-  if (responses.isEmpty) {
+  if (!documentedAny) {
     responses['200'] = {'description': 'OK'};
   }
   return {
@@ -99,6 +120,12 @@ Map<String, Object?> _operation(RouteEntry route, RouteDoc? doc) {
     if (parameters.isNotEmpty) 'parameters': parameters,
     if (doc?.requestBody != null)
       'requestBody': {'required': true, ..._jsonBody(doc!.requestBody!)},
+    if (security.isNotEmpty)
+      'security': [
+        for (final scheme in security) {
+          scheme.name: <String>[],
+        },
+      ],
     'responses': responses,
   };
 }

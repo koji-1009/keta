@@ -324,6 +324,7 @@ class App<E> {
       composed,
       reg.captureNames,
       reg.template,
+      reg.doc,
     );
   }
 
@@ -407,10 +408,11 @@ class _TrieNode<E> {
 }
 
 class _Compiled<E> {
-  _Compiled(this.handler, this.captureNames, this.template);
+  _Compiled(this.handler, this.captureNames, this.template, this.doc);
   final Handler<E> handler;
   final List<String> captureNames;
   final String template;
+  final Object? doc;
 }
 
 /// The compiled dispatcher: a radix trie plus the bound env. Matching stays on
@@ -473,6 +475,7 @@ class Router<E> {
             body: request.bodyStream,
           )
           ..matched = compiled?.handler
+          ..matchedDoc = compiled?.doc
           ..pathMatched = pathMatched;
     final c = Context<E>(ctx);
     // Client-disconnect → cooperative cancellation. abort() is idempotent, so a
