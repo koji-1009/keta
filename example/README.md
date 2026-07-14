@@ -11,23 +11,36 @@ with OpenAPI output. It doubles as the reference the file-convention example
 dart run bin/main.dart
 ```
 
-`main` applies any pending migrations from `migrations/` once, then serves on
-`:8080` (migrations are wired into startup, not run by hand). Stop with SIGTERM
-for a graceful shutdown. For a watch-and-restart dev loop: `dart run tool/dev.dart`.
+`main` applies any pending migrations from `migrations/` once, then serves
+(migrations are wired into startup, not run by hand). Stop with SIGTERM for a
+graceful shutdown. For a watch-and-restart dev loop: `dart run tool/dev.dart`.
+
+Configuration is environment-only (§9): `KETA_DB_PATH` (default `app.db`) and
+`PORT` (default `8080`).
+
+The middleware stack shows the common cross-cutting concerns: `accessLog`,
+`cors`, request metrics (`otel`), `recover`, and a `tx` per request.
 
 ## Endpoints
 
-| Method | Path                       | Description                    |
-|--------|----------------------------|--------------------------------|
-| GET    | `/health`                  | Liveness check                 |
-| POST   | `/users`                   | Create a user (validated body) |
-| GET    | `/users/:id`               | Fetch a user                   |
-| GET    | `/users/:uid/tags/:index`  | Read one tag by index          |
+| Method | Path                       | Description                          |
+|--------|----------------------------|--------------------------------------|
+| GET    | `/health`                  | Liveness check                       |
+| GET    | `/users`                   | List users (`?limit`, `?role`); nested `UserList` |
+| POST   | `/users`                   | Create a user (validated; 201 + Location) |
+| GET    | `/users/:id`               | Fetch a user                         |
+| PUT    | `/users/:id`               | Replace a user (404 if absent)       |
+| DELETE | `/users/:id`               | Delete a user (204; 404 if absent)   |
+| GET    | `/users/:uid/tags/:index`  | Read one tag by index                |
+| GET    | `/metrics`                 | Prometheus-format request metrics    |
 
 ```bash
 curl -sX POST localhost:8080/users -H 'content-type: application/json' \
   -d '{"id":"1","name":"Ada","role":"admin","tags":["x","y"]}'
-curl -s localhost:8080/users/1
+curl -s 'localhost:8080/users?role=admin&limit=10'
+curl -sX PUT localhost:8080/users/1 -H 'content-type: application/json' \
+  -d '{"id":"1","name":"Ada B","role":"member","tags":[]}'
+curl -sX DELETE localhost:8080/users/1 -o /dev/null -w '%{http_code}\n'
 ```
 
 ## OpenAPI
@@ -41,8 +54,9 @@ never a source that drives the code.
 
 ## Layout
 
+- `lib/app.dart` — `buildApp`: the middleware stack (the single assembly point)
 - `lib/routes.dart` — every route, registered on the app
-- `lib/env.dart` — the dependency graph (`Db`, `Log`) booted per isolate
-- `lib/user_dto.dart` — the canonical DTO + its `Schema` constant
+- `lib/env.dart` — the dependency graph (`Db`, `Log`) booted per isolate, from env
+- `lib/user_dto.dart` — the canonical DTOs (`UserDto`, and the nested `UserList`)
 - `migrations/` — `NNNN_name.sql`, applied in order and recorded in `_keta_migrations`
 - `bin/main.dart` — migrate then serve; `tool/` — OpenAPI + dev-server scripts

@@ -11,23 +11,34 @@ import 'user_dto.dart';
 void register(App<Env> app) {
   app.get('/health', (c) => c.text('ok'));
 
-  // A list endpoint: query parameters drive pagination (declared for OpenAPI,
-  // read with the optional accessor + a code-side default — the one truth).
+  // A list endpoint: query parameters drive pagination (?limit) and filtering
+  // (?role) — declared for OpenAPI, read with the optional accessor + a
+  // code-side default. The response is a nested DTO (UserList wraps UserDto).
   app.get(
     '/users',
     (c) async {
       final limit = c.tryQuery<int>('limit') ?? 20;
+      final role = c.tryQuery<String>('role');
+      final where = role == null ? '' : ' where role = ?';
       final rows = await c.env.db.reader.query(
-        'select id, name, age, role, tags from users limit ?',
-        [limit],
+        'select id, name, age, role, tags from users$where limit ?',
+        role == null ? [limit] : [role, limit],
       );
-      return c.json({
-        'users': [for (final r in rows) UserDto.fromRow(r).toJson()],
-      });
+      final total = await c.env.db.reader.query(
+        'select count(*) as n from users$where',
+        role == null ? const [] : [role],
+      );
+      return c.json(
+        UserList(
+          users: [for (final r in rows) UserDto.fromRow(r)],
+          total: total.first['n'] as int,
+        ).toJson(),
+      );
     },
     doc: const RouteDoc(
+      response: userListSchema,
       summary: 'List users',
-      query: [QueryParam('limit', integer)],
+      query: [QueryParam('limit', integer), QueryParam('role', string)],
     ),
   );
 
@@ -82,4 +93,35 @@ void register(App<Env> app) {
         }
         return c.json({'tag': tags[p.$2]});
       });
+
+  // Update (PUT) and delete (DELETE) complete the CRUD surface. A write with no
+  // matching row is a 404; a delete returns 204 with no body.
+  app.put(
+    '/users/:id',
+    (c) async {
+      final dto = UserDto.fromJson(
+        userDtoSchema.require(await c.body()) as Map<String, Object?>,
+      );
+      final changed = await c.get(txConn).execute(
+        'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
+        [dto.name, dto.age, dto.role.name, dto.tags.join(','), c.param<String>('id')],
+      );
+      if (changed == 0) throw const NotFound('user not found');
+      return c.json(dto.toJson());
+    },
+    doc: const RouteDoc(
+      requestBody: userDtoSchema,
+      response: userDtoSchema,
+      summary: 'Replace a user',
+    ),
+  );
+
+  app.delete('/users/:id', (c) async {
+    final changed = await c.get(txConn).execute(
+      'delete from users where id = ?',
+      [c.param<String>('id')],
+    );
+    if (changed == 0) throw const NotFound('user not found');
+    return Response(204);
+  }, doc: const RouteDoc(summary: 'Delete a user'));
 }

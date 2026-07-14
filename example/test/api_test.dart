@@ -94,4 +94,69 @@ void main() {
       ]),
     );
   });
+
+  test('update (PUT) and delete (DELETE) complete the CRUD surface', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+
+    await client.post(
+      '/users',
+      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+    );
+    final put = await client.put(
+      '/users/1',
+      json: {
+        'id': '1',
+        'name': 'Ada B',
+        'age': 30,
+        'role': 'member',
+        'tags': ['y'],
+      },
+    );
+    expect(put.status, 200);
+    expect((await client.get('/users/1')).json(), containsPair('name', 'Ada B'));
+    expect(
+      (await client.put(
+        '/users/999',
+        json: {'id': '999', 'name': 'x', 'role': 'admin', 'tags': <String>[]},
+      )).status,
+      404,
+    );
+    expect((await client.delete('/users/1')).status, 204);
+    expect((await client.get('/users/1')).status, 404);
+    expect((await client.delete('/users/1')).status, 404);
+  });
+
+  test('list returns a nested UserList and filters by ?role', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+    await client.post(
+      '/users',
+      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+    );
+    await client.post(
+      '/users',
+      json: {'id': '2', 'name': 'Bo', 'role': 'member', 'tags': <String>[]},
+    );
+
+    final all = (await client.get('/users')).json()! as Map;
+    expect(all['total'], 2);
+    expect(all['users'], hasLength(2));
+    expect((await client.get('/users?role=admin')).json()! as Map, containsPair('total', 1));
+  });
+
+  test('CORS preflight and the metrics endpoint work', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+
+    final preflight = await client.options('/users');
+    expect(preflight.status, 204);
+    expect(preflight.headers['access-control-allow-origin'], '*');
+
+    await client.get('/users/999'); // record a request
+    expect((await client.get('/metrics')).text(), contains('keta_requests_total'));
+  });
 }

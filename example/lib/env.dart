@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:keta/keta.dart';
 import 'package:keta_db/keta_db.dart';
 import 'package:keta_sqlite/keta_sqlite.dart';
@@ -12,8 +14,10 @@ class Env implements HasLog, HasDb, Disposable {
   @override
   final Log log;
 
+  /// The database path comes from the environment (§9: env vars only, no config
+  /// files at runtime), defaulting to `app.db`.
   static Future<Env> boot() async {
-    final db = SqliteDb.open('app.db');
+    final db = SqliteDb.open(Platform.environment['KETA_DB_PATH'] ?? 'app.db');
     // Read-only guard: if the schema is behind, fail loudly here instead of as
     // per-request 500s. main applies migrations before serve; this catches a
     // server started against an unmigrated database.

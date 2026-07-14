@@ -63,3 +63,35 @@ const userDtoSchema = Schema('UserDto', {
     },
   },
 });
+
+/// A paginated list response — a nested DTO: it references [UserDto] via `$ref`
+/// and carries it in `deps`, so the walker collects it into components.
+class UserList {
+  const UserList({required this.users, required this.total});
+
+  factory UserList.fromJson(Map<String, Object?> json) => UserList(
+    users: (json['users'] as List)
+        .map((e) => UserDto.fromJson(e as Map<String, Object?>))
+        .toList(),
+    total: json['total'] as int,
+  );
+  final List<UserDto> users;
+  final int total;
+
+  Map<String, Object?> toJson() => {
+    'users': [for (final u in users) u.toJson()],
+    'total': total,
+  };
+}
+
+const userListSchema = Schema('UserList', {
+  'type': 'object',
+  'required': ['users', 'total'],
+  'properties': {
+    'users': {
+      'type': 'array',
+      'items': {r'$ref': '#/components/schemas/UserDto'},
+    },
+    'total': {'type': 'integer'},
+  },
+}, deps: [userDtoSchema]);
