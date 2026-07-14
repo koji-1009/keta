@@ -1297,4 +1297,56 @@ void register(app) {
       expect(queryDiagnostics(source), isEmpty);
     });
   });
+
+  group('scaffold — sealed', () {
+    Map<String, Object?> variant(String tag, String field) => {
+      'type': 'object',
+      'required': ['type', field],
+      'properties': {
+        'type': {'type': 'string'},
+        field: {'type': 'string'},
+      },
+    };
+
+    final doc = {
+      'openapi': '3.1.0',
+      'info': {'title': 't', 'version': '1'},
+      'paths': <String, Object?>{},
+      'components': {
+        'schemas': {
+          'Event': {
+            'oneOf': [
+              {r'$ref': '#/components/schemas/Created'},
+              {r'$ref': '#/components/schemas/Deleted'},
+            ],
+            'discriminator': {
+              'propertyName': 'type',
+              'mapping': {
+                'created': '#/components/schemas/Created',
+                'deleted': '#/components/schemas/Deleted',
+              },
+            },
+          },
+          'Created': variant('created', 'at'),
+          'Deleted': variant('deleted', 'reason'),
+        },
+      },
+    };
+
+    test('materializes the sealed switch-delegation shape', () {
+      final dtos = generateScaffold(doc).dtos;
+      expect(dtos, contains('sealed class Event {'));
+      expect(dtos, contains("'created' => Created.fromJson(json)"));
+      expect(dtos, contains("'deleted' => Deleted.fromJson(json)"));
+      expect(dtos, contains('class Created implements Event {'));
+      expect(dtos, contains('class Deleted implements Event {'));
+      expect(dtos, contains('@override')); // variant toJson overrides the parent
+      expect(dtos, contains("throw const BadRequest('unknown Event type')"));
+      expect(dtos, contains("import 'package:keta/keta.dart';")); // for BadRequest
+      // The Schema constant collects the variants transitively.
+      expect(dtos, contains("const eventSchema = Schema('Event'"));
+      expect(dtos, contains('deps: [createdSchema, deletedSchema]'));
+      parseString(content: dtos, throwIfDiagnostics: true); // parses cleanly
+    });
+  });
 }

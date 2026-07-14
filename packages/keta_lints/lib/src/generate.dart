@@ -58,16 +58,32 @@ bool _isEnum(Map<String, Object?> schema) =>
 // --- DTOs -----------------------------------------------------------------
 
 String _generateDtos(Map<String, Map<String, Object?>> schemas) {
-  final buffer = StringBuffer()
+  final hasSealed = schemas.values.any(_isSealed);
+  final buffer = StringBuffer();
+  // A sealed variant's fromJson switch throws BadRequest on an unknown tag.
+  if (hasSealed) buffer.writeln("import 'package:keta/keta.dart';");
+  buffer
     ..writeln("import 'package:keta_openapi/keta_openapi.dart';")
     ..writeln();
+  // Each sealed type's variants carry `implements <Sealed>`, so the
+  // switch-delegation is well-typed.
+  final variantOf = <String, String>{};
+  for (final entry in schemas.entries) {
+    if (_isSealed(entry.value)) {
+      for (final variant in _variants(entry.value).values) {
+        variantOf[variant] = entry.key;
+      }
+    }
+  }
   for (final entry in schemas.entries) {
     final name = entry.key;
     final schema = entry.value;
-    if (_isEnum(schema)) {
+    if (_isSealed(schema)) {
+      _writeSealed(buffer, name, schema);
+    } else if (_isEnum(schema)) {
       _writeEnum(buffer, name, schema);
     } else if (schema['type'] == 'object') {
-      _writeClass(buffer, name, schema, schemas);
+      _writeClass(buffer, name, schema, schemas, implementsType: variantOf[name]);
     } else {
       buffer.writeln(
         '// keta: "$name" is outside the canonical subset '
@@ -78,6 +94,55 @@ String _generateDtos(Map<String, Map<String, Object?>> schemas) {
     buffer.writeln();
   }
   return buffer.toString();
+}
+
+bool _isSealed(Map<String, Object?> schema) =>
+    schema['oneOf'] is List && schema['discriminator'] is Map;
+
+/// A sealed type's discriminator tag → variant type name, from an explicit
+/// `discriminator.mapping` or, absent one, the `oneOf` refs with the tag being
+/// the variant's lowerCamel name.
+Map<String, String> _variants(Map<String, Object?> schema) {
+  final mapping = (schema['discriminator'] as Map)['mapping'];
+  if (mapping is Map) {
+    return {
+      for (final e in mapping.entries) e.key.toString(): _refName(e.value.toString()),
+    };
+  }
+  return {
+    for (final ref in schema['oneOf'] as List)
+      if (ref is Map && ref[r'$ref'] is String)
+        _lowerFirst(_refName(ref[r'$ref'] as String)): _refName(
+          ref[r'$ref'] as String,
+        ),
+  };
+}
+
+void _writeSealed(
+  StringBuffer buffer,
+  String name,
+  Map<String, Object?> schema,
+) {
+  final discriminator = (schema['discriminator'] as Map)['propertyName']
+      .toString();
+  buffer
+    ..writeln('sealed class $name {')
+    ..writeln('  factory $name.fromJson(Map<String, Object?> json) =>')
+    ..writeln('      switch (json[${dartStringLiteral(discriminator)}]) {');
+  for (final entry in _variants(schema).entries) {
+    buffer.writeln(
+      '        ${dartStringLiteral(entry.key)} => '
+      '${entry.value}.fromJson(json),',
+    );
+  }
+  buffer
+    ..writeln(
+      "        _ => throw const BadRequest('unknown $name $discriminator'),",
+    )
+    ..writeln('      };')
+    ..writeln('  Map<String, Object?> toJson();')
+    ..writeln('}')
+    ..writeln();
 }
 
 void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
@@ -100,8 +165,9 @@ void _writeClass(
   StringBuffer buffer,
   String name,
   Map<String, Object?> schema,
-  Map<String, Map<String, Object?>> schemas,
-) {
+  Map<String, Map<String, Object?>> schemas, {
+  String? implementsType,
+}) {
   final required = (schema['required'] as List?)?.cast<String>() ?? const [];
   final properties =
       (schema['properties'] as Map?)?.cast<String, Object?>() ?? const {};
@@ -118,13 +184,10 @@ void _writeClass(
       ),
   ];
 
-  buffer.writeln('class $name {');
-  for (final f in fields) {
-    buffer.writeln('  final ${f.dartType} ${f.dartName};');
-  }
-  // Every field is final and the constructor is initializing-formals only, so
-  // the generated DTO is always const-eligible; emit a const constructor so
-  // callers can build const instances (and `prefer_const_constructors` fires).
+  final clause = implementsType == null ? '' : ' implements $implementsType';
+  buffer.writeln('class $name$clause {');
+  // Constructors first (sort_constructors_first). Every field is final with
+  // initializing formals only, so the DTO is const-eligible.
   if (fields.isEmpty) {
     buffer.writeln('  const $name();');
   } else {
@@ -151,6 +214,13 @@ void _writeClass(
   buffer.writeln('      );');
   buffer.writeln();
 
+  for (final f in fields) {
+    buffer.writeln('  final ${f.dartType} ${f.dartName};');
+  }
+  if (fields.isNotEmpty) buffer.writeln();
+
+  // A sealed variant's toJson overrides the parent's abstract method.
+  if (implementsType != null) buffer.writeln('  @override');
   buffer.writeln('  Map<String, Object?> toJson() => {');
   for (final f in fields) {
     buffer.writeln(f.toJsonEntry());
