@@ -48,14 +48,22 @@ class OpenApi {
       }
     }
 
+    // Every generated map is emitted in sorted key order, so the document is a
+    // function of the route set alone and not of registration order: two apps
+    // with the same routes emit the same bytes (the file-convention example and
+    // the register-based one, M5's "identical output").
     final components = <String, Object?>{
-      if (schemas.isNotEmpty) 'schemas': schemas,
-      if (securitySchemes.isNotEmpty) 'securitySchemes': securitySchemes,
+      if (schemas.isNotEmpty) 'schemas': _sortedByKey(schemas),
+      if (securitySchemes.isNotEmpty)
+        'securitySchemes': _sortedByKey(securitySchemes),
     };
     final document = <String, Object?>{
       'openapi': '3.1.0',
       'info': {'title': title, 'version': version},
-      'paths': paths,
+      'paths': {
+        for (final path in paths.keys.toList()..sort())
+          path: _sortedByKey(paths[path]!),
+      },
       if (components.isNotEmpty) 'components': components,
     };
     return OpenApi._(override == null ? document : override(document));
@@ -128,7 +136,10 @@ Map<String, Object?> _operation(
     if (doc?.summary != null) 'summary': doc!.summary,
     if (parameters.isNotEmpty) 'parameters': parameters,
     if (doc?.requestBody != null)
-      'requestBody': {'required': true, ..._jsonBody(doc!.requestBody!)},
+      'requestBody': {
+        'required': true,
+        ..._body(doc!.requestBody!, doc.requestBodyType),
+      },
     if (security.isNotEmpty)
       'security': [
         for (final scheme in security) {
@@ -139,13 +150,24 @@ Map<String, Object?> _operation(
   };
 }
 
-Map<String, Object?> _jsonBody(Schema schema) => {
+/// [map] re-emitted in sorted key order, so generated output is deterministic.
+Map<String, T> _sortedByKey<T>(Map<String, T> map) => {
+  for (final key in map.keys.toList()..sort()) key: map[key] as T,
+};
+
+/// A `content` body under [mediaType], referencing [schema]. Responses always
+/// use `application/json`; a request body honors its declared media type (e.g.
+/// `multipart/form-data`), so an upload is documented as what it truly consumes.
+Map<String, Object?> _body(Schema schema, String mediaType) => {
   'content': {
-    'application/json': {
+    mediaType: {
       'schema': {r'$ref': '#/components/schemas/${schema.name}'},
     },
   },
 };
+
+Map<String, Object?> _jsonBody(Schema schema) =>
+    _body(schema, 'application/json');
 
 Iterable<(String, Map<String, Object?>)> _pathParameters(
   List<Segment> segments,

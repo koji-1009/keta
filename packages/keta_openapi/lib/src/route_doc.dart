@@ -30,6 +30,7 @@ class RouteDoc {
   const RouteDoc({
     this.response,
     this.requestBody,
+    this.requestBodyType = 'application/json',
     this.summary,
     this.responses,
     this.security,
@@ -41,6 +42,12 @@ class RouteDoc {
 
   /// The schema of the request body.
   final Schema? requestBody;
+
+  /// The media type of [requestBody], projected as-is onto OpenAPI's
+  /// `requestBody.content`. Defaults to `application/json`; set
+  /// `multipart/form-data` for an upload so the contract tells the truth about
+  /// what the route consumes.
+  final String requestBodyType;
 
   final String? summary;
 

@@ -95,3 +95,13 @@ const userListSchema = Schema('UserList', {
     'total': {'type': 'integer'},
   },
 }, deps: [userDtoSchema]);
+
+/// The multipart upload form — a request-body schema, not a DTO. The file field
+/// is `format: binary`; the app reads it via keta_multipart, not `fromJson`.
+const uploadFormSchema = Schema('UploadForm', {
+  'type': 'object',
+  'properties': {
+    'greeting': {'type': 'string'},
+    'doc': {'type': 'string', 'format': 'binary'},
+  },
+});

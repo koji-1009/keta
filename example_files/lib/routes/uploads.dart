@@ -3,6 +3,7 @@ import 'package:keta_multipart/keta_multipart.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
 import '../env.dart';
+import '../user_dto.dart';
 
 /// A route file added on its own — `dart run keta_files:sync` wires it into the
 /// manifest. A multipart upload streamed through keta_multipart.
@@ -23,5 +24,9 @@ void register(App<Env> app) {
       }
     }
     return c.json({'fields': fields, 'files': files});
-  }, doc: const RouteDoc(summary: 'Accept a multipart/form-data upload'));
+  }, doc: const RouteDoc(
+    summary: 'Accept a multipart/form-data upload',
+    requestBody: uploadFormSchema,
+    requestBodyType: 'multipart/form-data',
+  ));
 }

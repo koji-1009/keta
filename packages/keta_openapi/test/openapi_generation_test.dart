@@ -275,4 +275,55 @@ void main() {
       expect(ps.where((p) => (p as Map)['name'] == 'id').length, 2);
     });
   });
+
+  test('the document depends on the route set, not registration order', () {
+    App<Ignored> build(List<String> paths) {
+      final app = App<Ignored>();
+      for (final p in paths) {
+        app.get(p, (c) => c.text('x'), doc: const RouteDoc(response: createdSchema));
+      }
+      return app;
+    }
+
+    // Same routes, opposite registration order → the same bytes. This is what
+    // lets a file-convention app's output equal the register-based one's.
+    expect(
+      OpenApi.fromRoutes(build(['/b', '/a']).routes).toYaml(),
+      OpenApi.fromRoutes(build(['/a', '/b']).routes).toYaml(),
+    );
+  });
+
+  group('request body media type', () {
+    Map<String, Object?> content(Map<String, Object?> doc, String path) {
+      final op = ((doc['paths'] as Map)[path] as Map)['post'] as Map;
+      return ((op['requestBody'] as Map)['content'] as Map)
+          .cast<String, Object?>();
+    }
+
+    test('defaults to application/json', () {
+      final app = App<Ignored>()
+        ..post(
+          '/u',
+          (c) => c.text('x'),
+          doc: const RouteDoc(requestBody: createdSchema),
+        );
+      final c = content(OpenApi.fromRoutes(app.routes).toJson(), '/u');
+      expect(c.keys, ['application/json']);
+    });
+
+    test('honors a declared multipart/form-data body', () {
+      final app = App<Ignored>()
+        ..post(
+          '/u',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            requestBody: createdSchema,
+            requestBodyType: 'multipart/form-data',
+          ),
+        );
+      final c = content(OpenApi.fromRoutes(app.routes).toJson(), '/u');
+      expect(c.keys, ['multipart/form-data']); // truthful, not a JSON lie
+      expect(c.containsKey('application/json'), isFalse);
+    });
+  });
 }
