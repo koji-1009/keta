@@ -21,7 +21,10 @@ void main() {
     test('the committed manifest has every route file registered', () {
       final source = File('lib/routes.dart').readAsStringSync();
       final files = discoverRouteFiles('lib/routes');
-      expect(files.map((f) => f.prefix), containsAll(['health', 'users']));
+      expect(
+        files.map((f) => f.prefix),
+        containsAll(['health', 'uploads', 'users']),
+      );
       expect(unregistered(source, files), isEmpty);
     });
 
@@ -32,37 +35,38 @@ void main() {
     });
   });
 
-  test('OpenAPI output covers every registered route', () {
+  test('OpenAPI output covers the same route set as the register-based example', () {
     final paths =
         (OpenApi.fromRoutes(buildApp().routes).toJson()['paths'] as Map).keys;
     expect(
       paths,
       containsAll([
         '/health',
-        '/users/{id}',
         '/users',
+        '/users/{id}',
         '/users/{uid}/tags/{index}',
+        '/uploads',
+        '/metrics',
       ]),
     );
   });
 
-  test('the app serves create/fetch/tags/404/400 end-to-end', () async {
+  test('serves the full CRUD surface end-to-end', () async {
     final env = await bootTestEnv();
     addTearDown(env.close);
     final client = TestClient(buildApp(), env);
 
-    expect(
-      (await client.post(
-        '/users',
-        json: {
-          'id': '1',
-          'name': 'Ada',
-          'role': 'admin',
-          'tags': ['x', 'y'],
-        },
-      )).status,
-      201,
+    final created = await client.post(
+      '/users',
+      json: {
+        'id': '1',
+        'name': 'Ada',
+        'role': 'admin',
+        'tags': ['x', 'y'],
+      },
     );
+    expect(created.status, 201);
+    expect(created.headers['location'], '/users/1');
     expect((await client.get('/users/1')).json(), {
       'id': '1',
       'name': 'Ada',
@@ -70,7 +74,20 @@ void main() {
       'tags': ['x', 'y'],
     });
     expect((await client.get('/users/1/tags/1')).json(), {'tag': 'y'});
-    expect((await client.get('/users/999')).status, 404);
+
+    final list = (await client.get('/users')).json()! as Map;
+    expect(list['total'], 1);
+    expect(list['users'], hasLength(1));
+
+    expect(
+      (await client.put(
+        '/users/1',
+        json: {'id': '1', 'name': 'Ada B', 'role': 'member', 'tags': <String>[]},
+      )).status,
+      200,
+    );
+    expect((await client.delete('/users/1')).status, 204);
+    expect((await client.get('/users/1')).status, 404);
     expect((await client.post('/users', json: {'id': '2'})).status, 400);
   });
 }
