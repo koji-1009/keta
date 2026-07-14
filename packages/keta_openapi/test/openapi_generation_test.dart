@@ -239,4 +239,40 @@ void main() {
       expect(r401.containsKey('content'), isTrue); // the user's body, not bare
     });
   });
+
+  group('query parameters', () {
+    List<Object?> params(Map<String, Object?> doc, String path) =>
+        (((doc['paths'] as Map)[path] as Map)['get'] as Map)['parameters']
+            as List;
+
+    test('declared query params project to in:query with required + schema', () {
+      final app = App<Ignored>()
+        ..get(
+          '/s',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            query: [QueryParam('page', integer), QueryParam('q', string, required: true)],
+          ),
+        );
+      final ps = params(OpenApi.fromRoutes(app.routes).toJson(), '/s');
+      final page = ps.firstWhere((p) => (p as Map)['name'] == 'page') as Map;
+      expect(page['in'], 'query');
+      expect(page['required'], false);
+      expect(page['schema'], {'type': 'integer'});
+      final q = ps.firstWhere((p) => (p as Map)['name'] == 'q') as Map;
+      expect(q['required'], true);
+      expect(q['schema'], {'type': 'string'});
+    });
+
+    test('a path param and a query param may share a name', () {
+      final app = App<Ignored>()
+        ..on(root.segments('u').capture(integer('id'))).get(
+          (c, _) => c.text('x'),
+          doc: const RouteDoc(query: [QueryParam('id', string)]),
+        );
+      final ps = params(OpenApi.fromRoutes(app.routes).toJson(), '/u/{id}');
+      // No StateError: (name, in) distinguishes the path id from the query id.
+      expect(ps.where((p) => (p as Map)['name'] == 'id').length, 2);
+    });
+  });
 }

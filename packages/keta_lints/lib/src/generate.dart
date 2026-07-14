@@ -351,9 +351,39 @@ String? _routeDoc(Map<String, Object?> op) {
   if (response != null) parts.add('response: ${_lowerFirst(response)}Schema');
   final security = _securityDecl(op['security']);
   if (security != null) parts.add('security: $security');
+  final query = _queryDecl(op);
+  if (query != null) parts.add('query: $query');
   if (parts.isEmpty) return null;
   return 'RouteDoc(${parts.join(', ')})';
 }
+
+/// The `query:` argument for a generated RouteDoc from the operation's
+/// `in: query` parameters, or null when there are none. Each param's schema type
+/// maps to a provided capture constant.
+String? _queryDecl(Map<String, Object?> op) {
+  final parameters = op['parameters'];
+  if (parameters is! List) return null;
+  final decls = <String>[];
+  for (final p in parameters) {
+    if (p is! Map || p['in'] != 'query') continue;
+    final name = dartStringLiteral(p['name'].toString());
+    final capture = _captureFor((p['schema'] as Map?)?.cast<String, Object?>());
+    final required = p['required'] == true ? ', required: true' : '';
+    decls.add('QueryParam($name, $capture$required)');
+  }
+  return decls.isEmpty ? null : '[${decls.join(', ')}]';
+}
+
+String _captureFor(Map<String, Object?>? schema) => switch (schema?['type']) {
+  'string' => 'string',
+  'integer' => 'integer',
+  'number' => 'number',
+  'boolean' => 'boolean',
+  final type => throw ScaffoldError(
+    'query parameter schema type "$type" is outside the canonical subset '
+    '(string, integer, number, boolean)',
+  ),
+};
 
 /// The `security:` argument for a generated RouteDoc, or null when the operation
 /// declares none. `[]` is preserved as `const []` (explicit publicness); each
@@ -390,16 +420,18 @@ String _generateContractTest(
   Map<String, Map<String, Object?>> schemas,
 ) {
   final secured = _securedEndpoints(document);
+  final requiredQuery = _requiredQueryEndpoints(document);
+  final needsApp = secured.isNotEmpty || requiredQuery.isNotEmpty;
   final buffer = StringBuffer();
   // Endpoint tests drive the app through buildApp, so they need the test client
   // and the routes; import them only when there are such tests, so the output
   // always passes analyze.
-  if (secured.isNotEmpty) buffer.writeln("import 'package:keta/test.dart';");
+  if (needsApp) buffer.writeln("import 'package:keta/test.dart';");
   buffer.writeln("import 'package:test/test.dart';");
   buffer
     ..writeln()
     ..writeln("import '../lib/dtos.dart';");
-  if (secured.isNotEmpty) buffer.writeln("import '../lib/routes.dart';");
+  if (needsApp) buffer.writeln("import '../lib/routes.dart';");
   buffer
     ..writeln()
     ..writeln('void main() {');
@@ -431,19 +463,36 @@ String _generateContractTest(
     );
     buffer.writeln('  });');
   }
+  // For each endpoint with a required query parameter, a "missing it → 400"
+  // test. Red until the handler reads the parameter with `c.query` (which 400s
+  // on absence), the same buildApp-driven path to green.
+  for (final e in requiredQuery) {
+    buffer.writeln(
+      "  test('${e.method.toUpperCase()} ${e.path} requires its query "
+      "parameters', () async {",
+    );
+    buffer.writeln('    final client = TestClient(buildApp(), null);');
+    buffer.writeln(
+      "    expect((await client.${e.method}('${e.samplePath}')).status, 400);",
+    );
+    buffer.writeln('  });');
+  }
   buffer.writeln('}');
   return buffer.toString();
 }
 
-/// One route+method that declares a non-empty `security` in [document].
-class _SecuredEndpoint {
-  _SecuredEndpoint(this.method, this.path, this.samplePath);
+/// One route+method singled out for a contract test.
+class _Endpoint {
+  _Endpoint(this.method, this.path, this.samplePath);
   final String method; // lower-case, e.g. 'post'
   final String path; // OpenAPI path, e.g. '/users/{id}'
   final String samplePath; // params filled, e.g. '/users/x'
 }
 
-List<_SecuredEndpoint> _securedEndpoints(Map<String, Object?> document) {
+String _samplePath(String openApiPath) =>
+    openApiPath.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x');
+
+List<_Endpoint> _securedEndpoints(Map<String, Object?> document) {
   final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
   return [
     for (final pathEntry in paths.entries)
@@ -452,12 +501,28 @@ List<_SecuredEndpoint> _securedEndpoints(Map<String, Object?> document) {
         if (_httpMethods.contains(opEntry.key))
           if ((opEntry.value as Map).cast<String, Object?>()['security']
               case final List<Object?> s when s.isNotEmpty)
-            _SecuredEndpoint(
-              opEntry.key,
-              pathEntry.key,
-              pathEntry.key.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x'),
-            ),
+            _Endpoint(opEntry.key, pathEntry.key, _samplePath(pathEntry.key)),
   ];
+}
+
+List<_Endpoint> _requiredQueryEndpoints(Map<String, Object?> document) {
+  final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
+  return [
+    for (final pathEntry in paths.entries)
+      for (final opEntry
+          in (pathEntry.value as Map).cast<String, Object?>().entries)
+        if (_httpMethods.contains(opEntry.key))
+          if (_hasRequiredQuery((opEntry.value as Map).cast<String, Object?>()))
+            _Endpoint(opEntry.key, pathEntry.key, _samplePath(pathEntry.key)),
+  ];
+}
+
+bool _hasRequiredQuery(Map<String, Object?> op) {
+  final parameters = op['parameters'];
+  return parameters is List &&
+      parameters.any(
+        (p) => p is Map && p['in'] == 'query' && p['required'] == true,
+      );
 }
 
 Object? _sample(

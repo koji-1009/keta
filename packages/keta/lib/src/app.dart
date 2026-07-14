@@ -492,7 +492,7 @@ class Router<E> {
     final pathMatched = ctxOf(c).pathMatched;
     return Response.json({
       'error': pathMatched ? 'method not allowed' : 'not found',
-    }, pathMatched ? 405 : 404);
+    }, status: pathMatched ? 405 : 404);
   }
 
   /// The last-resort fallback, always applied: `KetaException` maps to its
@@ -500,7 +500,7 @@ class Router<E> {
   /// and no detail leaked.
   Response _fallback(Object error, StackTrace st, RequestCtx<E> ctx) {
     if (error is KetaException) {
-      return Response.json({'error': error.message}, error.status);
+      return Response.json({'error': error.message}, status: error.status);
     }
     ctx.log.error('unhandled exception', error, st);
     return Response(500, body: '');

@@ -29,7 +29,7 @@ void register(App<Env> app) {
       'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
       [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
     );
-    return c.text('created', 201);
+    return c.text('created', status: 201);
   }, doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'));
 
   app

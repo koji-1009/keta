@@ -26,7 +26,7 @@ Future<int> _get(HttpClient client, int port, String path) async {
 void main() {
   test('a CRLF-injecting header does not kill the server', () async {
     final app = App<Env>()..use(recover());
-    app.get('/bad', (c) => Response(200, headers: {'x-evil': 'a\r\nb'}));
+    app.get('/bad', (c) => Response(200, headers: {'x-evil': ['a\r\nb']}));
     app.get('/ok', (c) => c.text('ok'));
     final server = await app.serve(boot, port: 8093);
     final client = HttpClient();

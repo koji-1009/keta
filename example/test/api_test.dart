@@ -53,6 +53,34 @@ void main() {
     expect((await client.get('/users/999')).status, 404);
   });
 
+  test('list honors the ?limit query and create returns a Location header', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+
+    final created = await client.post(
+      '/users',
+      json: {
+        'id': '1',
+        'name': 'Ada',
+        'role': 'admin',
+        'tags': ['x'],
+      },
+    );
+    expect(created.status, 201);
+    expect(created.headers['location'], '/users/1');
+
+    await client.post(
+      '/users',
+      json: {'id': '2', 'name': 'Bo', 'role': 'member', 'tags': <String>[]},
+    );
+    expect(((await client.get('/users')).json()! as Map)['users'], hasLength(2));
+    expect(
+      (((await client.get('/users?limit=1')).json()! as Map)['users'] as List),
+      hasLength(1),
+    );
+  });
+
   test('OpenAPI output mirrors the registered routes', () {
     final paths =
         (OpenApi.fromRoutes(buildApp().routes).toJson()['paths'] as Map).keys;

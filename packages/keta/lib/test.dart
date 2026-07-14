@@ -36,7 +36,7 @@ Context<E> testContext<E>(
     method: method,
     uri: Uri.parse(path),
     route: path,
-    headers: {for (final e in headers.entries) e.key.toLowerCase(): e.value},
+    headers: {for (final e in headers.entries) e.key.toLowerCase(): [e.value]},
     remoteAddress: 'test',
     params: params,
     orderedCaptures: params.values.toList(),
@@ -98,7 +98,7 @@ class TestClient<E> {
   ) async {
     final request = _TestRequest(method, Uri.parse(path), {
       for (final e in (headers ?? const {}).entries)
-        e.key.toLowerCase(): e.value,
+        e.key.toLowerCase(): [e.value],
     }, json == null ? const [] : utf8.encode(jsonEncode(json)));
     final response = await _router.dispatch(request);
     return TestResponse._from(response);
@@ -122,7 +122,12 @@ class TestResponse {
       ),
       _ => '',
     };
-    return TestResponse._(response.status, response.headers, text);
+    return TestResponse._(response.status, {
+      // Flattened to first value for assertion convenience; multi-value fidelity
+      // is exercised at the Response/bridge level.
+      for (final e in response.headers.entries)
+        e.key: e.value.isEmpty ? '' : e.value.first,
+    }, text);
   }
 
   String text() => _body;
@@ -161,7 +166,7 @@ class _TestRequest implements TransportRequest {
   @override
   final Uri uri;
   @override
-  final Map<String, String> headers;
+  final Map<String, List<String>> headers;
   final List<int> _body;
 
   @override

@@ -1,5 +1,7 @@
 library;
 
+import 'package:keta/keta.dart';
+
 import 'schema.dart';
 
 /// A named OpenAPI security scheme, carried as data (the same shape as
@@ -31,6 +33,7 @@ class RouteDoc {
     this.summary,
     this.responses,
     this.security,
+    this.query,
   });
 
   /// The schema of the 200 response body.
@@ -50,10 +53,25 @@ class RouteDoc {
   /// overriding that default.
   final List<SecurityScheme>? security;
 
+  /// Query-parameter declarations, projected to OpenAPI `in: query`. Runtime
+  /// required-ness is not gated here — it is expressed by the handler's accessor
+  /// choice (`c.query` = 400 on absence / `c.tryQuery` = optional).
+  final List<QueryParam>? query;
+
   /// Every schema this doc references, for transitive component collection.
   Iterable<Schema> get schemas => [
     ?response,
     ?requestBody,
     ...?responses?.values,
   ];
+}
+
+/// A query-parameter declaration. No new vocabulary — a [Capture] is reused for
+/// its `parse` (unused here) and its `schema` fragment, which projects onto the
+/// OpenAPI `in: query` parameter as-is.
+final class QueryParam {
+  const QueryParam(this.name, this.capture, {this.required = false});
+  final String name;
+  final Capture<Object?> capture;
+  final bool required;
 }

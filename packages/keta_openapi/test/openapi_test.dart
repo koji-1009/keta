@@ -254,7 +254,7 @@ void main() {
         app
             .on(root.segments('users'))
             .post(
-              (c, _) => c.text('x', 201),
+              (c, _) => c.text('x', status: 201),
               doc: const RouteDoc(responses: {201: userDtoSchema}),
             );
         final op =

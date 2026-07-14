@@ -40,7 +40,7 @@ Middleware<E> accessLog<E>() => (Context<E> c, Handler<E> next) {
 Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
   return guard<Response>(() => next(c), (error, st) {
     if (error is KetaException) {
-      return Response.json({'error': error.message}, error.status);
+      return Response.json({'error': error.message}, status: error.status);
     }
     c.log.error('unhandled exception', error, st);
     return Response(500, body: '');
@@ -67,11 +67,11 @@ Middleware<E> cors<E>({
   return (Context<E> c, Handler<E> next) {
     final origin = c.header('origin');
     final allowed = wildcard || (origin != null && origins.contains(origin));
-    final corsHeaders = <String, String>{
+    final corsHeaders = <String, List<String>>{
       if (allowed) ...{
-        'access-control-allow-origin': wildcard ? '*' : origin!,
-        'access-control-allow-methods': allowMethods.join(', '),
-        'access-control-allow-headers': allowHeaders.join(', '),
+        'access-control-allow-origin': [wildcard ? '*' : origin!],
+        'access-control-allow-methods': [allowMethods.join(', ')],
+        'access-control-allow-headers': [allowHeaders.join(', ')],
       },
     };
     if (c.method == 'OPTIONS') {

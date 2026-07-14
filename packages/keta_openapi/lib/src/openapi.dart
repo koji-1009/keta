@@ -80,15 +80,24 @@ Map<String, Object?> _operation(
         'required': true,
         'schema': param.$2,
       },
+    if (doc?.query != null)
+      for (final q in doc!.query!)
+        {
+          'name': q.name,
+          'in': 'query',
+          'required': q.required,
+          // The capture's schema fragment projects as-is (data, not inference).
+          'schema': q.capture.schema,
+        },
   ];
-  // OpenAPI forbids two path parameters with the same name; a user-named
-  // capture colliding with an auto-generated `pN` would emit an invalid
-  // template like `/{p0}/{p0}`. Fail fast instead.
+  // OpenAPI identifies a parameter by (name, in); a collision within one
+  // location (two path `p0`, or two query `tag`) is an invalid document. Fail
+  // fast instead.
   final seenNames = <String>{};
   for (final param in parameters) {
-    if (!seenNames.add(param['name'] as String)) {
+    if (!seenNames.add('${param['in']}:${param['name']}')) {
       throw StateError(
-        'duplicate path parameter "${param['name']}" in '
+        'duplicate ${param['in']} parameter "${param['name']}" in '
         '${_openApiPath(route.segments)}',
       );
     }

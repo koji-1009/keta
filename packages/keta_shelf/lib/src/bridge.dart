@@ -48,8 +48,9 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
     final response = await handler(request);
     // Pass the response body straight through as a stream; strip framing so the
     // transport frames it (a case-mismatched Content-Length would otherwise slip
-    // through and corrupt the wire).
-    final headers = {...response.headers}
+    // through and corrupt the wire). headersAll keeps multi-value headers (e.g.
+    // several set-cookie) faithful across the bridge.
+    final headers = {...response.headersAll}
       ..removeWhere(
         (k, _) =>
             k.toLowerCase() == 'content-length' ||
@@ -99,8 +100,8 @@ class _ShelfRequest implements TransportRequest {
   Uri get uri => _request.requestedUri;
 
   @override
-  Map<String, String> get headers => {
-    for (final entry in _request.headers.entries)
+  Map<String, List<String>> get headers => {
+    for (final entry in _request.headersAll.entries)
       entry.key.toLowerCase(): entry.value,
   };
 

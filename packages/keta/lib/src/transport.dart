@@ -23,8 +23,8 @@ abstract interface class TransportRequest {
   String get method;
   Uri get uri;
 
-  /// Header names lower-cased.
-  Map<String, String> get headers;
+  /// Header names lower-cased, each mapped to its ordered values (multi-value).
+  Map<String, List<String>> get headers;
 
   /// The request body as it arrives; the core buffers or streams as needed.
   Stream<List<int>> get bodyStream;

@@ -43,7 +43,7 @@ class RequestCtx<E> {
   /// metrics, and span names.
   final String route;
 
-  final Map<String, String> headers;
+  final Map<String, List<String>> headers;
   final String remoteAddress;
 
   /// Captured parameters by name, for `c.param`.
@@ -91,10 +91,26 @@ class RequestCtx<E> {
     if (raw == null) {
       throw ArgumentError.value(name, 'name', 'unknown path parameter');
     }
-    return _parseParam<T>(raw, name);
+    return _parse<T>(raw, 'path', name);
   }
 
-  T _parseParam<T>(String raw, String name) {
+  T query<T>(String name) {
+    final raw = uri.queryParameters[name];
+    if (raw == null) throw BadRequest('missing query parameter "$name"');
+    return _parse<T>(raw, 'query', name);
+  }
+
+  T? tryQuery<T>(String name) {
+    final raw = uri.queryParameters[name];
+    return raw == null ? null : _parse<T>(raw, 'query', name);
+  }
+
+  List<T> queryAll<T>(String name) => [
+    for (final raw in uri.queryParametersAll[name] ?? const <String>[])
+      _parse<T>(raw, 'query', name),
+  ];
+
+  T _parse<T>(String raw, String kind, String name) {
     try {
       if (T == String) return raw as T;
       if (T == int) return int.parse(raw) as T;
@@ -107,9 +123,9 @@ class RequestCtx<E> {
         };
       }
     } on FormatException {
-      throw BadRequest('invalid path parameter "$name"');
+      throw BadRequest('invalid $kind parameter "$name"');
     }
-    throw ArgumentError('unsupported param type $T for "$name"');
+    throw ArgumentError('unsupported $kind parameter type $T for "$name"');
   }
 
   T get<T>(Key<T> key) {
@@ -203,15 +219,34 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// Observing it is optional — cancellation is cooperative.
   Future<void> get aborted => _raw.aborted;
 
-  /// The header named [name] (case-insensitive), or null.
-  String? header(String name) => _raw.headers[name.toLowerCase()];
+  /// The first value of the header named [name] (case-insensitive), or null.
+  String? header(String name) {
+    final values = _raw.headers[name.toLowerCase()];
+    return (values == null || values.isEmpty) ? null : values.first;
+  }
 
-  /// All request headers, with lower-cased names. Read-only.
-  Map<String, String> get headers => Map.unmodifiable(_raw.headers);
+  /// Every value of the header named [name] (case-insensitive), in order; empty
+  /// when absent. The multi-value counterpart of [header].
+  List<String> headerAll(String name) =>
+      _raw.headers[name.toLowerCase()] ?? const [];
+
+  /// All request headers: lower-cased names to their ordered values. Read-only.
+  Map<String, List<String>> get headers => Map.unmodifiable(_raw.headers);
 
   /// The path parameter [name] parsed as `T` (String, int, double, or bool).
   /// An unsupported `T` is an `ArgumentError`; a parse failure is a [BadRequest].
   T param<T>(String name) => _raw.param<T>(name);
+
+  /// The query parameter [name] parsed as `T`, fully symmetric with [param].
+  /// Absence is a [BadRequest] — the required form; use [tryQuery] for optional.
+  T query<T>(String name) => _raw.query<T>(name);
+
+  /// The query parameter [name] as `T`, or null when absent (the optional form).
+  T? tryQuery<T>(String name) => _raw.tryQuery<T>(name);
+
+  /// Every value of a repeated query key (`?tag=a&tag=b`) as `T`; empty when
+  /// absent.
+  List<T> queryAll<T>(String name) => _raw.queryAll<T>(name);
 
   /// The value bound to [key]. Unset is a `StateError` (a programming error).
   T get<T>(Key<T> key) => _raw.get<T>(key);
@@ -232,12 +267,21 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// caller's responsibility; use this for large uploads.
   Stream<List<int>> bodyStream() => _raw.bodyStream();
 
-  /// A JSON response: `jsonEncode(body)` with `application/json`.
-  Response json(Object? body, [int status = 200]) =>
-      Response.json(body, status);
+  /// A JSON response: `jsonEncode(body)` with `application/json`. Extra
+  /// [headers] merge over the content type.
+  Response json(
+    Object? body, {
+    int status = 200,
+    Map<String, List<String>>? headers,
+  }) => Response.json(body, status: status, headers: headers);
 
-  /// A `text/plain; charset=utf-8` response.
-  Response text(String body, [int status = 200]) => Response.text(body, status);
+  /// A `text/plain; charset=utf-8` response. Extra [headers] merge over the
+  /// content type.
+  Response text(
+    String body, {
+    int status = 200,
+    Map<String, List<String>>? headers,
+  }) => Response.text(body, status: status, headers: headers);
 }
 
 /// Unwraps a [Context] to its backing [RequestCtx] for package-internal use

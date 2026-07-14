@@ -101,7 +101,7 @@ void main() {
         await c.get(txConn).execute('insert into users (name) values (?)', [
           'ok',
         ]);
-        return c.text('done', 201);
+        return c.text('done', status: 201);
       });
       app.post(
         '/fail',

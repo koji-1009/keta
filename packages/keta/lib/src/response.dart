@@ -7,8 +7,8 @@ import 'dart:convert';
 /// Wire framing (Content-Length, chunked, H2/H3 frames) belongs to the
 /// Transport, not here.
 class Response {
-  Response(this.status, {Map<String, String>? headers, this.body = ''})
-    : headers = _lowerCased(headers) {
+  Response(this.status, {Map<String, List<String>>? headers, this.body = ''})
+    : headers = _normalize(headers) {
     // Enforced unconditionally (not via assert): in a release binary an invalid
     // body would otherwise be written as a silent empty 200.
     if (body is! String && body is! List<int> && body is! Stream<List<int>>) {
@@ -23,33 +23,59 @@ class Response {
     // from user input must not carry a header-injection (response-splitting)
     // primitive past this boundary.
     for (final e in this.headers.entries) {
-      if (_hasControlChar(e.key) || _hasControlChar(e.value)) {
+      if (_hasControlChar(e.key)) {
         throw ArgumentError.value(
-          '${e.key}: ${e.value}',
+          e.key,
           'headers',
-          'header name/value must not contain control characters',
+          'header name must not contain control characters',
         );
+      }
+      for (final value in e.value) {
+        if (_hasControlChar(value)) {
+          throw ArgumentError.value(
+            value,
+            'headers',
+            'header value must not contain control characters',
+          );
+        }
       }
     }
   }
 
-  /// A JSON response: `jsonEncode(body)` with `application/json`.
-  factory Response.json(Object? body, [int status = 200]) => Response(
+  /// A JSON response: `jsonEncode(body)` with `application/json`. [headers]
+  /// merge over the content type (which they may override).
+  factory Response.json(
+    Object? body, {
+    int status = 200,
+    Map<String, List<String>>? headers,
+  }) => Response(
     status,
-    headers: const {'content-type': 'application/json; charset=utf-8'},
+    headers: {
+      'content-type': const ['application/json; charset=utf-8'],
+      ...?headers,
+    },
     body: jsonEncode(body),
   );
 
-  /// A `text/plain; charset=utf-8` response.
-  factory Response.text(String body, [int status = 200]) => Response(
+  /// A `text/plain; charset=utf-8` response. [headers] merge over the content
+  /// type (which they may override).
+  factory Response.text(
+    String body, {
+    int status = 200,
+    Map<String, List<String>>? headers,
+  }) => Response(
     status,
-    headers: const {'content-type': 'text/plain; charset=utf-8'},
+    headers: {
+      'content-type': const ['text/plain; charset=utf-8'],
+      ...?headers,
+    },
     body: body,
   );
   final int status;
 
-  /// Header names are stored lower-cased for consistent lookup and merging.
-  final Map<String, String> headers;
+  /// Header names are lower-cased; each maps to its ordered values (multi-value,
+  /// so multiple `set-cookie` etc. are faithful).
+  final Map<String, List<String>> headers;
 
   /// One of `String`, `List<int>`, or `Stream<List<int>>`.
   final Object body;
@@ -61,9 +87,13 @@ class Response {
     return false;
   }
 
-  static Map<String, String> _lowerCased(Map<String, String>? headers) {
-    if (headers == null || headers.isEmpty) return <String, String>{};
-    return {for (final e in headers.entries) e.key.toLowerCase(): e.value};
+  static Map<String, List<String>> _normalize(
+    Map<String, List<String>>? headers,
+  ) {
+    if (headers == null || headers.isEmpty) return const {};
+    return {
+      for (final e in headers.entries) e.key.toLowerCase(): List.of(e.value),
+    };
   }
 }
 

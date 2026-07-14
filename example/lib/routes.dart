@@ -11,6 +11,26 @@ import 'user_dto.dart';
 void register(App<Env> app) {
   app.get('/health', (c) => c.text('ok'));
 
+  // A list endpoint: query parameters drive pagination (declared for OpenAPI,
+  // read with the optional accessor + a code-side default — the one truth).
+  app.get(
+    '/users',
+    (c) async {
+      final limit = c.tryQuery<int>('limit') ?? 20;
+      final rows = await c.env.db.reader.query(
+        'select id, name, age, role, tags from users limit ?',
+        [limit],
+      );
+      return c.json({
+        'users': [for (final r in rows) UserDto.fromRow(r).toJson()],
+      });
+    },
+    doc: const RouteDoc(
+      summary: 'List users',
+      query: [QueryParam('limit', integer)],
+    ),
+  );
+
   app.get(
     '/users/:id',
     (c) async {
@@ -32,7 +52,14 @@ void register(App<Env> app) {
       'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
       [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
     );
-    return c.text('created', 201);
+    // 201 Created with a Location header — response headers via the helper.
+    return c.text(
+      'created',
+      status: 201,
+      headers: {
+        'location': ['/users/${dto.id}'],
+      },
+    );
   }, doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'));
 
   app

@@ -8,6 +8,7 @@ import 'package:keta_lints/keta_lints.dart';
 /// dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
 /// dart run keta_lints:check canonical <file-or-dir> ...
 /// dart run keta_lints:check routes <file-or-dir> ...
+/// dart run keta_lints:check query <file-or-dir> ...
 /// dart run keta_lints:check internal-await <file-or-dir> ...
 /// ```
 ///
@@ -17,7 +18,9 @@ import 'package:keta_lints/keta_lints.dart';
 /// unused captures. `internal-await` guards the framework's synchronous path.
 void main(List<String> args) {
   if (args.isEmpty) {
-    stderr.writeln('usage: check <drift|canonical|routes|internal-await> ...');
+    stderr.writeln(
+      'usage: check <drift|canonical|routes|query|internal-await> ...',
+    );
     exit(64);
   }
   switch (args.first) {
@@ -31,6 +34,8 @@ void main(List<String> args) {
       );
     case 'routes':
       _sourceCheck(args.sublist(1), routeDiagnostics, 'no route issues');
+    case 'query':
+      _sourceCheck(args.sublist(1), queryDiagnostics, 'no query issues');
     case 'internal-await':
       _sourceCheck(
         args.sublist(1),

@@ -78,7 +78,7 @@ class _CloseableRequest implements TransportRequest {
   @override
   final Uri uri;
   @override
-  final Map<String, String> headers;
+  final Map<String, List<String>> headers;
   @override
   final String remoteAddress = 'test';
   final Completer<void> _closed = Completer<void>();
@@ -429,15 +429,15 @@ void main() {
 
   test('Response rejects control characters in header names/values', () {
     expect(
-      () => Response(200, headers: {'x-foo': 'a\r\nSet-Cookie: evil=1'}),
+      () => Response(200, headers: {'x-foo': ['a\r\nSet-Cookie: evil=1']}),
       throwsArgumentError,
     );
     expect(
-      () => Response(200, headers: {'x-foo': 'a\nb'}),
+      () => Response(200, headers: {'x-foo': ['a\nb']}),
       throwsArgumentError,
     );
     // A normal header is still accepted.
-    expect(Response(200, headers: {'x-foo': 'bar'}).headers['x-foo'], 'bar');
+    expect(Response(200, headers: {'x-foo': ['bar']}).headers['x-foo'], ['bar']);
   });
 
   test('a transport disconnect (closed) fires c.aborted', () async {

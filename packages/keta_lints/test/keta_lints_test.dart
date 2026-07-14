@@ -1222,4 +1222,79 @@ class Dto {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
   });
+
+  group('scaffold — query', () {
+    test('a query parameter flows into the route doc and a 400 test', () {
+      final doc = {
+        ..._doc,
+        'paths': {
+          '/users': {
+            'get': {
+              'parameters': [
+                {
+                  'name': 'limit',
+                  'in': 'query',
+                  'required': true,
+                  'schema': {'type': 'integer'},
+                },
+              ],
+              'responses': {'200': <String, Object?>{}},
+            },
+          },
+        },
+      };
+      final s = generateScaffold(doc);
+      expect(s.routes, contains("query: [QueryParam('limit', integer, required: true)]"));
+      expect(
+        s.contractTest,
+        contains('GET /users requires its query parameters'),
+      );
+      expect(s.contractTest, contains("client.get('/users')).status, 400"));
+      parseString(content: s.routes, throwIfDiagnostics: true);
+      parseString(content: s.contractTest, throwIfDiagnostics: true);
+    });
+  });
+
+  group('query lint', () {
+    test('flags a c.query access not declared in RouteDoc.query', () {
+      const source = '''
+void register(app) {
+  app.get('/s', (c) => c.json({'p': c.query<int>('page')}),
+      doc: const RouteDoc(query: [QueryParam('other', integer)]));
+}
+''';
+      final d = queryDiagnostics(source);
+      expect(d.single.rule, 'keta_query_undeclared');
+      expect(d.single.message, contains('page'));
+    });
+
+    test('flags reading a required query with tryQuery (drift)', () {
+      const source = '''
+void register(app) {
+  app.get('/s', (c) => c.json({'p': c.tryQuery<int>('page')}),
+      doc: const RouteDoc(query: [QueryParam('page', integer, required: true)]));
+}
+''';
+      expect(queryDiagnostics(source).single.rule, 'keta_query_drift');
+    });
+
+    test('a declared, correctly-read query is clean', () {
+      const source = '''
+void register(app) {
+  app.get('/s', (c) => c.json({'p': c.query<int>('page')}),
+      doc: const RouteDoc(query: [QueryParam('page', integer, required: true)]));
+}
+''';
+      expect(queryDiagnostics(source), isEmpty);
+    });
+
+    test('a non-inline doc is not second-guessed', () {
+      const source = '''
+void register(app) {
+  app.get('/s', (c) => c.json({'p': c.query<int>('page')}), doc: userDoc);
+}
+''';
+      expect(queryDiagnostics(source), isEmpty);
+    });
+  });
 }

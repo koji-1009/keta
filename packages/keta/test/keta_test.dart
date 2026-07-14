@@ -380,4 +380,60 @@ void main() {
       expect(c.text('hi').status, 200);
     });
   });
+
+  group('query parameters', () {
+    test('query is required (400), tryQuery is optional, queryAll repeats', () async {
+      final app = App<Env>();
+      app.get(
+        '/s',
+        (c) => c.json({
+          'page': c.query<int>('page'),
+          'q': c.tryQuery<String>('q'),
+          'tags': c.queryAll<String>('tag'),
+        }),
+      );
+      final client = TestClient(app, newEnv());
+
+      expect((await client.get('/s?page=2&tag=a&tag=b')).json(), {
+        'page': 2,
+        'q': null,
+        'tags': ['a', 'b'],
+      });
+      expect((await client.get('/s')).status, 400); // required absent
+      expect((await client.get('/s?page=x')).status, 400); // unparseable
+    });
+  });
+
+  group('multi-value headers', () {
+    test('a response keeps every value for one header (set-cookie)', () {
+      final r = Response(
+        200,
+        headers: {
+          'set-cookie': ['a=1', 'b=2'],
+        },
+      );
+      expect(r.headers['set-cookie'], ['a=1', 'b=2']);
+    });
+
+    test('header returns the first value, headerAll returns all', () {
+      final c = testContext(newEnv(), headers: {'accept': 'text/html'});
+      expect(c.header('accept'), 'text/html');
+      expect(c.headerAll('accept'), ['text/html']);
+      expect(c.header('missing'), isNull);
+      expect(c.headerAll('missing'), isEmpty);
+    });
+
+    test('c.json merges extra headers over the content type', () {
+      final r = testContext(newEnv()).json(
+        {'ok': true},
+        status: 201,
+        headers: {
+          'location': ['/x'],
+        },
+      );
+      expect(r.status, 201);
+      expect(r.headers['location'], ['/x']);
+      expect(r.headers['content-type'], ['application/json; charset=utf-8']);
+    });
+  });
 }

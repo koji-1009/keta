@@ -75,7 +75,15 @@ class _H1Server implements TransportServer {
   Future<void> _write(HttpResponse out, Response response) async {
     try {
       out.statusCode = response.status;
-      response.headers.forEach(out.headers.set);
+      response.headers.forEach((name, values) {
+        // Framing is the Transport's to compute; user-supplied framing headers
+        // are ignored so a stale content-length can never corrupt the wire.
+        if (name == 'content-length' || name == 'transfer-encoding') return;
+        out.headers.removeAll(name);
+        for (final value in values) {
+          out.headers.add(name, value);
+        }
+      });
       final body = response.body;
       switch (body) {
         case String():
@@ -142,10 +150,10 @@ class _H1Request implements TransportRequest {
       _request.connectionInfo?.remoteAddress.address ?? '';
 
   @override
-  Map<String, String> get headers {
-    final result = <String, String>{};
+  Map<String, List<String>> get headers {
+    final result = <String, List<String>>{};
     _request.headers.forEach((name, values) {
-      result[name.toLowerCase()] = values.join(', ');
+      result[name.toLowerCase()] = values;
     });
     return result;
   }
