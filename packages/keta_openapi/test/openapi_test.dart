@@ -267,6 +267,28 @@ void main() {
       },
     );
 
+    test('a documented failure does not take the success away', () {
+      // `responses` is "beyond 200": a route declaring its 403 still answers
+      // 200 on the happy path. Conflating "documented anything" with
+      // "documented a success" made the document say /admin/ping never
+      // succeeds while its handler returned 'pong' — found by spectral's
+      // operation-success-response, which every keta-side test had missed.
+      final app = App<Ignored>();
+      app
+          .on(root.segments('ping'))
+          .get(
+            (c, _) => c.text('pong'),
+            doc: const RouteDoc(responses: {403: userDtoSchema}),
+          );
+      final op =
+          ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/ping']
+                  as Map)['get']
+              as Map;
+      final responses = op['responses'] as Map;
+      expect(responses.containsKey('200'), isTrue, reason: 'the happy path');
+      expect(responses.containsKey('403'), isTrue, reason: "the user's own");
+    });
+
     test('toYaml emits a document that parses back to the same structure', () {
       final spec = OpenApi.fromRoutes(buildApp().routes);
       final parsed = loadYaml(spec.toYaml());

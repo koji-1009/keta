@@ -117,14 +117,21 @@ Map<String, Object?> _operation(
       };
     }
   }
-  final documentedAny = responses.isNotEmpty;
   // A secured operation gains a 401 automatically — a deterministic projection
   // of the declaration — unless the user documented 401 themselves (theirs wins).
   if (security.isNotEmpty && !responses.containsKey('401')) {
     responses['401'] = {'description': 'Unauthorized'};
   }
-  // Only fabricate a 200 when the route documents no response at all.
-  if (!documentedAny) {
+  // `responses` is "beyond 200" (§5), so a declared failure does not replace the
+  // success: an operation documenting only its 403 still answers 200 on the
+  // happy path, and a document with no 2xx says it never succeeds — lying about
+  // the handler. Fabricate only when no success is documented; a route that
+  // declares its own 201 keeps that alone.
+  final documentsSuccess = responses.keys.any((status) {
+    final code = int.tryParse(status);
+    return code != null && code >= 200 && code < 400;
+  });
+  if (!documentsSuccess) {
     responses['200'] = {'description': 'OK'};
   }
   return {
