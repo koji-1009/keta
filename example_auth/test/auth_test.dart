@@ -52,7 +52,8 @@ void main() {
     });
     // /public declares no security → no security key, no auto-401.
     final pub =
-        ((doc['paths'] as Map)['/public'] as Map)['get'] as Map<String, Object?>;
+        ((doc['paths'] as Map)['/public'] as Map)['get']
+            as Map<String, Object?>;
     expect(pub.containsKey('security'), isFalse);
   });
 }
