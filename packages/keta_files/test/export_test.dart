@@ -31,9 +31,9 @@ void main() {
 
     test('the doc travels with the handler that earns it', () {
       final app = App<Env>();
-      Exported<Env>([
-        const Get(_ok, doc: 'the-get-doc'),
-        const Post(_ok),
+      const Exported<Env>([
+        Get(_ok, doc: 'the-get-doc'),
+        Post(_ok),
       ]).bind(app, const ['x']);
 
       final byMethod = {for (final r in app.routes) r.method: r.doc};
@@ -69,33 +69,55 @@ void main() {
 
     test('an undeclared capture is a string', () {
       final app = App<Env>();
-      Exported<Env>([const Get(_ok)]).bind(app, const ['users', ':id']);
+      const Exported<Env>([Get(_ok)]).bind(app, const ['users', ':id']);
       expect((app.routes.single.segments[1] as CaptureSegment).capture.schema, {
         'type': 'string',
       });
     });
   });
 
-  group('what cannot be built', () {
-    test('a file that serves nothing', () {
-      // It would sit in the tree looking like a route and answer 404. Refused
-      // where it is written, not discovered at request time.
-      expect(() => Exported<Env>(const []), throwsA(isA<ArgumentError>()));
-    });
-
-    test('one URL answering a method twice', () {
-      // Which one wins is a question with no answer; keta's own boot-time check
-      // would catch it later, but the file is where the mistake is.
+  group('what fails, and when', () {
+    test('a file that serves nothing fails at boot, naming the URL', () {
+      // It sits in the tree looking like a route and answers 404. The check is
+      // on bind rather than the constructor, which costs nothing: a lazy `final
+      // exported` only runs its initializer when something first touches it,
+      // and the first touch is this bind. Moving it is what lets the
+      // constructor be const.
       expect(
-        () => Exported<Env>([const Get(_ok), const Get(_ok)]),
+        () => const Exported<Env>([]).bind(App<Env>(), const ['users', ':id']),
         throwsA(
-          isA<ArgumentError>().having(
+          isA<StateError>().having(
             (e) => e.message,
             'message',
-            contains('answers a method once'),
+            contains('/users/:id'),
           ),
         ),
       );
     });
+
+    test("a URL answering a method twice is keta's to catch, not ours", () {
+      // Checking it here would duplicate a boot-time check keta already has —
+      // and keta names the route, where this could only name a type.
+      final app = App<Env>();
+      const Exported<Env>([Get(_ok), Get(_ok)]).bind(app, const ['x']);
+      expect(
+        () => app.compile(Env()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('route conflict'), contains('GET /x')),
+          ),
+        ),
+      );
+    });
+  });
+
+  test('a route file export is a compile-time constant', () {
+    // Nothing needs a constructor body, so the whole declaration is const
+    // rather than something built on first touch.
+    const a = Exported<Env>([Get(_ok)], captures: {'index': integer});
+    const b = Exported<Env>([Get(_ok)], captures: {'index': integer});
+    expect(identical(a, b), isTrue, reason: 'canonicalized, so really const');
   });
 }

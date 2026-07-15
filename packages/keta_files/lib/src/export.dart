@@ -69,29 +69,17 @@ final class Options<E> extends Verb<E> {
 /// `captures:` is an unknown named argument, a handler of the wrong shape is a
 /// type error, a doc attached to a verb the file does not serve is unwritable.
 class Exported<E> {
-  Exported(this.verbs, {this.captures = const {}}) {
-    if (verbs.isEmpty) {
-      // A file under routes/ that serves nothing looks exactly like a route and
-      // answers 404. Boot-time fail-fast rather than a mystery at request time.
-      throw ArgumentError.value(
-        verbs,
-        'verbs',
-        'a route file must serve a verb',
-      );
-    }
-    final duplicated = <Type>{};
-    for (final verb in verbs) {
-      if (!duplicated.add(verb.runtimeType)) {
-        throw ArgumentError.value(
-          verbs,
-          'verbs',
-          'two ${verb.runtimeType}s: one URL answers a method once',
-        );
-      }
-    }
-  }
+  /// Const, because it has nothing to check here.
+  ///
+  /// A URL answering one method twice is caught by keta itself, at boot, and
+  /// named better than this could: `route conflict: GET /users/:id registered
+  /// twice`. Serving nothing is caught by [bind] — which is where it was caught
+  /// before too, since a lazy `final` only runs its initializer when something
+  /// first touches it, and the first touch is the bind.
+  const Exported(this.verbs, {this.captures = const {}});
 
-  /// What this file serves, one entry per verb.
+  /// What this file serves — one entry per verb the URL answers. `/users` is
+  /// [Get] and [Post]; `/health` is just [Get].
   final List<Verb<E>> verbs;
 
   /// The types of the captures its location declares — `{'index': integer}` for
@@ -107,6 +95,14 @@ class Exported<E> {
   /// Binds every verb at [template] — the URL this file's location denotes,
   /// handed in by the generated manifest.
   void bind(App<E> app, List<String> template) {
+    if (verbs.isEmpty) {
+      // A file under routes/ that serves nothing looks exactly like a route and
+      // answers 404. Loud at boot rather than a mystery at request time.
+      throw StateError(
+        'the route file for ${template.isEmpty ? '/' : '/${template.join('/')}'}'
+        ' serves no verb',
+      );
+    }
     final segments = routeSegments(template, captures);
     for (final verb in verbs) {
       // Exhaustive over the sealed hierarchy: a new Verb without a case here

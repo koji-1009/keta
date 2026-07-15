@@ -5,60 +5,55 @@ import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
-/// `/users`. One file is one URL; the list is what it answers.
+/// `/users`. One file is one URL; the list is what that URL answers.
 final exported = Exported<Env>([
-  const Get(_list, doc: _listDoc),
-  const Post(_create, doc: _createDoc),
-]);
-
-const _listDoc = RouteDoc(
-  response: userListSchema,
-  summary: 'List users',
-  query: [QueryParam('limit', integer), QueryParam('role', string)],
-);
-
-/// Query parameters drive pagination and filtering — declared above for the
-/// document, read here with the optional accessor and a code-side default.
-Future<Response> _list(Context<Env> c) async {
-  final limit = c.tryQuery<int>('limit') ?? 20;
-  final role = c.tryQuery<String>('role');
-  final where = role == null ? '' : ' where role = ?';
-  final rows = await c.env.db.reader.query(
-    'select id, name, age, role, tags from users$where limit ?',
-    role == null ? [limit] : [role, limit],
-  );
-  final total = await c.env.db.reader.query(
-    'select count(*) as n from users$where',
-    role == null ? const [] : [role],
-  );
-  return c.json(
-    UserList(
-      users: [for (final r in rows) UserDto.fromRow(r)],
-      total: total.first['n'] as int,
-    ).toJson(),
-  );
-}
-
-const _createDoc = RouteDoc(
-  requestBody: userDtoSchema,
-  summary: 'Create a user',
-);
-
-/// A duplicate id needs no code here: keta_sqlite turns the engine's uniqueness
-/// violation into a Conflict, and recover() renders it as a 409.
-Future<Response> _create(Context<Env> c) async {
-  final dto = UserDto.fromJson(
-    userDtoSchema.require(await c.body()) as Map<String, Object?>,
-  );
-  await c.get(txConn).execute(
-    'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
-    [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
-  );
-  return c.text(
-    'created',
-    status: 201,
-    headers: {
-      'location': ['/users/${dto.id}'],
+  Get(
+    // Query parameters drive pagination and filtering — declared in the doc
+    // below, read here with the optional accessor and a code-side default.
+    (c) async {
+      final limit = c.tryQuery<int>('limit') ?? 20;
+      final role = c.tryQuery<String>('role');
+      final where = role == null ? '' : ' where role = ?';
+      final rows = await c.env.db.reader.query(
+        'select id, name, age, role, tags from users$where limit ?',
+        role == null ? [limit] : [role, limit],
+      );
+      final total = await c.env.db.reader.query(
+        'select count(*) as n from users$where',
+        role == null ? const [] : [role],
+      );
+      return c.json(
+        UserList(
+          users: [for (final r in rows) UserDto.fromRow(r)],
+          total: total.first['n'] as int,
+        ).toJson(),
+      );
     },
-  );
-}
+    doc: const RouteDoc(
+      response: userListSchema,
+      summary: 'List users',
+      query: [QueryParam('limit', integer), QueryParam('role', string)],
+    ),
+  ),
+  Post(
+    // A duplicate id needs no code here: keta_sqlite turns the engine's
+    // uniqueness violation into a Conflict, and recover() renders it as a 409.
+    (c) async {
+      final dto = UserDto.fromJson(
+        userDtoSchema.require(await c.body()) as Map<String, Object?>,
+      );
+      await c.get(txConn).execute(
+        'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
+        [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
+      );
+      return c.text(
+        'created',
+        status: 201,
+        headers: {
+          'location': ['/users/${dto.id}'],
+        },
+      );
+    },
+    doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'),
+  ),
+]);

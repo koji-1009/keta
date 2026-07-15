@@ -7,8 +7,9 @@ import 'package:keta_otel/keta_otel.dart';
 /// Metrics are not public: apiKey rather than the bearer everything else uses,
 /// so the document carries two schemes and the gate honours both.
 ///
-/// metricsHandler closes over the registry, so it is built once here rather
-/// than rebuilt on every scrape.
+/// `final`, not `const` like every other route file: metricsHandler closes over
+/// the registry, and a closure is not a constant. Built once here rather than
+/// rebuilt on every scrape.
 final exported = Exported<Env>([
   Get(
     metricsHandler<Env>(metrics),
