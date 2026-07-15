@@ -83,7 +83,13 @@ String _generateDtos(Map<String, Map<String, Object?>> schemas) {
     } else if (_isEnum(schema)) {
       _writeEnum(buffer, name, schema);
     } else if (schema['type'] == 'object') {
-      _writeClass(buffer, name, schema, schemas, implementsType: variantOf[name]);
+      _writeClass(
+        buffer,
+        name,
+        schema,
+        schemas,
+        implementsType: variantOf[name],
+      );
     } else {
       buffer.writeln(
         '// keta: "$name" is outside the canonical subset '
@@ -106,7 +112,8 @@ Map<String, String> _variants(Map<String, Object?> schema) {
   final mapping = (schema['discriminator'] as Map)['mapping'];
   if (mapping is Map) {
     return {
-      for (final e in mapping.entries) e.key.toString(): _refName(e.value.toString()),
+      for (final e in mapping.entries)
+        e.key.toString(): _refName(e.value.toString()),
     };
   }
   return {
@@ -397,13 +404,17 @@ String _generateRoutes(
   buffer
     ..writeln()
     ..writeln('/// The single assembly point for the app: main, the contract')
-    ..writeln('/// tests, and tool/openapi.dart all build it here, so middleware')
+    ..writeln(
+      '/// tests, and tool/openapi.dart all build it here, so middleware',
+    )
     ..writeln('/// wired once below covers all three.')
     ..writeln('App<Object?> buildApp() {')
     ..writeln('  final app = App<Object?>();')
     ..writeln('  // TODO: wire middleware here -- recover(), tx(), and for the')
     ..writeln('  // declared security app.use(enforceSecurity(policy)). The')
-    ..writeln('  // "no credentials -> 401" contract tests stay red until you do.')
+    ..writeln(
+      '  // "no credentials -> 401" contract tests stay red until you do.',
+    )
     ..writeln('  register(app);')
     ..writeln('  return app;')
     ..writeln('}');
@@ -563,7 +574,8 @@ String _samplePath(String openApiPath) =>
     openApiPath.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x');
 
 List<_Endpoint> _securedEndpoints(Map<String, Object?> document) {
-  final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
+  final paths =
+      (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
   return [
     for (final pathEntry in paths.entries)
       for (final opEntry
@@ -576,7 +588,8 @@ List<_Endpoint> _securedEndpoints(Map<String, Object?> document) {
 }
 
 List<_Endpoint> _requiredQueryEndpoints(Map<String, Object?> document) {
-  final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
+  final paths =
+      (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
   return [
     for (final pathEntry in paths.entries)
       for (final opEntry

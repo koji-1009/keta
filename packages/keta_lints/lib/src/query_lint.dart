@@ -150,7 +150,10 @@ class _QueryAccessCollector extends RecursiveAstVisitor<void> {
     if (_accessors.contains(node.methodName.name) &&
         args.length == 1 &&
         args.first is SimpleStringLiteral) {
-      accesses.add(((args.first as SimpleStringLiteral).value, node.methodName.name));
+      accesses.add((
+        (args.first as SimpleStringLiteral).value,
+        node.methodName.name,
+      ));
     }
     super.visitMethodInvocation(node);
   }

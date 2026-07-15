@@ -100,15 +100,16 @@ void main() {
       expect((await client.get('/n/x')).status, 400);
     });
 
-    test('segments batches a "/"-separated run into literal segments', () async {
-      final app = App<Env>();
-      app
-          .on(root.segments('api/v1/ping'))
-          .get((c, _) => c.text('pong'));
-      final client = TestClient(app, newEnv());
+    test(
+      'segments batches a "/"-separated run into literal segments',
+      () async {
+        final app = App<Env>();
+        app.on(root.segments('api/v1/ping')).get((c, _) => c.text('pong'));
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/api/v1/ping')).text(), 'pong');
-    });
+        expect((await client.get('/api/v1/ping')).text(), 'pong');
+      },
+    );
 
     test('segments rejects empty parts and ":"-prefixed literals', () {
       expect(() => root.segments('a//b'), throwsArgumentError); // doubled slash
@@ -117,25 +118,28 @@ void main() {
       expect(() => root.segments(':id'), throwsArgumentError); // capture vocab
     });
 
-    test('a custom capture drives the tuple and BadRequest becomes 400', () async {
-      final shade = Capture<Shade>(
-        (s) =>
-            Shade.values.asNameMap()[s] ??
-            (throw BadRequest('unknown shade: $s')),
-        schema: {
-          'type': 'string',
-          'enum': ['red', 'green'],
-        },
-      );
-      final app = App<Env>();
-      app
-          .on(root.segments('c').capture(shade('shade')))
-          .get((c, (Shade,) p) => c.text(p.$1.name));
-      final client = TestClient(app, newEnv());
+    test(
+      'a custom capture drives the tuple and BadRequest becomes 400',
+      () async {
+        final shade = Capture<Shade>(
+          (s) =>
+              Shade.values.asNameMap()[s] ??
+              (throw BadRequest('unknown shade: $s')),
+          schema: {
+            'type': 'string',
+            'enum': ['red', 'green'],
+          },
+        );
+        final app = App<Env>();
+        app
+            .on(root.segments('c').capture(shade('shade')))
+            .get((c, (Shade,) p) => c.text(p.$1.name));
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/c/green')).text(), 'green');
-      expect((await client.get('/c/purple')).status, 400);
-    });
+        expect((await client.get('/c/green')).text(), 'green');
+        expect((await client.get('/c/purple')).status, 400);
+      },
+    );
   });
 
   group('group prefix captures and path decoding', () {
@@ -351,8 +355,7 @@ void main() {
       final app = App<Env>()..use(recover());
       app.get(
         '/f',
-        (Context<Env> c) =>
-            mode.wrap(() => throw const BadRequest('bad'))(),
+        (Context<Env> c) => mode.wrap(() => throw const BadRequest('bad'))(),
       );
       final client = TestClient(app, newEnv());
 
@@ -382,26 +385,29 @@ void main() {
   });
 
   group('query parameters', () {
-    test('query is required (400), tryQuery is optional, queryAll repeats', () async {
-      final app = App<Env>();
-      app.get(
-        '/s',
-        (c) => c.json({
-          'page': c.query<int>('page'),
-          'q': c.tryQuery<String>('q'),
-          'tags': c.queryAll<String>('tag'),
-        }),
-      );
-      final client = TestClient(app, newEnv());
+    test(
+      'query is required (400), tryQuery is optional, queryAll repeats',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/s',
+          (c) => c.json({
+            'page': c.query<int>('page'),
+            'q': c.tryQuery<String>('q'),
+            'tags': c.queryAll<String>('tag'),
+          }),
+        );
+        final client = TestClient(app, newEnv());
 
-      expect((await client.get('/s?page=2&tag=a&tag=b')).json(), {
-        'page': 2,
-        'q': null,
-        'tags': ['a', 'b'],
-      });
-      expect((await client.get('/s')).status, 400); // required absent
-      expect((await client.get('/s?page=x')).status, 400); // unparseable
-    });
+        expect((await client.get('/s?page=2&tag=a&tag=b')).json(), {
+          'page': 2,
+          'q': null,
+          'tags': ['a', 'b'],
+        });
+        expect((await client.get('/s')).status, 400); // required absent
+        expect((await client.get('/s?page=x')).status, 400); // unparseable
+      },
+    );
   });
 
   group('multi-value headers', () {

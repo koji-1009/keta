@@ -74,7 +74,13 @@ void register(App<Env> app) {
       );
       final changed = await c.get(txConn).execute(
         'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
-        [dto.name, dto.age, dto.role.name, dto.tags.join(','), c.param<String>('id')],
+        [
+          dto.name,
+          dto.age,
+          dto.role.name,
+          dto.tags.join(','),
+          c.param<String>('id'),
+        ],
       );
       if (changed == 0) throw const NotFound('user not found');
       return c.json(dto.toJson());

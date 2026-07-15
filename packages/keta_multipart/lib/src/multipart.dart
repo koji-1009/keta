@@ -96,7 +96,9 @@ Stream<Part> parts<E>(
 
   final bounded = _limitTotal(c.bodyStream(), limits.maxTotalBytes);
   var count = 0;
-  await for (final part in bounded.transform(MimeMultipartTransformer(boundary))) {
+  await for (final part in bounded.transform(
+    MimeMultipartTransformer(boundary),
+  )) {
     if (++count > limits.maxParts) {
       throw PayloadTooLarge('multipart exceeds ${limits.maxParts} parts');
     }

@@ -148,10 +148,17 @@ void register(App<Env> app) {
   // the default would make that assumption true only by accident — add apiKey
   // to apiDefaults and the OR-combining gate would admit a caller with no
   // principal, turning this handler into a 500.
-  app.get('/whoami', (c) {
-    final who = c.get(principal);
-    return c.json({'id': who.id, 'admin': who.admin});
-  }, doc: const RouteDoc(summary: 'The authenticated caller', security: [bearer]));
+  app.get(
+    '/whoami',
+    (c) {
+      final who = c.get(principal);
+      return c.json({'id': who.id, 'admin': who.admin});
+    },
+    doc: const RouteDoc(
+      summary: 'The authenticated caller',
+      security: [bearer],
+    ),
+  );
 
   // Authorization is ordinary middleware, scoped to a group rather than the
   // whole app: `enforceSecurity` answers "who are you", `requireAdmin` answers

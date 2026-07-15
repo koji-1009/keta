@@ -26,8 +26,7 @@ class Capture<T> {
 
   /// A named copy, for OpenAPI parameter naming: `integer('id')`. Calling the
   /// capture is the one naming form — there is no separate `named()` helper.
-  Capture<T> call(String name) =>
-      Capture<T>(parse, name: name, schema: schema);
+  Capture<T> call(String name) => Capture<T>(parse, name: name, schema: schema);
 }
 
 // Built-in captures wrap the SDK's parse failures into a [BadRequest] here, once
@@ -166,10 +165,7 @@ Path<dynamic> parsePathString(String pattern) {
 /// Appends a capture to a `Path<dynamic>` without changing the static type
 /// (the string syntax carries no tuple; captures are read via `c.param`).
 Path<dynamic> _appendCapture(Path<dynamic> path, Capture<Object?> capture) =>
-    Path<dynamic>._([
-      ...path.parts,
-      CaptureSegment(capture),
-    ], path.buildTuple);
+    Path<dynamic>._([...path.parts, CaptureSegment(capture)], path.buildTuple);
 
 Iterable<String> _splitSegments(String pattern) =>
     pattern.split('/').where((s) => s.isNotEmpty);

@@ -132,10 +132,7 @@ void main() {
         s.contractTest,
         contains('POST /users rejects a request without credentials'),
       );
-      expect(
-        s.contractTest,
-        contains('TestClient(buildApp(), null)'),
-      );
+      expect(s.contractTest, contains('TestClient(buildApp(), null)'));
       expect(s.contractTest, contains("client.post('/users')).status, 401"));
       expect(s.contractTest, contains("client.get('/users/x')).status, 401"));
       expect(s.contractTest, isNot(contains('register(app)')));
@@ -1244,7 +1241,10 @@ class Dto {
         },
       };
       final s = generateScaffold(doc);
-      expect(s.routes, contains("query: [QueryParam('limit', integer, required: true)]"));
+      expect(
+        s.routes,
+        contains("query: [QueryParam('limit', integer, required: true)]"),
+      );
       expect(
         s.contractTest,
         contains('GET /users requires its query parameters'),
@@ -1340,9 +1340,15 @@ void register(app) {
       expect(dtos, contains("'deleted' => Deleted.fromJson(json)"));
       expect(dtos, contains('class Created implements Event {'));
       expect(dtos, contains('class Deleted implements Event {'));
-      expect(dtos, contains('@override')); // variant toJson overrides the parent
+      expect(
+        dtos,
+        contains('@override'),
+      ); // variant toJson overrides the parent
       expect(dtos, contains("throw const BadRequest('unknown Event type')"));
-      expect(dtos, contains("import 'package:keta/keta.dart';")); // for BadRequest
+      expect(
+        dtos,
+        contains("import 'package:keta/keta.dart';"),
+      ); // for BadRequest
       // The Schema constant collects the variants transitively.
       expect(dtos, contains("const eventSchema = Schema('Event'"));
       expect(dtos, contains('deps: [createdSchema, deletedSchema]'));

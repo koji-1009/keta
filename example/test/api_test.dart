@@ -218,24 +218,21 @@ void main() {
       final env = await bootTestEnv();
       addTearDown(env.close);
       final app = buildApp(requestTimeout: const Duration(milliseconds: 20))
-        ..get(
-          '/slow',
-          (c) async {
-            await Future<void>.delayed(const Duration(seconds: 1));
-            return c.text('too late');
-          },
-          doc: const RouteDoc(summary: 'Deliberately slow', security: []),
-        );
+        ..get('/slow', (c) async {
+          await Future<void>.delayed(const Duration(seconds: 1));
+          return c.text('too late');
+        }, doc: const RouteDoc(summary: 'Deliberately slow', security: []));
 
-      final r = await TestClient(app, env).get(
-        '/slow',
-        headers: const {'origin': 'https://app.example.com'},
-      );
+      final r = await TestClient(
+        app,
+        env,
+      ).get('/slow', headers: const {'origin': 'https://app.example.com'});
       expect(r.status, 504);
       expect(
         r.headers['access-control-allow-origin'],
         '*',
-        reason: 'a 504 without CORS headers reaches the browser as a network '
+        reason:
+            'a 504 without CORS headers reaches the browser as a network '
             'error, so the client cannot tell a timeout from an outage',
       );
     });

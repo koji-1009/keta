@@ -84,17 +84,21 @@ class UserList {
   };
 }
 
-const userListSchema = Schema('UserList', {
-  'type': 'object',
-  'required': ['users', 'total'],
-  'properties': {
-    'users': {
-      'type': 'array',
-      'items': {r'$ref': '#/components/schemas/UserDto'},
+const userListSchema = Schema(
+  'UserList',
+  {
+    'type': 'object',
+    'required': ['users', 'total'],
+    'properties': {
+      'users': {
+        'type': 'array',
+        'items': {r'$ref': '#/components/schemas/UserDto'},
+      },
+      'total': {'type': 'integer'},
     },
-    'total': {'type': 'integer'},
   },
-}, deps: [userDtoSchema]);
+  deps: [userDtoSchema],
+);
 
 /// The multipart upload form — a request-body schema, not a DTO. The file field
 /// is `format: binary`; the app reads it via keta_multipart, not `fromJson`.

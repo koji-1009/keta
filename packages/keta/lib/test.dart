@@ -36,7 +36,9 @@ Context<E> testContext<E>(
     method: method,
     uri: Uri.parse(path),
     route: path,
-    headers: {for (final e in headers.entries) e.key.toLowerCase(): [e.value]},
+    headers: {
+      for (final e in headers.entries) e.key.toLowerCase(): [e.value],
+    },
     remoteAddress: 'test',
     params: params,
     orderedCaptures: params.values.toList(),

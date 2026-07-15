@@ -82,12 +82,7 @@ Map<String, Object?> _operation(
 ) {
   final parameters = [
     for (final param in _pathParameters(route.segments))
-      {
-        'name': param.$1,
-        'in': 'path',
-        'required': true,
-        'schema': param.$2,
-      },
+      {'name': param.$1, 'in': 'path', 'required': true, 'schema': param.$2},
     if (doc?.query != null)
       for (final q in doc!.query!)
         {
@@ -142,9 +137,7 @@ Map<String, Object?> _operation(
       },
     if (security.isNotEmpty)
       'security': [
-        for (final scheme in security) {
-          scheme.name: <String>[],
-        },
+        for (final scheme in security) {scheme.name: <String>[]},
       ],
     'responses': responses,
   };

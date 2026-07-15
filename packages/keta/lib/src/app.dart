@@ -338,8 +338,7 @@ class App<E> {
   }
 }
 
-List<Segment> _prefixSegments(String prefix) =>
-    parsePathString(prefix).parts;
+List<Segment> _prefixSegments(String prefix) => parsePathString(prefix).parts;
 
 /// A prefixed child router with its own confined middleware.
 class RouteGroup<E> {

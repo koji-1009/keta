@@ -47,28 +47,33 @@ void main() {
       );
     });
 
-    test('a partially-applied schema reports only the missing versions',
-        () async {
-      m('0001_one.sql', 'create table one (id integer);');
-      final db = FakeDb();
-      await applyMigrations(db, directory: dir.path);
-      m('0002_two.sql', 'create table two (id integer);');
+    test(
+      'a partially-applied schema reports only the missing versions',
+      () async {
+        m('0001_one.sql', 'create table one (id integer);');
+        final db = FakeDb();
+        await applyMigrations(db, directory: dir.path);
+        m('0002_two.sql', 'create table two (id integer);');
 
-      await expectLater(
-        db.verifyMigrations(dir.path),
-        throwsA(
-          isA<StateError>()
-              .having((e) => e.message, 'message', contains('0002'))
-              .having((e) => e.message, 'message', isNot(contains('0001'))),
-        ),
-      );
-    });
+        await expectLater(
+          db.verifyMigrations(dir.path),
+          throwsA(
+            isA<StateError>()
+                .having((e) => e.message, 'message', contains('0002'))
+                .having((e) => e.message, 'message', isNot(contains('0001'))),
+          ),
+        );
+      },
+    );
 
-    test('a missing directory throws (a typo or wrong cwd, not clean)', () async {
-      await expectLater(
-        FakeDb().verifyMigrations('${dir.path}/nope'),
-        throwsA(isA<FileSystemException>()),
-      );
-    });
+    test(
+      'a missing directory throws (a typo or wrong cwd, not clean)',
+      () async {
+        await expectLater(
+          FakeDb().verifyMigrations('${dir.path}/nope'),
+          throwsA(isA<FileSystemException>()),
+        );
+      },
+    );
   });
 }

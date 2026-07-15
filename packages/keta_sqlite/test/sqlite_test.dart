@@ -181,9 +181,9 @@ end;
       () async {
         final dir = Directory.systemTemp.createTempSync('keta_verify');
         addTearDown(() => dir.deleteSync(recursive: true));
-        File('${dir.path}/0001_one.sql').writeAsStringSync(
-          'create table one (id integer);',
-        );
+        File(
+          '${dir.path}/0001_one.sql',
+        ).writeAsStringSync('create table one (id integer);');
         final db = SqliteDb.memory();
         addTearDown(db.close);
 

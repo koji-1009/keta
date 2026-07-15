@@ -17,9 +17,9 @@ void main() {
       "insert into users values ('a@x'); insert into users values ('a@x');",
     );
     // Applied second, over data that already violates it.
-    File('${dir.path}/0002_unique.sql').writeAsStringSync(
-      'create unique index users_email on users (email);',
-    );
+    File(
+      '${dir.path}/0002_unique.sql',
+    ).writeAsStringSync('create unique index users_email on users (email);');
 
     final db = SqliteDb.memory();
     addTearDown(db.close);

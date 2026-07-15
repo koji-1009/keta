@@ -104,7 +104,13 @@ void main() {
   test('nameless captures become p{index} with their schema fragment', () {
     final app = App<Ignored>();
     app
-        .on(root.segments('users').capture(integer).segments('score').capture(number))
+        .on(
+          root
+              .segments('users')
+              .capture(integer)
+              .segments('score')
+              .capture(number),
+        )
         .get((c, p) => c.text('x'));
     final doc = OpenApi.fromRoutes(app.routes).toJson();
     final paths = doc['paths'] as Map;
@@ -187,24 +193,27 @@ void main() {
     Map<String, Object?> op(Map<String, Object?> doc, String path) =>
         ((doc['paths'] as Map)[path] as Map)['get'] as Map<String, Object?>;
 
-    test('a declared scheme emits per-op security, the component, and a 401', () {
-      final app = App<Ignored>()
-        ..get(
-          '/secret',
-          (c) => c.text('x'),
-          doc: const RouteDoc(security: [bearer]),
+    test(
+      'a declared scheme emits per-op security, the component, and a 401',
+      () {
+        final app = App<Ignored>()
+          ..get(
+            '/secret',
+            (c) => c.text('x'),
+            doc: const RouteDoc(security: [bearer]),
+          );
+        final doc = OpenApi.fromRoutes(app.routes).toJson();
+        final o = op(doc, '/secret');
+        expect(o['security'], [
+          {'bearer': <String>[]},
+        ]);
+        expect((o['responses'] as Map).containsKey('401'), isTrue);
+        expect(
+          ((doc['components'] as Map)['securitySchemes'] as Map)['bearer'],
+          {'type': 'http', 'scheme': 'bearer'},
         );
-      final doc = OpenApi.fromRoutes(app.routes).toJson();
-      final o = op(doc, '/secret');
-      expect(o['security'], [
-        {'bearer': <String>[]},
-      ]);
-      expect((o['responses'] as Map).containsKey('401'), isTrue);
-      expect(((doc['components'] as Map)['securitySchemes'] as Map)['bearer'], {
-        'type': 'http',
-        'scheme': 'bearer',
-      });
-    });
+      },
+    );
 
     test('the global default applies where a route declares none', () {
       final app = App<Ignored>()..get('/x', (c) => c.text('x'));
@@ -245,24 +254,30 @@ void main() {
         (((doc['paths'] as Map)[path] as Map)['get'] as Map)['parameters']
             as List;
 
-    test('declared query params project to in:query with required + schema', () {
-      final app = App<Ignored>()
-        ..get(
-          '/s',
-          (c) => c.text('x'),
-          doc: const RouteDoc(
-            query: [QueryParam('page', integer), QueryParam('q', string, required: true)],
-          ),
-        );
-      final ps = params(OpenApi.fromRoutes(app.routes).toJson(), '/s');
-      final page = ps.firstWhere((p) => (p as Map)['name'] == 'page') as Map;
-      expect(page['in'], 'query');
-      expect(page['required'], false);
-      expect(page['schema'], {'type': 'integer'});
-      final q = ps.firstWhere((p) => (p as Map)['name'] == 'q') as Map;
-      expect(q['required'], true);
-      expect(q['schema'], {'type': 'string'});
-    });
+    test(
+      'declared query params project to in:query with required + schema',
+      () {
+        final app = App<Ignored>()
+          ..get(
+            '/s',
+            (c) => c.text('x'),
+            doc: const RouteDoc(
+              query: [
+                QueryParam('page', integer),
+                QueryParam('q', string, required: true),
+              ],
+            ),
+          );
+        final ps = params(OpenApi.fromRoutes(app.routes).toJson(), '/s');
+        final page = ps.firstWhere((p) => (p as Map)['name'] == 'page') as Map;
+        expect(page['in'], 'query');
+        expect(page['required'], false);
+        expect(page['schema'], {'type': 'integer'});
+        final q = ps.firstWhere((p) => (p as Map)['name'] == 'q') as Map;
+        expect(q['required'], true);
+        expect(q['schema'], {'type': 'string'});
+      },
+    );
 
     test('a path param and a query param may share a name', () {
       final app = App<Ignored>()
@@ -280,7 +295,11 @@ void main() {
     App<Ignored> build(List<String> paths) {
       final app = App<Ignored>();
       for (final p in paths) {
-        app.get(p, (c) => c.text('x'), doc: const RouteDoc(response: createdSchema));
+        app.get(
+          p,
+          (c) => c.text('x'),
+          doc: const RouteDoc(response: createdSchema),
+        );
       }
       return app;
     }

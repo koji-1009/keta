@@ -73,7 +73,10 @@ void main() {
         '/h',
         (c) => Response(
           201,
-          headers: {'x-keta': ['yes'], 'content-type': ['text/plain']},
+          headers: {
+            'x-keta': ['yes'],
+            'content-type': ['text/plain'],
+          },
           body: 'ok',
         ),
       );
@@ -352,7 +355,9 @@ void main() {
         '/s',
         (c) => Response(
           200,
-          headers: {'content-length': ['999']},
+          headers: {
+            'content-length': ['999'],
+          },
           body: Stream<List<int>>.value(utf8.encode('hi')),
         ),
       );
