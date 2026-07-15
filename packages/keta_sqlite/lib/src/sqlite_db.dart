@@ -3,7 +3,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keta/keta.dart' show Unavailable;
+import 'package:keta/keta.dart' show Conflict, Unavailable;
 import 'package:keta_db/keta_db.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -124,18 +124,56 @@ class SqliteDb implements Db {
     }
   }
 
-  List<Map<String, Object?>> rawQuery(String sql, List<Object?> params) {
-    final result = _db.select(sql, params);
-    final columns = result.columnNames;
-    return [
-      for (final row in result)
-        {for (final column in columns) column: _mapValue(row[column])},
-    ];
-  }
+  List<Map<String, Object?>> rawQuery(String sql, List<Object?> params) =>
+      _translating(() {
+        final result = _db.select(sql, params);
+        final columns = result.columnNames;
+        return [
+          for (final row in result)
+            {for (final column in columns) column: _mapValue(row[column])},
+        ];
+      });
 
-  int rawExecute(String sql, List<Object?> params) {
+  int rawExecute(String sql, List<Object?> params) => _translating(() {
     _db.execute(sql, params);
     return _db.updatedRows;
+  });
+}
+
+/// The extended codes that mean "this row already exists", and only those.
+///
+/// Deliberately not every SQLITE_CONSTRAINT: a NOT NULL, CHECK, FOREIGN KEY or
+/// TRIGGER violation is the app's own data being wrong. That is a bug, and the
+/// 500 it already earns is the honest answer — a 409 would tell the client to
+/// retry something that can never succeed.
+const _uniquenessViolations = {
+  SqlExtendedError.SQLITE_CONSTRAINT_PRIMARYKEY,
+  SqlExtendedError.SQLITE_CONSTRAINT_UNIQUE,
+  SqlExtendedError.SQLITE_CONSTRAINT_ROWID,
+};
+
+/// Runs [action], translating the driver's uniqueness violations into keta's
+/// [Conflict].
+///
+/// Without this the app has to catch `SqliteException` and match code 1555 to
+/// answer 409 — which means importing package:sqlite3 into a handler, coupling
+/// it to this engine, and breaking the moment the same app runs on another one.
+/// The Db contract is driver-agnostic, so the driver's vocabulary stops here.
+/// This is the same move the lock timeout above already makes with [Unavailable];
+/// only uniqueness had been left untranslated.
+T _translating<T>(T Function() action) {
+  try {
+    return action();
+  } on SqliteException catch (e) {
+    if (e.resultCode == SqlError.SQLITE_CONSTRAINT &&
+        _uniquenessViolations.contains(e.extendedResultCode)) {
+      // The driver's message names the table and column that collided. That is
+      // the operator's to see and the client's to be spared, which is what
+      // `detail` is for: recover() logs it, and KetaException.toString() keeps
+      // it out of the response.
+      throw Conflict('row already exists', e.message);
+    }
+    rethrow;
   }
 }
 

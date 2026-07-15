@@ -521,6 +521,43 @@ void main() {
     },
   );
 
+  group('recover and the detail an exception carries', () {
+    test('a declared status is not logged as an incident', () async {
+      final env = newEnv();
+      final app = App<Env>()
+        ..use(recover())
+        ..get('/x', (c) => throw const NotFound('nope'));
+      final r = await TestClient(app, env).get('/x');
+      expect(r.status, 404);
+      // An expected outcome is not an incident. Logging every 404 would bury
+      // the ones that matter.
+      expect((env.log as MemLog).lines, isEmpty);
+    });
+
+    test('a detail reaches the operator and not the client', () async {
+      final env = newEnv();
+      final app = App<Env>()
+        ..use(recover())
+        ..get(
+          '/x',
+          (c) => throw const Conflict('row already exists', 'users.email'),
+        );
+      final r = await TestClient(app, env).get('/x');
+
+      // The client is told the status and nothing that leaks the schema.
+      expect(r.status, 409);
+      expect(r.json(), {'error': 'row already exists'});
+      expect(r.text(), isNot(contains('users.email')));
+      // The operator is told which constraint collided. detail exists for
+      // exactly this; if nothing read it, an adapter translating a driver error
+      // would silently take the diagnosis with it.
+      final line = (env.log as MemLog).lines.single;
+      expect(line['level'], 'warn');
+      expect(line['detail'], 'users.email');
+      expect(line['status'], 409);
+    });
+  });
+
   group('the backlog is bounded', () {
     // A sink that stops accepting must not be able to grow the backlog without
     // limit. Nothing here asserts on timing: the bound is a property of the

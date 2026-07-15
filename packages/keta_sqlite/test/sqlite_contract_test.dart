@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:keta/keta.dart' show KetaException;
+import 'package:keta/keta.dart' show Conflict, KetaException;
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import 'package:test/test.dart';
@@ -36,11 +36,14 @@ void main() {
 
   group('error propagation', () {
     test(
-      'malformed SQL and constraint violations surface as SqliteException',
+      'a uniqueness violation surfaces as Conflict, everything else as the '
+      'driver saw it',
       () async {
         final db = SqliteDb.memory();
         addTearDown(db.close);
 
+        // Bugs stay the driver's. The app cannot act on "you typed selec", so
+        // dressing it up as a KetaException would only hide it.
         await expectLater(
           db.reader.query('selec nonsense'),
           throwsA(isA<SqliteException>()),
@@ -48,14 +51,21 @@ void main() {
 
         await db.writer.execute('create table u (name text not null unique)');
         await db.writer.execute("insert into u values ('a')");
+        // A duplicate is the one constraint the caller can act on, and the
+        // DbConn contract requires the adapter to say so in keta's vocabulary:
+        // a handler answering 409 must not have to import package:sqlite3 and
+        // match code 2067, which would couple it to this engine and break on
+        // the next one.
         await expectLater(
           db.writer.execute("insert into u values ('a')"),
+          throwsA(isA<Conflict>().having((e) => e.status, 'status', 409)),
+        );
+        // The boundary: NOT NULL is the app inserting wrong data — its own bug,
+        // untranslated, and the 500 it earns is the honest answer.
+        await expectLater(
+          db.writer.execute('insert into u values (null)'),
           throwsA(
-            isA<SqliteException>().having(
-              (e) => e.resultCode,
-              'resultCode',
-              19,
-            ),
+            isA<SqliteException>().having((e) => e.resultCode, 'resultCode', 19),
           ),
         );
       },

@@ -11,6 +11,20 @@ library;
 /// timestamp is whatever you stored (an ISO 8601 [String] if that is what you
 /// wrote). Store money and other exact decimals as [String] for exact
 /// round-tripping.
+/// A connection's query surface.
+///
+/// Errors are keta's, not the engine's. An adapter translates the conditions a
+/// caller can act on into keta's sealed `KetaException` family, so a handler
+/// never imports a driver package to find out what went wrong, and does not
+/// break when the same app is pointed at a different engine. The contract every
+/// adapter must honour:
+///
+/// - a uniqueness violation (duplicate primary key or unique index) → `Conflict`
+/// - the database unreachable, or its lock unobtainable in time → `Unavailable`
+///
+/// Anything else is the app's own bug and is left as the driver threw it, where
+/// the 500 and its log are the honest answer. This is a floor, not a ceiling:
+/// an adapter may translate more, never less.
 abstract interface class DbConn {
   /// Runs a query and returns its rows as column-name maps.
   Future<List<Map<String, Object?>>> query(

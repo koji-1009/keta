@@ -40,6 +40,19 @@ Middleware<E> accessLog<E>() => (Context<E> c, Handler<E> next) {
 Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
   return guard<Response>(() => next(c), (error, st) {
     if (error is KetaException) {
+      // A declared status is an expected outcome, not an incident, so it is not
+      // logged as one. Its [KetaException.detail] is: detail exists precisely
+      // to say what the client must not be told, and it is worth nothing if
+      // nothing ever reads it. Without this an adapter that turns a driver
+      // error into, say, a Conflict would take the diagnosis down with it —
+      // the operator would see the status and never learn which constraint
+      // collided.
+      if (error.detail != null) {
+        c.log.warn(error.message, {
+          'status': error.status,
+          'detail': '${error.detail}',
+        });
+      }
       return Response.json({'error': error.message}, status: error.status);
     }
     c.log.error('unhandled exception', error, st);

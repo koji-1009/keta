@@ -2,6 +2,8 @@ library;
 
 import 'dart:io';
 
+import 'package:keta/keta.dart' show KetaException;
+
 import 'db.dart';
 
 /// One migration file: `NNNN_name.sql`, identified by its numeric [version]
@@ -46,16 +48,28 @@ Future<MigrationResult> applyMigrations(
       skipped.add(m.version);
       continue;
     }
-    await db.transaction((conn) async {
-      // Delegate multi-statement parsing to the driver — a hand-rolled splitter
-      // breaks on triggers and on `;`/`--` inside string literals.
-      await conn.execute(m.sql);
-      await conn.execute(
-        'insert into _keta_migrations (version, applied_at) values (?, ?)',
-        [m.version, DateTime.now().toUtc().toIso8601String()],
+    try {
+      await db.transaction((conn) async {
+        // Delegate multi-statement parsing to the driver — a hand-rolled
+        // splitter breaks on triggers and on `;`/`--` inside string literals.
+        await conn.execute(m.sql);
+        await conn.execute(
+          'insert into _keta_migrations (version, applied_at) values (?, ?)',
+          [m.version, DateTime.now().toUtc().toIso8601String()],
+        );
+        return 0;
+      });
+    } on KetaException catch (e) {
+      // Adapters answer in HTTP terms because that is what a request needs, and
+      // a migration is not a request: a bare `Conflict(409, row already exists)`
+      // names no migration and no constraint, because toString() withholds
+      // detail from clients that do not exist here. Boot failures are read by a
+      // person at a terminal, so say the whole thing.
+      throw StateError(
+        'migration ${m.version} failed: ${e.message}'
+        '${e.detail == null ? '' : ' (${e.detail})'}',
       );
-      return 0;
-    });
+    }
     applied.add(m.version);
   }
   return MigrationResult(applied, skipped);

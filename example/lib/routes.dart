@@ -3,6 +3,7 @@ import 'package:keta_db/keta_db.dart';
 import 'package:keta_multipart/keta_multipart.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
+import 'auth.dart';
 import 'env.dart';
 import 'user_dto.dart';
 
@@ -10,7 +11,14 @@ import 'user_dto.dart';
 /// form with `c.param`, and the typed `on()`-builder handing the handler its
 /// captured tuple.
 void register(App<Env> app) {
-  app.get('/health', (c) => c.text('ok'));
+  // `security: []` is not "no opinion" — it is "public", and it overrides the
+  // global default. A route that simply omits RouteDoc.security inherits the
+  // default instead, which is why the distinction is worth showing.
+  app.get(
+    '/health',
+    (c) => c.text('ok'),
+    doc: const RouteDoc(summary: 'Liveness probe', security: []),
+  );
 
   // A list endpoint: query parameters drive pagination (?limit) and filtering
   // (?role) — declared for OpenAPI, read with the optional accessor + a
@@ -105,7 +113,13 @@ void register(App<Env> app) {
       );
       final changed = await c.get(txConn).execute(
         'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
-        [dto.name, dto.age, dto.role.name, dto.tags.join(','), c.param<String>('id')],
+        [
+          dto.name,
+          dto.age,
+          dto.role.name,
+          dto.tags.join(','),
+          c.param<String>('id'),
+        ],
       );
       if (changed == 0) throw const NotFound('user not found');
       return c.json(dto.toJson());
@@ -126,28 +140,63 @@ void register(App<Env> app) {
     return Response(204);
   }, doc: const RouteDoc(summary: 'Delete a user'));
 
+  // The other half of authentication: the gate put the caller in the request
+  // store, and the handler reads it back with the same typed Key. Nothing is
+  // parsed twice, and the handler cannot see a request the gate did not admit.
+  // `security: [bearer]` is declared, not inherited: c.get below asserts a
+  // principal is present, and only the bearer verifier sets one. Leaving it to
+  // the default would make that assumption true only by accident — add apiKey
+  // to apiDefaults and the OR-combining gate would admit a caller with no
+  // principal, turning this handler into a 500.
+  app.get('/whoami', (c) {
+    final who = c.get(principal);
+    return c.json({'id': who.id, 'admin': who.admin});
+  }, doc: const RouteDoc(summary: 'The authenticated caller', security: [bearer]));
+
+  // Authorization is ordinary middleware, scoped to a group rather than the
+  // whole app: `enforceSecurity` answers "who are you", `requireAdmin` answers
+  // "may you". Keeping them apart is why 401 and 403 stay distinguishable.
+  // The 403 is part of the contract, so it is declared. `responses` is how a
+  // status the gate never produces — this one comes from requireAdmin, not
+  // enforceSecurity — still reaches the document.
+  app
+      .group('/admin')
+      .use(requireAdmin())
+      .get(
+        '/ping',
+        (c) => c.text('pong'),
+        doc: const RouteDoc(
+          summary: 'Admin-only liveness check',
+          responses: {403: errorSchema},
+        ),
+      );
+
   // A multipart upload (keta_multipart, Optional Ring 3): stream the parts once,
   // buffering small text fields and reporting file sizes without holding the
   // upload in memory. Persistence would be the app's job.
-  app.post('/uploads', (c) async {
-    final fields = <String, String>{};
-    final files = <Map<String, Object?>>[];
-    await for (final part in parts(c)) {
-      if (part.filename != null) {
-        final bytes = await part.bytes();
-        files.add({
-          'field': part.name,
-          'filename': part.filename,
-          'size': bytes.length,
-        });
-      } else {
-        fields[part.name ?? ''] = await part.text();
+  app.post(
+    '/uploads',
+    (c) async {
+      final fields = <String, String>{};
+      final files = <Map<String, Object?>>[];
+      await for (final part in parts(c)) {
+        if (part.filename != null) {
+          final bytes = await part.bytes();
+          files.add({
+            'field': part.name,
+            'filename': part.filename,
+            'size': bytes.length,
+          });
+        } else {
+          fields[part.name ?? ''] = await part.text();
+        }
       }
-    }
-    return c.json({'fields': fields, 'files': files});
-  }, doc: const RouteDoc(
-    summary: 'Accept a multipart/form-data upload',
-    requestBody: uploadFormSchema,
-    requestBodyType: 'multipart/form-data',
-  ));
+      return c.json({'fields': fields, 'files': files});
+    },
+    doc: const RouteDoc(
+      summary: 'Accept a multipart/form-data upload',
+      requestBody: uploadFormSchema,
+      requestBodyType: 'multipart/form-data',
+    ),
+  );
 }
