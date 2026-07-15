@@ -1,0 +1,13 @@
+# Applies to the route tree only. The analyzer takes the nearest options file to
+# each source, so everything outside lib/routes/ keeps the repo's rules.
+include: ../../../analysis_options.yaml
+
+linter:
+  rules:
+    # A route file's location IS its URL, so moving one is the operation this
+    # whole convention is built on. A relative import encodes the depth the file
+    # sits at, so a move would break its imports and cost an edit to the very
+    # file that was supposed to only move. package: URIs do not know how deep
+    # they are. This is the same trade every file-routing ecosystem makes —
+    # Next.js reaches for a `@/` path alias for exactly this reason.
+    prefer_relative_imports: false

@@ -146,6 +146,27 @@ extension PathCapture3<A, B, C> on Path<(A, B, C)> {
 /// `:name` becomes a `Capture<String>`; typed parsing happens later at
 /// `c.param<T>`. The result is `Path<dynamic>` — the string form never drives
 /// the typed two-argument handler.
+/// The path a list of already-built [Segment]s denotes — a shape that is data
+/// (read from a file tree, a stored table, a config) rather than a written chain
+/// of [Path.segments] and `capture` calls.
+///
+/// It carries no tuple, because a shape known only at runtime has no static
+/// arity to build one from. That is why this is deliberately NOT exported from
+/// `package:keta/keta.dart`: the only public door to it is `app.get(segments,
+/// handler)` and friends, which take a plain [Handler] and read captures with
+/// `c.param`. `on()` takes a `Path<T>` and so cannot be reached this way, which
+/// makes "a data-shaped path has no tuple" a fact the compiler enforces rather
+/// than a rule a comment asks for.
+Path<dynamic> pathOfSegments(List<Segment> parts) =>
+    Path<dynamic>._(parts, _noTuple);
+
+Never _noTuple(List<Object?> parsed) => throw StateError(
+  'a path built from segments has no tuple; this is unreachable through the '
+  'public API and means keta built one and then asked it for one',
+);
+
+/// Parses the string routing syntax. Every capture is a [string]: the syntax has
+/// no vocabulary for a type, which is why the typed DSL exists.
 Path<dynamic> parsePathString(String pattern) {
   var path = root as Path<dynamic>;
   for (final raw in _splitSegments(pattern)) {

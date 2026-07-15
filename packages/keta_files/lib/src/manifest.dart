@@ -1,20 +1,8 @@
 library;
 
-import 'dart:io';
+import 'package:dart_style/dart_style.dart';
 
-import 'package:path/path.dart' as p;
-
-/// A route file discovered under the routes directory. Each is expected to
-/// declare a top-level `void register(App<...> app)`.
-class RouteFile {
-  const RouteFile(this.importPath, this.prefix);
-
-  /// The import path relative to the manifest, e.g. `routes/users.dart`.
-  final String importPath;
-
-  /// The import prefix and call target, e.g. `users`.
-  final String prefix;
-}
+import 'discover.dart';
 
 const _importsMarker = 'keta_files:imports';
 const _routesMarker = 'keta_files:routes';
@@ -24,77 +12,106 @@ const _endMarker = 'keta_files:end';
 /// regions and is not a start marker.
 const _startMarkers = {_importsMarker, _routesMarker};
 
-/// Lists `*.dart` route files directly under [routesDir], sorted by name, with
-/// a unique import prefix for each. [importBase] is the path used in generated
-/// imports (relative to the manifest).
-List<RouteFile> discoverRouteFiles(
-  String routesDir, {
-  String importBase = 'routes',
-}) {
-  final dir = Directory(routesDir);
-  if (!dir.existsSync()) return const [];
-  final names =
-      dir
-          .listSync()
-          .whereType<File>()
-          .map((f) => p.basename(f.path))
-          .where((n) => n.endsWith('.dart'))
-          .toList()
-        ..sort();
-
-  final used = <String>{};
+/// The lines [file] contributes to the routes region: one binding per verb.
+///
+/// The URL is written into the generated call, not read from the file, so the
+/// manifest reads as the route table it is — `routeSegments(const ['users',
+/// ':id'], users_id.captures)` says where the file sits, in the same words the
+/// tree does.
+List<String> registrationsFor(RouteFile file) {
+  final captures = file.declaresCaptures
+      ? ', ${file.prefix}.$capturesDeclaration'
+      : '';
   return [
-    for (final name in names)
-      RouteFile(
-        p.url.join(importBase, name),
-        _uniquePrefix(
-          _sanitize(name.substring(0, name.length - '.dart'.length)),
-          used,
-        ),
-      ),
+    for (final method in file.methods) _registration(file, method, captures),
   ];
 }
 
-/// Rewrites the two marked regions of [source] to import and register every
-/// file in [files]. Only text between `// keta_files:imports` / `:routes` and
-/// the following `// keta_files:end` is touched; the rest is left verbatim.
+String _registration(RouteFile file, String method, String captures) {
+  final buffer = StringBuffer()
+    ..writeln('app.$method(')
+    ..writeln('  routeSegments(${_templateLiteral(file.template)}$captures),')
+    ..writeln('  ${file.prefix}.$method,');
+  if (file.docs.contains(method)) {
+    buffer.writeln('  doc: ${file.prefix}.${method}Doc,');
+  }
+  buffer.write(');');
+  return buffer.toString();
+}
+
+String _templateLiteral(List<String> template) => template.isEmpty
+    ? 'const <String>[]'
+    : "const [${template.map((p) => "'$p'").join(', ')}]";
+
+String _importFor(RouteFile file) =>
+    "import '${file.importPath}' as ${file.prefix};";
+
+/// Rewrites the two marked regions of [source] to import every route file and
+/// bind every verb it serves at the URL its location denotes. Only text between
+/// `// keta_files:imports` / `:routes` and the following `// keta_files:end` is
+/// touched; the rest is left verbatim.
 ///
 /// A malformed marker layout — a start marker missing its end, a start marker
 /// appearing more than once (e.g. one buried in a string literal), or two
 /// regions that overlap — is a [FormatException], never a silent rewrite: the
-/// generator refuses to corrupt a manifest it cannot unambiguously parse. The
-/// markers must therefore not appear inside string literals or other non-comment
-/// context.
+/// generator refuses to corrupt a manifest it cannot unambiguously parse.
+/// The result is formatted, because the alternative is a file that can never
+/// settle: the generator's line breaks are not `dart format`'s, so an unformatted
+/// manifest is rewritten by the formatter, and the next sync rewrites it back.
+/// Formatting here makes "synced" and "formatted" the same state, which is what
+/// lets a test assert that syncing is a no-op — and that assertion is the only
+/// thing standing between the tree and the routes silently disagreeing.
 String syncManifest(String source, List<RouteFile> files) {
   var lines = source.split('\n');
   lines = _replaceRegion(lines, _importsMarker, [
-    for (final f in files) "import '${f.importPath}' as ${f.prefix};",
+    for (final f in files) _importFor(f),
   ]);
   lines = _replaceRegion(lines, _routesMarker, [
-    for (final f in files) '${f.prefix}.register(app);',
+    for (final f in files) ...registrationsFor(f).expand((r) => r.split('\n')),
   ]);
-  return lines.join('\n');
+  return DartFormatter(
+    languageVersion: DartFormatter.latestLanguageVersion,
+  ).format(lines.join('\n'));
 }
 
-/// The route files whose registration is absent from [source]'s managed
-/// regions. Matching is exact and region-scoped — the generated `import ... as
-/// prefix;` and `prefix.register(app);` lines must appear inside the
-/// `imports`/`routes` regions — so a mention in a comment, a string literal, or
-/// a coincidental substring of another prefix never counts as registered.
+/// The route files whose bindings are absent from [source]'s managed regions —
+/// a file under routes/ that the app does not serve. Forgetting is otherwise
+/// silent: the file compiles, the tests pass, and the URL 404s.
+///
+/// Matching is exact and region-scoped, so a mention in a comment, a string
+/// literal, or a coincidental substring never counts as registered.
 List<RouteFile> unregistered(String source, List<RouteFile> files) {
   final lines = source.split('\n');
   final imports = {
     for (final l in _regionContent(lines, _importsMarker)) l.trim(),
   };
-  final registers = {
-    for (final l in _regionContent(lines, _routesMarker)) l.trim(),
-  };
+  final routeBlock = _normalize(
+    _regionContent(lines, _routesMarker).join('\n'),
+  );
   return [
     for (final f in files)
-      if (!imports.contains("import '${f.importPath}' as ${f.prefix};") ||
-          !registers.contains('${f.prefix}.register(app);'))
+      if (!imports.contains(_importFor(f)) ||
+          registrationsFor(f).any((r) => !routeBlock.contains(_normalize(r))))
         f,
   ];
+}
+
+/// Code with the things `dart format` is free to move taken out: line breaks,
+/// indentation, and trailing commas. None of them change what is bound, and a
+/// check that noticed them would report a formatted manifest as unregistered.
+String _normalize(String code) {
+  var normalized = code.replaceAll(RegExp(r'\s+'), '');
+  String previous;
+  do {
+    previous = normalized;
+    // replaceAllMapped, not replaceAll: replaceAll takes the replacement
+    // literally, so `$1` would be inserted as the two characters `$1`.
+    normalized = normalized.replaceAllMapped(
+      RegExp(r',([)\]}])'),
+      (m) => m[1]!,
+    );
+  } while (previous != normalized);
+  return normalized;
 }
 
 List<String> _replaceRegion(
@@ -123,7 +140,7 @@ List<String> _replaceRegion(
   final indent = lines[start].substring(0, lines[start].indexOf('//'));
   return [
     ...lines.sublist(0, start + 1),
-    for (final line in content) '$indent$line',
+    for (final line in content) line.isEmpty ? line : '$indent$line',
     ...lines.sublist(end),
   ];
 }
@@ -152,94 +169,4 @@ List<String> _regionContent(List<String> lines, String marker) {
   final end = lines.indexWhere((l) => l.trim() == '// $_endMarker', start + 1);
   if (end == -1) return const [];
   return lines.sublist(start + 1, end);
-}
-
-/// Dart reserved words and built-in identifiers that cannot be used as an import
-/// prefix. A sanitized name colliding with one is suffixed with `_`.
-const _reservedWords = {
-  'abstract',
-  'as',
-  'assert',
-  'async',
-  'await',
-  'break',
-  'case',
-  'catch',
-  'class',
-  'const',
-  'continue',
-  'covariant',
-  'default',
-  'deferred',
-  'do',
-  'dynamic',
-  'else',
-  'enum',
-  'export',
-  'extends',
-  'extension',
-  'external',
-  'factory',
-  'false',
-  'final',
-  'finally',
-  'for',
-  'function',
-  'get',
-  'hide',
-  'if',
-  'implements',
-  'import',
-  'in',
-  'interface',
-  'is',
-  'late',
-  'library',
-  'mixin',
-  'new',
-  'null',
-  'on',
-  'operator',
-  'part',
-  'required',
-  'rethrow',
-  'return',
-  'sealed',
-  'set',
-  'show',
-  'static',
-  'super',
-  'switch',
-  'sync',
-  'this',
-  'throw',
-  'true',
-  'try',
-  'typedef',
-  'var',
-  'void',
-  'while',
-  'with',
-  'yield',
-};
-
-/// Turns a file stem into a valid, non-reserved Dart identifier: non-identifier
-/// characters become `_`, a leading digit or an empty result is prefixed with
-/// `_`, and a reserved word is suffixed with `_`.
-String _sanitize(String name) {
-  var cleaned = name.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '_');
-  if (cleaned.isEmpty) return 'route'; // pathological: a file literally ".dart"
-  if (RegExp(r'^[0-9]').hasMatch(cleaned)) cleaned = '_$cleaned';
-  if (_reservedWords.contains(cleaned)) cleaned = '${cleaned}_';
-  return cleaned;
-}
-
-String _uniquePrefix(String base, Set<String> used) {
-  var candidate = base;
-  var i = 1;
-  while (!used.add(candidate)) {
-    candidate = '$base$i';
-    i++;
-  }
-  return candidate;
 }

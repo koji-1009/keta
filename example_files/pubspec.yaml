@@ -1,8 +1,9 @@
 name: keta_files_example
 description: >-
-  A standalone keta app whose routes are registered by file convention
-  (keta_files): each file under lib/routes/ exposes register(app), and the
-  manifest's marked regions are materialized by `dart run keta_files:sync`.
+  A standalone keta app with file-based routing (keta_files): a file's location
+  under lib/routes/ IS its URL — routes/users/_id.dart serves /users/:id — and
+  the manifest's marked regions are materialized from the tree by
+  `dart run keta_files:sync`.
 publish_to: none
 
 environment:
@@ -17,7 +18,9 @@ dependencies:
   keta_openapi: ^0.1.0
   keta_otel: ^0.1.0
   keta_multipart: ^0.1.0
+  # A dependency, not a dev one: routeSegments runs on every request. The sync
+  # tool is dev-time; what it materializes is not.
+  keta_files: ^0.1.0
 
 dev_dependencies:
-  keta_files: ^0.1.0
   test: ^1.25.0

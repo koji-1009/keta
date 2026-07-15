@@ -192,7 +192,15 @@ class App<E> {
   Path<dynamic> _basePath(Object path) => switch (path) {
     String() => parsePathString(path),
     Path() => path,
-    _ => throw ArgumentError.value(path, 'path', 'must be a String or Path'),
+    // A shape that is data rather than written out — what a file tree denotes.
+    // Reachable only here, never from `on()`, so it can never be asked for the
+    // tuple it does not have.
+    List<Segment>() => pathOfSegments(path),
+    _ => throw ArgumentError.value(
+      path,
+      'path',
+      'must be a String, a Path, or a List<Segment>',
+    ),
   };
 
   /// Wraps a typed handler so it presents as a plain [Handler]: each capture

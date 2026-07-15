@@ -11,6 +11,9 @@ environment:
 resolution: workspace
 
 dependencies:
+  keta: ^0.1.0
+  analyzer: ^14.0.0
+  dart_style: ^3.1.0
   path: ^1.9.0
 
 dev_dependencies:

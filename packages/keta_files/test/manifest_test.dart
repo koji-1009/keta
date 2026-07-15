@@ -1,296 +1,188 @@
-import 'dart:io';
-
+import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:test/test.dart';
 
+RouteFile file({
+  required String importPath,
+  required String prefix,
+  required List<String> template,
+  List<String> methods = const ['get'],
+  Set<String> docs = const {},
+  bool declaresCaptures = false,
+}) => RouteFile(
+  importPath: importPath,
+  prefix: prefix,
+  template: template,
+  methods: methods,
+  docs: docs,
+  declaresCaptures: declaresCaptures,
+);
+
 const _manifest = '''
-import 'package:keta/keta.dart';
-import 'env.dart';
+void register(App<Env> app) {
+  // keta_files:routes
+  // keta_files:end
+}
+''';
+
+const _imports = '''
 // keta_files:imports
 // keta_files:end
-
-void registerRoutes(App<Env> app) {
-  // keta_files:routes
-  // keta_files:end
-}
-''';
+$_manifest''';
 
 void main() {
-  test('syncManifest fills both marked regions, indentation preserved', () {
-    final files = [
-      const RouteFile('routes/health.dart', 'health'),
-      const RouteFile('routes/users.dart', 'users'),
-    ];
-    final output = syncManifest(_manifest, files);
+  group('the manifest reads as the route table', () {
+    test('the URL is written into the binding, in the tree\'s own words', () {
+      final out = syncManifest(_imports, [
+        file(
+          importPath: 'routes/users/_id.dart',
+          prefix: r'$users_id',
+          template: ['users', ':id'],
+          docs: {'get'},
+        ),
+      ]);
+      expect(out, contains("import 'routes/users/_id.dart' as \$users_id;"));
+      expect(out, contains("routeSegments(const ['users', ':id'])"));
+      expect(out, contains(r'$users_id.get'));
+      expect(out, contains(r'doc: $users_id.getDoc'));
+    });
 
-    expect(output, contains("import 'routes/health.dart' as health;"));
-    expect(output, contains("import 'routes/users.dart' as users;"));
-    expect(output, contains('  users.register(app);'));
-    expect(output, contains('  health.register(app);'));
-    // Code outside the markers is untouched.
-    expect(output, contains('void registerRoutes(App<Env> app) {'));
-    // Idempotent.
-    expect(syncManifest(output, files), output);
+    test('a verb without a doc binds without one', () {
+      final out = syncManifest(_imports, [
+        file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']),
+      ]);
+      expect(out, isNot(contains('doc:')));
+    });
+
+    test('captures is passed only by a file that declares it', () {
+      final with_ = syncManifest(_imports, [
+        file(
+          importPath: 'routes/_id.dart',
+          prefix: r'$id',
+          template: [':id'],
+          declaresCaptures: true,
+        ),
+      ]);
+      final without = syncManifest(_imports, [
+        file(importPath: 'routes/_id.dart', prefix: r'$id', template: [':id']),
+      ]);
+      expect(with_, contains(r"routeSegments(const [':id'], $id.captures)"));
+      expect(without, contains("routeSegments(const [':id'])"));
+    });
+
+    test('the root is an empty template, not an empty string', () {
+      final out = syncManifest(_imports, [
+        file(importPath: 'routes/index.dart', prefix: r'$index', template: []),
+      ]);
+      expect(out, contains('routeSegments(const <String>[])'));
+    });
+
+    test('every verb a file serves gets its own binding', () {
+      final out = syncManifest(_imports, [
+        file(
+          importPath: 'routes/users.dart',
+          prefix: r'$users',
+          template: ['users'],
+          methods: ['get', 'post'],
+        ),
+      ]);
+      expect(out, contains(r'app.get('));
+      expect(out, contains(r'app.post('));
+    });
   });
 
-  test('syncManifest without markers is a FormatException', () {
-    expect(
-      () => syncManifest('void main() {}', const []),
-      throwsA(isA<FormatException>()),
+  group('the generator refuses to corrupt what it cannot parse', () {
+    test('a start marker with no end', () {
+      expect(
+        () => syncManifest('// keta_files:imports\n$_manifest', const []),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('a duplicated start marker', () {
+      expect(
+        () => syncManifest(
+          '// keta_files:imports\n// keta_files:end\n$_imports',
+          const [],
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('overlapping regions', () {
+      expect(
+        () => syncManifest(
+          '// keta_files:imports\n// keta_files:routes\n// keta_files:end\n',
+          const [],
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('a missing marker', () {
+      expect(
+        () => syncManifest('void register(App app) {}', const []),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  });
+
+  group('drift is caught', () {
+    final f = file(
+      importPath: 'routes/x.dart',
+      prefix: r'$x',
+      template: ['x'],
+      docs: {'get'},
     );
-  });
 
-  test('unregistered lists files missing from the manifest', () {
-    final files = [
-      const RouteFile('routes/a.dart', 'a'),
-      const RouteFile('routes/b.dart', 'b'),
-    ];
-    final synced = syncManifest(_manifest, [files.first]);
-    final missing = unregistered(synced, files);
-    expect(missing.map((f) => f.prefix), ['b']);
-  });
-
-  test('discoverRouteFiles finds dart files with unique prefixes', () {
-    final dir = Directory.systemTemp.createTempSync('keta_files');
-    addTearDown(() => dir.deleteSync(recursive: true));
-    File('${dir.path}/users.dart').writeAsStringSync('');
-    File('${dir.path}/user-posts.dart').writeAsStringSync('');
-    File('${dir.path}/notes.txt').writeAsStringSync('');
-
-    final files = discoverRouteFiles(dir.path);
-    expect(files.map((f) => f.prefix), ['user_posts', 'users']);
-    expect(files.every((f) => f.importPath.startsWith('routes/')), isTrue);
-  });
-
-  group('syncManifest — marker and region edges', () {
-    test('a missing end marker is a FormatException naming end', () {
-      const source = '// keta_files:imports\n';
-      expect(
-        () => syncManifest(source, const []),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            'marker "// keta_files:imports" has no "// keta_files:end"',
-          ),
-        ),
-      );
+    test('a synced manifest is settled', () {
+      final synced = syncManifest(_imports, [f]);
+      expect(unregistered(synced, [f]), isEmpty);
+      // Idempotent, or "synced" would mean nothing.
+      expect(syncManifest(synced, [f]), synced);
     });
 
-    test('a missing start marker has a distinct message', () {
-      expect(
-        () => syncManifest('void main() {}', const []),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            'manifest is missing the "// keta_files:imports" marker',
-          ),
-        ),
-      );
+    test('a file bound nowhere is reported', () {
+      expect(unregistered(_imports, [f]), [f]);
     });
 
-    test('an empty file list clears populated regions but keeps markers', () {
-      final populated = syncManifest(_manifest, [
-        const RouteFile('routes/a.dart', 'a'),
-        const RouteFile('routes/b.dart', 'b'),
-      ]);
-      final cleared = syncManifest(populated, const []);
-
-      expect(cleared, isNot(contains("import 'routes/")));
-      expect(cleared, isNot(contains('.register(app);')));
-      expect(cleared, contains('// keta_files:imports'));
-      expect(cleared, contains('// keta_files:routes'));
-      expect(cleared, contains('// keta_files:end'));
-      expect(syncManifest(cleared, const []), cleared); // idempotent
-    });
-
-    test('each region inherits its own marker indentation', () {
-      const source = '''
-    // keta_files:imports
-    // keta_files:end
-void f(App<Env> app) {
-  // keta_files:routes
-  // keta_files:end
-}
-''';
-      final output = syncManifest(source, [
-        const RouteFile('routes/a.dart', 'a'),
-      ]);
-      expect(output.split('\n'), contains("    import 'routes/a.dart' as a;"));
-      expect(output.split('\n'), contains('  a.register(app);'));
-    });
-
-    test('content outside the markers is preserved byte-for-byte', () {
-      const header =
-          "// weird   spacing\t\nimport 'x.dart';\n// keta_files:imports\n";
-      const middle =
-          '// keta_files:end\nvoid f() {\n  /* body */\n  // keta_files:routes\n';
-      const footer = '  // keta_files:end\n}'; // no trailing newline
-      const source = '$header$middle$footer';
-
-      final output = syncManifest(source, [
-        const RouteFile('routes/a.dart', 'a'),
-      ]);
-      expect(
-        output,
-        '$header'
-        "import 'routes/a.dart' as a;\n"
-        '$middle'
-        '  a.register(app);\n'
-        '$footer',
-      );
+    test('a mention outside the regions does not count', () {
+      // A route named in a comment is not a route served.
+      const decoy =
+          "// import 'routes/x.dart' as \$x;\n"
+          '$_imports';
+      expect(unregistered(decoy, [f]), [f]);
     });
   });
 
-  group('unregistered — region-scoped', () {
-    final files = [const RouteFile('routes/a.dart', 'a')];
-
-    // A well-formed manifest with the two managed regions optionally populated.
-    String manifest({String imports = '', String routes = ''}) =>
-        '// '
-        'keta_files:imports\n$imports// keta_files:end\n// keta_files:routes\n'
-        '$routes// keta_files:end\n';
-
-    test('an import without a register call counts as unregistered', () {
-      final src = manifest(imports: "import 'routes/a.dart' as a;\n");
-      expect(unregistered(src, files), files);
+  group('routeSegments turns a template into a path', () {
+    test('a capture the file does not mention is a string', () {
+      final segments = routeSegments(const ['users', ':id']);
+      expect((segments[0] as LiteralSegment).value, 'users');
+      final capture = (segments[1] as CaptureSegment).capture;
+      expect(capture.name, 'id');
+      expect(capture.schema, {'type': 'string'});
     });
 
-    test('a register call without an import counts as unregistered', () {
-      final src = manifest(routes: 'a.register(app);\n');
-      expect(unregistered(src, files), files);
-    });
-
-    test('both an import and a register call means registered', () {
-      final src = manifest(
-        imports: "import 'routes/a.dart' as a;\n",
-        routes: 'a.register(app);\n',
+    test('a declared capture supplies the type, and is named by the tree', () {
+      final segments = routeSegments(
+        const [':index'],
+        const {'index': integer},
       );
-      expect(unregistered(src, files), isEmpty);
+      final capture = (segments.single as CaptureSegment).capture;
+      // The name comes from the file's location; the declaration is about the
+      // type alone, so the two cannot disagree.
+      expect(capture.name, 'index');
+      expect(capture.schema, {'type': 'integer'});
     });
 
-    test('a mention in a comment or string literal does not count', () {
-      const src =
-          "// import 'routes/a.dart' as a; a.register(app);\n"
-          'const help = "as a; then a.register(app)";\n'
-          '// keta_files:imports\n// keta_files:end\n'
-          '// keta_files:routes\n// keta_files:end\n';
-      expect(unregistered(src, files), files);
+    test('a declaration for a part the tree does not have is inert', () {
+      final segments = routeSegments(const ['users'], const {'id': integer});
+      expect(segments.single, isA<LiteralSegment>());
     });
 
-    test('a substring-colliding prefix is not a false positive', () {
-      // api_a is registered; plain a must still read as unregistered even
-      // though "api_a.register(" contains "a.register(" as a substring.
-      final src = manifest(
-        imports: "import 'routes/api_a.dart' as api_a;\n",
-        routes: 'api_a.register(app);\n',
-      );
-      expect(unregistered(src, files).map((f) => f.prefix), ['a']);
-    });
-  });
-
-  group('syncManifest — malformed markers rejected (no silent corruption)', () {
-    final one = [const RouteFile('routes/a.dart', 'a')];
-
-    test('a duplicate start marker (e.g. buried in a string) is rejected', () {
-      const src =
-          'const doc = """\n// keta_files:imports\n""";\n'
-          '// keta_files:imports\n// keta_files:end\n'
-          '// keta_files:routes\n// keta_files:end\n';
-      expect(
-        () => syncManifest(src, one),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('appears more than once'),
-          ),
-        ),
-      );
-    });
-
-    test('overlapping/interleaved regions are rejected', () {
-      const src =
-          '// keta_files:routes\n// keta_files:imports\n'
-          '// keta_files:end\n// keta_files:end\n';
-      expect(
-        () => syncManifest(src, one),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('overlaps'),
-          ),
-        ),
-      );
-    });
-  });
-
-  group('discoverRouteFiles — prefix and filtering edges', () {
-    test('colliding sanitized prefixes are suffixed', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/user-posts.dart').writeAsStringSync('');
-      File('${dir.path}/user_posts.dart').writeAsStringSync('');
-
-      final files = discoverRouteFiles(dir.path);
-      // '-' (0x2D) sorts before '_' (0x5F), so user-posts.dart is first.
-      expect(files.map((f) => f.prefix), ['user_posts', 'user_posts1']);
-      expect(files.map((f) => f.importPath), [
-        'routes/user-posts.dart',
-        'routes/user_posts.dart',
-      ]);
-    });
-
-    test('a leading-digit name is prefixed with underscore', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/2fa.dart').writeAsStringSync('');
-
-      expect(discoverRouteFiles(dir.path).single.prefix, '_2fa');
-    });
-
-    test('reserved-word and empty names become valid identifiers', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/if.dart').writeAsStringSync('');
-      File('${dir.path}/class.dart').writeAsStringSync('');
-      File('${dir.path}/.dart').writeAsStringSync('');
-
-      // '.dart' sorts first (stem ''), then 'class.dart', then 'if.dart'.
-      expect(discoverRouteFiles(dir.path).map((f) => f.prefix), [
-        'route',
-        'class_',
-        'if_',
-      ]);
-    });
-
-    test('a missing directory yields an empty list', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      expect(discoverRouteFiles('${dir.path}/does-not-exist'), isEmpty);
-    });
-
-    test('importBase drives the generated import path', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/users.dart').writeAsStringSync('');
-
-      final files = discoverRouteFiles(dir.path, importBase: 'src/routes');
-      expect(files.single.importPath, 'src/routes/users.dart');
-      expect(files.single.prefix, 'users');
-    });
-
-    test('discovery is non-recursive and skips directories', () {
-      final dir = Directory.systemTemp.createTempSync('keta_files');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      File('${dir.path}/top.dart').writeAsStringSync('');
-      Directory('${dir.path}/nested').createSync();
-      File('${dir.path}/nested/inner.dart').writeAsStringSync('');
-      Directory('${dir.path}/fake.dart').createSync(); // a dir named *.dart
-
-      expect(discoverRouteFiles(dir.path).map((f) => f.prefix), ['top']);
+    test('the root is no segments', () {
+      expect(routeSegments(const []), isEmpty);
     });
   });
 }
