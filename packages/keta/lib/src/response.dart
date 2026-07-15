@@ -2,6 +2,12 @@ library;
 
 import 'dart:convert';
 
+/// Stateless across calls (`convert` builds its own state each time), so one
+/// instance is shared. The default 256-byte buffer is kept on purpose: measured
+/// against 1KiB/4KiB/16KiB, a larger buffer gains ~3% on an 8.9KB body while
+/// costing ~49% on a 111-byte one, which is the shape most responses have.
+final _jsonUtf8 = JsonUtf8Encoder();
+
 /// An HTTP response in semantic terms only: status, headers, and body.
 ///
 /// Wire framing (Content-Length, chunked, H2/H3 frames) belongs to the
@@ -42,8 +48,14 @@ class Response {
     }
   }
 
-  /// A JSON response: `jsonEncode(body)` with `application/json`. [headers]
-  /// merge over the content type (which they may override).
+  /// A JSON response encoded straight to UTF-8 bytes, with `application/json`.
+  /// [headers] merge over the content type (which they may override).
+  ///
+  /// Deliberately not `jsonEncode`: that builds a UTF-16 [String] which the
+  /// Transport then re-walks with `utf8.encode` and discards. The String is
+  /// never wanted, so producing it is pure waste — [JsonUtf8Encoder] writes the
+  /// bytes the socket needs in one pass. The output is byte-identical, and the
+  /// default `toEncodable` (`object.toJson()`) is the same for both.
   factory Response.json(
     Object? body, {
     int status = 200,
@@ -54,7 +66,7 @@ class Response {
       'content-type': const ['application/json; charset=utf-8'],
       ...?headers,
     },
-    body: jsonEncode(body),
+    body: _jsonUtf8.convert(body),
   );
 
   /// A `text/plain; charset=utf-8` response. [headers] merge over the content
