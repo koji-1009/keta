@@ -3,8 +3,8 @@ import 'package:keta_files_example/auth.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
-final exported = Exported<Env>([
-  Get(
+final exported = Exported<Env>(
+  get: Serve(
     // The other half of authentication: the gate put the caller in the request
     // store, and this reads it back with the same typed Key.
     (c) {
@@ -18,4 +18,4 @@ final exported = Exported<Env>([
       security: [bearer],
     ),
   ),
-]);
+);

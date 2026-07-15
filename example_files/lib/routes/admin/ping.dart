@@ -5,8 +5,8 @@ import 'package:keta_files_example/env.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
 /// `/admin/ping` — a directory is just a path segment.
-final exported = Exported<Env>([
-  Get(
+final exported = Exported<Env>(
+  get: Serve(
     // Authorization is the handler's or a middleware's business: the gate
     // answers "who are you", this answers "may you". Keeping them apart is why
     // 401 and 403 stay distinguishable.
@@ -23,4 +23,4 @@ final exported = Exported<Env>([
       responses: {403: errorSchema},
     ),
   ),
-]);
+);

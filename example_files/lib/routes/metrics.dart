@@ -10,9 +10,9 @@ import 'package:keta_otel/keta_otel.dart';
 /// `final`, not `const` like every other route file: metricsHandler closes over
 /// the registry, and a closure is not a constant. Built once here rather than
 /// rebuilt on every scrape.
-final exported = Exported<Env>([
-  Get(
+final exported = Exported<Env>(
+  get: Serve(
     metricsHandler<Env>(metrics),
     doc: const RouteDoc(summary: 'Prometheus metrics', security: [apiKey]),
   ),
-]);
+);

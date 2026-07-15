@@ -7,11 +7,11 @@ import 'package:keta_openapi/keta_openapi.dart';
 ///
 /// One file is one URL, so it is one value: what it serves, what it answers
 /// with, and what the contract says about that are one thing.
-final exported = Exported<Env>([
-  Get(
+final exported = Exported<Env>(
+  get: Serve(
     (c) => c.text('ok'),
     // `security: []` is not "no opinion" — it is "public", and it overrides the
     // global default. A route that omits it inherits the default instead.
     doc: const RouteDoc(summary: 'Liveness probe', security: []),
   ),
-]);
+);

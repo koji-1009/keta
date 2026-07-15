@@ -4,8 +4,8 @@ import 'package:keta_files_example/user_dto.dart';
 import 'package:keta_multipart/keta_multipart.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
-final exported = Exported<Env>([
-  Post(
+final exported = Exported<Env>(
+  post: Serve(
     // Streams the parts once, buffering small text fields and reporting file
     // sizes without holding the upload in memory. Persistence is the app's job.
     (c) async {
@@ -31,4 +31,4 @@ final exported = Exported<Env>([
       requestBodyType: 'multipart/form-data',
     ),
   ),
-]);
+);

@@ -5,9 +5,9 @@ import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
-/// `/users`. One file is one URL; the list is what that URL answers.
-final exported = Exported<Env>([
-  Get(
+/// `/users`. One file is one URL; the slots are what that URL answers.
+final exported = Exported<Env>(
+  get: Serve(
     // Query parameters drive pagination and filtering — declared in the doc
     // below, read here with the optional accessor and a code-side default.
     (c) async {
@@ -35,7 +35,7 @@ final exported = Exported<Env>([
       query: [QueryParam('limit', integer), QueryParam('role', string)],
     ),
   ),
-  Post(
+  post: Serve(
     // A duplicate id needs no code here: keta_sqlite turns the engine's
     // uniqueness violation into a Conflict, and recover() renders it as a 409.
     (c) async {
@@ -56,4 +56,4 @@ final exported = Exported<Env>([
     },
     doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'),
   ),
-]);
+);

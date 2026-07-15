@@ -9,18 +9,30 @@ Response _ok(Context<Env> c) => c.text('ok');
 
 void main() {
   group('a file states what it serves, and the type checks it', () {
-    test('every verb binds at the URL its location denotes', () async {
+    test('every slot binds at the URL its location denotes', () async {
+      // Every slot, so a method that stopped binding is caught here. There is
+      // no exhaustiveness to lean on: the slots are the closed set of methods
+      // keta binds, and this is what holds bind to all of them.
       final app = App<Env>();
-      Exported<Env>([
-        Get((c) => c.text('got')),
-        Post((c) => c.text('posted')),
-        Put((c) => c.text('put')),
-        Delete((c) => c.text('deleted')),
-        Patch((c) => c.text('patched')),
-        const Head(_ok),
-        const Options(_ok),
-      ]).bind(app, const ['users', ':id']);
+      Exported<Env>(
+        get: Serve((c) => c.text('got')),
+        post: Serve((c) => c.text('posted')),
+        put: Serve((c) => c.text('put')),
+        delete: Serve((c) => c.text('deleted')),
+        patch: Serve((c) => c.text('patched')),
+        head: const Serve(_ok),
+        options: const Serve(_ok),
+      ).bind(app, const ['users', ':id']);
 
+      expect(app.routes.map((r) => r.method).toSet(), {
+        'GET',
+        'POST',
+        'PUT',
+        'DELETE',
+        'PATCH',
+        'HEAD',
+        'OPTIONS',
+      });
       final client = TestClient(app, Env());
       expect((await client.get('/users/1')).text(), 'got');
       expect((await client.post('/users/1')).text(), 'posted');
@@ -31,21 +43,27 @@ void main() {
 
     test('the doc travels with the handler that earns it', () {
       final app = App<Env>();
-      const Exported<Env>([
-        Get(_ok, doc: 'the-get-doc'),
-        Post(_ok),
-      ]).bind(app, const ['x']);
+      const Exported<Env>(
+        get: Serve(_ok, doc: 'the-get-doc'),
+        post: Serve(_ok),
+      ).bind(app, const ['x']);
 
       final byMethod = {for (final r in app.routes) r.method: r.doc};
-      // Together in one value, so a doc cannot end up on a verb the file does
+      // Together in one value, so a doc cannot end up on a method the file does
       // not serve, and a rename cannot silently unbind it.
       expect(byMethod['GET'], 'the-get-doc');
       expect(byMethod['POST'], isNull);
     });
 
+    test('an unfilled slot is a method the URL does not answer', () {
+      final app = App<Env>();
+      const Exported<Env>(get: Serve(_ok)).bind(app, const ['x']);
+      expect(app.routes.map((r) => r.method), ['GET']);
+    });
+
     test('the root is an empty template', () async {
       final app = App<Env>();
-      Exported<Env>([Get((c) => c.text('root'))]).bind(app, const []);
+      Exported<Env>(get: Serve((c) => c.text('root'))).bind(app, const []);
       expect((await TestClient(app, Env()).get('/')).text(), 'root');
     });
   });
@@ -54,7 +72,7 @@ void main() {
     test('a declared capture supplies the type and the schema', () async {
       final app = App<Env>();
       Exported<Env>(
-        [Get((c) => c.text('${c.param<int>('index')}'))],
+        get: Serve((c) => c.text('${c.param<int>('index')}')),
         captures: {'index': integer},
       ).bind(app, const ['tags', ':index']);
 
@@ -67,57 +85,64 @@ void main() {
       expect((await TestClient(app, Env()).get('/tags/abc')).status, 400);
     });
 
+    test('a capture belongs to the URL, so every method carries it', () {
+      // Which is why captures sits beside the slots rather than inside one:
+      // /users/:id has an id whether it is fetched, replaced or deleted.
+      final app = App<Env>();
+      const Exported<Env>(
+        get: Serve(_ok),
+        put: Serve(_ok),
+        delete: Serve(_ok),
+        captures: {'id': integer},
+      ).bind(app, const ['users', ':id']);
+
+      expect(app.routes, hasLength(3));
+      for (final route in app.routes) {
+        expect(
+          (route.segments[1] as CaptureSegment).capture.schema,
+          {'type': 'integer'},
+          reason: '${route.method} must carry the same parameter',
+        );
+      }
+    });
+
     test('an undeclared capture is a string', () {
       final app = App<Env>();
-      const Exported<Env>([Get(_ok)]).bind(app, const ['users', ':id']);
+      const Exported<Env>(get: Serve(_ok)).bind(app, const ['users', ':id']);
       expect((app.routes.single.segments[1] as CaptureSegment).capture.schema, {
         'type': 'string',
       });
     });
   });
 
-  group('what fails, and when', () {
-    test('a file that serves nothing fails at boot, naming the URL', () {
-      // It sits in the tree looking like a route and answers 404. The check is
-      // on bind rather than the constructor, which costs nothing: a lazy `final
-      // exported` only runs its initializer when something first touches it,
-      // and the first touch is this bind. Moving it is what lets the
-      // constructor be const.
-      expect(
-        () => const Exported<Env>([]).bind(App<Env>(), const ['users', ':id']),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('/users/:id'),
-          ),
+  test('a file that serves nothing fails at boot, naming the URL', () {
+    // It sits in the tree looking like a route and answers 404. The check is on
+    // bind rather than the constructor, which costs nothing: a lazy `final
+    // exported` only runs its initializer when something first touches it, and
+    // the first touch is this bind. Moving it is what lets the constructor be
+    // const.
+    //
+    // The other way a file could be wrong — one URL answering a method twice —
+    // has no test because it has no syntax: a slot is one named argument, and
+    // passing it twice does not compile. As a list it compiled, and only keta's
+    // boot-time `route conflict` caught it.
+    expect(
+      () => const Exported<Env>().bind(App<Env>(), const ['users', ':id']),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('/users/:id'),
         ),
-      );
-    });
-
-    test("a URL answering a method twice is keta's to catch, not ours", () {
-      // Checking it here would duplicate a boot-time check keta already has —
-      // and keta names the route, where this could only name a type.
-      final app = App<Env>();
-      const Exported<Env>([Get(_ok), Get(_ok)]).bind(app, const ['x']);
-      expect(
-        () => app.compile(Env()),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            allOf(contains('route conflict'), contains('GET /x')),
-          ),
-        ),
-      );
-    });
+      ),
+    );
   });
 
   test('a route file export is a compile-time constant', () {
     // Nothing needs a constructor body, so the whole declaration is const
     // rather than something built on first touch.
-    const a = Exported<Env>([Get(_ok)], captures: {'index': integer});
-    const b = Exported<Env>([Get(_ok)], captures: {'index': integer});
+    const a = Exported<Env>(get: Serve(_ok), captures: {'index': integer});
+    const b = Exported<Env>(get: Serve(_ok), captures: {'index': integer});
     expect(identical(a, b), isTrue, reason: 'canonicalized, so really const');
   });
 }

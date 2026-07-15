@@ -7,9 +7,11 @@ import 'package:keta_openapi/keta_openapi.dart';
 
 /// `/users/:id` — the `_id` in this file's name is the capture, and the only
 /// place it is named. `captures` is absent because `id` is a string, which is
-/// what a capture is unless the file says otherwise.
-final exported = Exported<Env>([
-  Get((c) async {
+/// what a capture is unless the file says otherwise. It would sit beside the
+/// slots rather than in one: `id` is the URL's, and all three methods below
+/// read it.
+final exported = Exported<Env>(
+  get: Serve((c) async {
     final rows = await c.env.db.reader.query(
       'select id, name, age, role, tags from users where id = ?',
       [c.param<String>('id')],
@@ -17,7 +19,7 @@ final exported = Exported<Env>([
     if (rows.isEmpty) throw const NotFound('user not found');
     return c.json(UserDto.fromRow(rows.first).toJson());
   }, doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user')),
-  Put(
+  put: Serve(
     // A write with no matching row is a 404, not a silent no-op.
     (c) async {
       final dto = UserDto.fromJson(
@@ -42,7 +44,7 @@ final exported = Exported<Env>([
       summary: 'Replace a user',
     ),
   ),
-  Delete((c) async {
+  delete: Serve((c) async {
     final changed = await c.get(txConn).execute(
       'delete from users where id = ?',
       [c.param<String>('id')],
@@ -50,4 +52,4 @@ final exported = Exported<Env>([
     if (changed == 0) throw const NotFound('user not found');
     return Response(204);
   }, doc: const RouteDoc(summary: 'Delete a user')),
-]);
+);
