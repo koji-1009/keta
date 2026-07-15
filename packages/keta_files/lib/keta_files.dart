@@ -12,7 +12,18 @@
 /// marked regions, so what runs is ordinary keta code you can read.
 library;
 
-export 'src/discover.dart'
-    show RouteFile, capturesDeclaration, discoverRouteFiles, httpMethods;
-export 'src/manifest.dart' show registrationsFor, syncManifest, unregistered;
+export 'src/discover.dart' show RouteFile, discoverRouteFiles;
+export 'src/export.dart'
+    show
+        Delete,
+        Exported,
+        Get,
+        Head,
+        Options,
+        Patch,
+        Post,
+        Put,
+        Verb,
+        exportedDeclaration;
+export 'src/manifest.dart' show registrationFor, syncManifest, unregistered;
 export 'src/route_path.dart' show routeSegments;

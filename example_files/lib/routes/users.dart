@@ -1,12 +1,17 @@
 import 'package:keta/keta.dart';
 import 'package:keta_db/keta_db.dart';
+import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
-/// `/users`. One file is one URL; one export is one verb.
+/// `/users`. One file is one URL; the list is what it answers.
+final exported = Exported<Env>([
+  const Get(_list, doc: _listDoc),
+  const Post(_create, doc: _createDoc),
+]);
 
-const getDoc = RouteDoc(
+const _listDoc = RouteDoc(
   response: userListSchema,
   summary: 'List users',
   query: [QueryParam('limit', integer), QueryParam('role', string)],
@@ -14,7 +19,7 @@ const getDoc = RouteDoc(
 
 /// Query parameters drive pagination and filtering — declared above for the
 /// document, read here with the optional accessor and a code-side default.
-Future<Response> get(Context<Env> c) async {
+Future<Response> _list(Context<Env> c) async {
   final limit = c.tryQuery<int>('limit') ?? 20;
   final role = c.tryQuery<String>('role');
   final where = role == null ? '' : ' where role = ?';
@@ -34,11 +39,14 @@ Future<Response> get(Context<Env> c) async {
   );
 }
 
-const postDoc = RouteDoc(requestBody: userDtoSchema, summary: 'Create a user');
+const _createDoc = RouteDoc(
+  requestBody: userDtoSchema,
+  summary: 'Create a user',
+);
 
 /// A duplicate id needs no code here: keta_sqlite turns the engine's uniqueness
 /// violation into a Conflict, and recover() renders it as a 409.
-Future<Response> post(Context<Env> c) async {
+Future<Response> _create(Context<Env> c) async {
   final dto = UserDto.fromJson(
     userDtoSchema.require(await c.body()) as Map<String, Object?>,
   );

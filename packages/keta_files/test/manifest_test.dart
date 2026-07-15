@@ -6,17 +6,7 @@ RouteFile file({
   required String importPath,
   required String prefix,
   required List<String> template,
-  List<String> methods = const ['get'],
-  Set<String> docs = const {},
-  bool declaresCaptures = false,
-}) => RouteFile(
-  importPath: importPath,
-  prefix: prefix,
-  template: template,
-  methods: methods,
-  docs: docs,
-  declaresCaptures: declaresCaptures,
-);
+}) => RouteFile(importPath: importPath, prefix: prefix, template: template);
 
 const _manifest = '''
 void register(App<Env> app) {
@@ -32,62 +22,58 @@ $_manifest''';
 
 void main() {
   group('the manifest reads as the route table', () {
-    test('the URL is written into the binding, in the tree\'s own words', () {
+    test('one line per file, and the URL is in it', () {
       final out = syncManifest(_imports, [
         file(
           importPath: 'routes/users/_id.dart',
           prefix: r'$users_id',
           template: ['users', ':id'],
-          docs: {'get'},
         ),
       ]);
       expect(out, contains("import 'routes/users/_id.dart' as \$users_id;"));
-      expect(out, contains("routeSegments(const ['users', ':id'])"));
-      expect(out, contains(r'$users_id.get'));
-      expect(out, contains(r'doc: $users_id.getDoc'));
-    });
-
-    test('a verb without a doc binds without one', () {
-      final out = syncManifest(_imports, [
-        file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']),
-      ]);
-      expect(out, isNot(contains('doc:')));
-    });
-
-    test('captures is passed only by a file that declares it', () {
-      final with_ = syncManifest(_imports, [
-        file(
-          importPath: 'routes/_id.dart',
-          prefix: r'$id',
-          template: [':id'],
-          declaresCaptures: true,
-        ),
-      ]);
-      final without = syncManifest(_imports, [
-        file(importPath: 'routes/_id.dart', prefix: r'$id', template: [':id']),
-      ]);
-      expect(with_, contains(r"routeSegments(const [':id'], $id.captures)"));
-      expect(without, contains("routeSegments(const [':id'])"));
+      // The URL, in the tree's own words. What the file answers is absent on
+      // purpose: that is its `exported`'s type to say, and the compiler's to
+      // check at this very line.
+      expect(
+        out,
+        contains(r"$users_id.exported.bind(app, const ['users', ':id']);"),
+      );
     });
 
     test('the root is an empty template, not an empty string', () {
       final out = syncManifest(_imports, [
         file(importPath: 'routes/index.dart', prefix: r'$index', template: []),
       ]);
-      expect(out, contains('routeSegments(const <String>[])'));
+      expect(out, contains(r'$index.exported.bind(app, const <String>[]);'));
     });
 
-    test('every verb a file serves gets its own binding', () {
+    test('every region is fenced from the formatter', () {
+      // Without the fence the manifest never settles: a binding wider than 80
+      // columns is reflowed by `dart format`, the next sync writes it back, and
+      // "syncing is a no-op" — the one assertion between the tree and the
+      // routes — cannot hold. Asserted here rather than left to the day someone
+      // tidies the fence away.
       final out = syncManifest(_imports, [
         file(
-          importPath: 'routes/users.dart',
-          prefix: r'$users',
-          template: ['users'],
-          methods: ['get', 'post'],
+          importPath: 'routes/users/_uid/tags/_index.dart',
+          prefix: r'$users_uid_tags_index',
+          template: ['users', ':uid', 'tags', ':index'],
         ),
       ]);
-      expect(out, contains(r'app.get('));
-      expect(out, contains(r'app.post('));
+      expect('// dart format off'.allMatches(out).length, 2);
+      expect('// dart format on'.allMatches(out).length, 2);
+
+      // The binding this exists for: 85 columns, on one line, inside a fence.
+      final binding = out
+          .split('\n')
+          .firstWhere((l) => l.contains('.exported.bind('));
+      expect(binding.length, greaterThan(80));
+      final lines = out.split('\n');
+      final at = lines.indexOf(binding);
+      expect(
+        lines.sublist(0, at).lastWhere((l) => l.trim().startsWith('// dart')),
+        contains('off'),
+      );
     });
   });
 
@@ -128,12 +114,7 @@ void main() {
   });
 
   group('drift is caught', () {
-    final f = file(
-      importPath: 'routes/x.dart',
-      prefix: r'$x',
-      template: ['x'],
-      docs: {'get'},
-    );
+    final f = file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']);
 
     test('a synced manifest is settled', () {
       final synced = syncManifest(_imports, [f]);

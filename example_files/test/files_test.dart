@@ -47,13 +47,19 @@ void main() {
       }
     });
 
-    test('one export is one verb', () {
-      final byUrl = {
-        for (final f in discoverRouteFiles('lib/routes')) f.url: f,
+    test('what a file serves is the type\'s to state, not the tree\'s', () {
+      // The generator knows only where a file is. What it answers is its
+      // `exported`'s type, checked by the compiler at the one line that binds
+      // it — so discovery has nothing to guess and nothing to get quietly
+      // wrong. This is the whole reason keta_files needs no analyzer.
+      final app = buildApp();
+      Set<String> methodsAt(String template) => {
+        for (final r in app.routes)
+          if (r.template == template) r.method,
       };
-      expect(byUrl['/users']!.methods, ['get', 'post']);
-      expect(byUrl['/users/:id']!.methods, ['get', 'put', 'delete']);
-      expect(byUrl['/health']!.methods, ['get']);
+      expect(methodsAt('/users'), {'GET', 'POST'});
+      expect(methodsAt('/users/:id'), {'GET', 'PUT', 'DELETE'});
+      expect(methodsAt('/health'), {'GET'});
     });
 
     test('the committed manifest is exactly what the tree generates', () {

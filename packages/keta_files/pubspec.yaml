@@ -1,7 +1,8 @@
 name: keta_files
 description: >-
-  File-convention entry for keta: discovers route files under a directory and
-  materializes their registrations into a manifest's marked regions.
+  File-based routing for keta: a file's location under lib/routes/ IS its URL —
+  routes/users/_id.dart serves /users/:id — and the bindings are materialized
+  from the tree into a manifest's marked regions.
 version: 0.1.0
 publish_to: none
 
@@ -12,8 +13,6 @@ resolution: workspace
 
 dependencies:
   keta: ^0.1.0
-  analyzer: ^14.0.0
-  dart_style: ^3.1.0
   path: ^1.9.0
 
 dev_dependencies:

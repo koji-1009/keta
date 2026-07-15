@@ -1,6 +1,5 @@
 import 'package:keta/keta.dart';
 import 'package:keta_db/keta_db.dart';
-import 'package:keta_files/keta_files.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:keta_otel/keta_otel.dart';
 
@@ -13,6 +12,7 @@ import 'observability.dart';
 // the markers; everything outside them is yours.
 
 // keta_files:imports
+// dart format off
 import 'routes/admin/ping.dart' as $admin_ping;
 import 'routes/health.dart' as $health;
 import 'routes/metrics.dart' as $metrics;
@@ -21,7 +21,7 @@ import 'routes/users.dart' as $users;
 import 'routes/users/_id.dart' as $users_id;
 import 'routes/users/_uid/tags/_index.dart' as $users_uid_tags_index;
 import 'routes/whoami.dart' as $whoami;
-
+// dart format on
 // keta_files:end
 
 /// Builds the fully-configured application.
@@ -54,49 +54,23 @@ App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
 /// of the file that serves it — `routes/users/_id.dart` is `/users/:id`, and
 /// nothing inside that file says so.
 ///
+/// One line per file, and none of them says what the file answers: that is the
+/// file's `exported` type, checked where it binds.
+///
 /// Run `dart run keta_files:sync` after adding, moving, or removing a file under
 /// lib/routes/. Moving a file changes its URL; that is the point.
 void register(App<Env> app) {
   // keta_files:routes
-  app.get(
-    routeSegments(const ['admin', 'ping']),
-    $admin_ping.get,
-    doc: $admin_ping.getDoc,
-  );
-  app.get(routeSegments(const ['health']), $health.get, doc: $health.getDoc);
-  app.get(routeSegments(const ['metrics']), $metrics.get, doc: $metrics.getDoc);
-  app.post(
-    routeSegments(const ['uploads']),
-    $uploads.post,
-    doc: $uploads.postDoc,
-  );
-  app.get(routeSegments(const ['users']), $users.get, doc: $users.getDoc);
-  app.post(routeSegments(const ['users']), $users.post, doc: $users.postDoc);
-  app.get(
-    routeSegments(const ['users', ':id']),
-    $users_id.get,
-    doc: $users_id.getDoc,
-  );
-  app.put(
-    routeSegments(const ['users', ':id']),
-    $users_id.put,
-    doc: $users_id.putDoc,
-  );
-  app.delete(
-    routeSegments(const ['users', ':id']),
-    $users_id.delete,
-    doc: $users_id.deleteDoc,
-  );
-  app.get(
-    routeSegments(const [
-      'users',
-      ':uid',
-      'tags',
-      ':index',
-    ], $users_uid_tags_index.captures),
-    $users_uid_tags_index.get,
-  );
-  app.get(routeSegments(const ['whoami']), $whoami.get, doc: $whoami.getDoc);
+  // dart format off
+  $admin_ping.exported.bind(app, const ['admin', 'ping']);
+  $health.exported.bind(app, const ['health']);
+  $metrics.exported.bind(app, const ['metrics']);
+  $uploads.exported.bind(app, const ['uploads']);
+  $users.exported.bind(app, const ['users']);
+  $users_id.exported.bind(app, const ['users', ':id']);
+  $users_uid_tags_index.exported.bind(app, const ['users', ':uid', 'tags', ':index']);
+  $whoami.exported.bind(app, const ['whoami']);
+  // dart format on
   // keta_files:end
 }
 

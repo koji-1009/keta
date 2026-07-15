@@ -1,8 +1,7 @@
 library;
 
-import 'package:dart_style/dart_style.dart';
-
 import 'discover.dart';
+import 'export.dart';
 
 const _importsMarker = 'keta_files:imports';
 const _routesMarker = 'keta_files:routes';
@@ -12,32 +11,28 @@ const _endMarker = 'keta_files:end';
 /// regions and is not a start marker.
 const _startMarkers = {_importsMarker, _routesMarker};
 
-/// The lines [file] contributes to the routes region: one binding per verb.
+/// Wraps every generated region. `dart format` leaves what is between these
+/// alone, which is what lets a synced manifest and a formatted one be the same
+/// state: without it a binding wider than 80 columns is reflowed by the
+/// formatter, the next sync writes it back, and the file oscillates forever —
+/// taking "syncing is a no-op" with it, which is the only assertion standing
+/// between the tree and the routes disagreeing.
 ///
-/// The URL is written into the generated call, not read from the file, so the
-/// manifest reads as the route table it is — `routeSegments(const ['users',
-/// ':id'], users_id.captures)` says where the file sits, in the same words the
-/// tree does.
-List<String> registrationsFor(RouteFile file) {
-  final captures = file.declaresCaptures
-      ? ', ${file.prefix}.$capturesDeclaration'
-      : '';
-  return [
-    for (final method in file.methods) _registration(file, method, captures),
-  ];
-}
+/// Saying so in the file also beats the alternative of the generator carrying a
+/// formatter to agree with: this region is machine-owned, and now says so to the
+/// formatter and the reader in the same breath.
+const _formatOff = '// dart format off';
+const _formatOn = '// dart format on';
 
-String _registration(RouteFile file, String method, String captures) {
-  final buffer = StringBuffer()
-    ..writeln('app.$method(')
-    ..writeln('  routeSegments(${_templateLiteral(file.template)}$captures),')
-    ..writeln('  ${file.prefix}.$method,');
-  if (file.docs.contains(method)) {
-    buffer.writeln('  doc: ${file.prefix}.${method}Doc,');
-  }
-  buffer.write(');');
-  return buffer.toString();
-}
+/// The line [file] contributes to the routes region.
+///
+/// One line per URL, and the URL is in it: the manifest reads as the route table
+/// it is, in the same words the tree uses. What the file serves is not spelled
+/// out here — that is its `exported`'s type to state and the compiler's to
+/// check, not this generator's to guess.
+String registrationFor(RouteFile file) =>
+    '${file.prefix}.$exportedDeclaration'
+    '.bind(app, ${_templateLiteral(file.template)});';
 
 String _templateLiteral(List<String> template) => template.isEmpty
     ? 'const <String>[]'
@@ -55,23 +50,18 @@ String _importFor(RouteFile file) =>
 /// appearing more than once (e.g. one buried in a string literal), or two
 /// regions that overlap — is a [FormatException], never a silent rewrite: the
 /// generator refuses to corrupt a manifest it cannot unambiguously parse.
-/// The result is formatted, because the alternative is a file that can never
-/// settle: the generator's line breaks are not `dart format`'s, so an unformatted
-/// manifest is rewritten by the formatter, and the next sync rewrites it back.
-/// Formatting here makes "synced" and "formatted" the same state, which is what
-/// lets a test assert that syncing is a no-op — and that assertion is the only
-/// thing standing between the tree and the routes silently disagreeing.
+///
+/// Each region is fenced with `// dart format off`/`on`, so what is written
+/// here is what stays: see [_formatOff].
 String syncManifest(String source, List<RouteFile> files) {
   var lines = source.split('\n');
   lines = _replaceRegion(lines, _importsMarker, [
     for (final f in files) _importFor(f),
   ]);
   lines = _replaceRegion(lines, _routesMarker, [
-    for (final f in files) ...registrationsFor(f).expand((r) => r.split('\n')),
+    for (final f in files) registrationFor(f),
   ]);
-  return DartFormatter(
-    languageVersion: DartFormatter.latestLanguageVersion,
-  ).format(lines.join('\n'));
+  return lines.join('\n');
 }
 
 /// The route files whose bindings are absent from [source]'s managed regions —
@@ -85,33 +75,17 @@ List<RouteFile> unregistered(String source, List<RouteFile> files) {
   final imports = {
     for (final l in _regionContent(lines, _importsMarker)) l.trim(),
   };
-  final routeBlock = _normalize(
-    _regionContent(lines, _routesMarker).join('\n'),
-  );
+  // An exact line match: the region is fenced from the formatter, so a binding
+  // is the one line the generator wrote and stays that way.
+  final routes = {
+    for (final l in _regionContent(lines, _routesMarker)) l.trim(),
+  };
   return [
     for (final f in files)
       if (!imports.contains(_importFor(f)) ||
-          registrationsFor(f).any((r) => !routeBlock.contains(_normalize(r))))
+          !routes.contains(registrationFor(f)))
         f,
   ];
-}
-
-/// Code with the things `dart format` is free to move taken out: line breaks,
-/// indentation, and trailing commas. None of them change what is bound, and a
-/// check that noticed them would report a formatted manifest as unregistered.
-String _normalize(String code) {
-  var normalized = code.replaceAll(RegExp(r'\s+'), '');
-  String previous;
-  do {
-    previous = normalized;
-    // replaceAllMapped, not replaceAll: replaceAll takes the replacement
-    // literally, so `$1` would be inserted as the two characters `$1`.
-    normalized = normalized.replaceAllMapped(
-      RegExp(r',([)\]}])'),
-      (m) => m[1]!,
-    );
-  } while (previous != normalized);
-  return normalized;
 }
 
 List<String> _replaceRegion(
@@ -140,7 +114,9 @@ List<String> _replaceRegion(
   final indent = lines[start].substring(0, lines[start].indexOf('//'));
   return [
     ...lines.sublist(0, start + 1),
+    '$indent$_formatOff',
     for (final line in content) line.isEmpty ? line : '$indent$line',
+    '$indent$_formatOn',
     ...lines.sublist(end),
   ];
 }

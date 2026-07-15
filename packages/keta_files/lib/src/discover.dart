@@ -2,70 +2,46 @@ library;
 
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/utilities.dart';
-import 'package:analyzer/dart/ast/ast.dart';
 import 'package:path/path.dart' as p;
 
-/// The HTTP verbs a route file may serve, as the names it exports them under.
-/// Lower-case because they are Dart functions, and named for the method because
-/// that is the convention every file-routing framework converged on.
-const httpMethods = [
-  'get',
-  'post',
-  'put',
-  'delete',
-  'patch',
-  'head',
-  'options',
-];
-
-/// The name a route file gives the map of its captures' types.
-const capturesDeclaration = 'captures';
-
-/// A route file: where it is, what URL its location denotes, and what it serves.
+/// A route file: where it is, and the URL its location denotes.
+///
+/// What it *serves* is not here, because it is not the generator's to know: the
+/// file's `exported` is a typed value, so the compiler checks its shape at the
+/// one place that uses it. A generator that inspected the file to find out what
+/// it serves would be re-deriving, by string matching, what the type system
+/// already guarantees — and getting it wrong quietly when it missed.
 class RouteFile {
   const RouteFile({
     required this.importPath,
     required this.prefix,
     required this.template,
-    required this.methods,
-    required this.docs,
-    required this.declaresCaptures,
   });
 
   /// The import path relative to the manifest, e.g. `routes/users/_id.dart`.
   final String importPath;
 
-  /// The import alias, e.g. `\$users_id`.
+  /// The import alias, e.g. `$users_id`.
   final String prefix;
 
   /// The URL this file's location denotes, as parts: `['users', ':id']`. A
   /// `:`-prefixed part is a capture. Empty means `/`.
   final List<String> template;
 
-  /// The verbs it exports, in [httpMethods] order.
-  final List<String> methods;
-
-  /// The verbs that also export a `<method>Doc`.
-  final Set<String> docs;
-
-  /// Whether it declares [capturesDeclaration].
-  final bool declaresCaptures;
-
   /// The URL, for humans and for error messages.
   String get url => template.isEmpty ? '/' : '/${template.join('/')}';
 }
 
 /// Every `*.dart` file under [routesDir], recursively, with the URL its location
-/// denotes and the verbs it exports. Sorted by URL so the manifest is a function
-/// of the tree alone, not of directory listing order.
+/// denotes. Sorted by URL, so the manifest is a function of the tree alone and
+/// not of directory listing order.
 ///
 /// The mapping, and all of it:
 ///
-///   routes/index.dart                 → /
-///   routes/health.dart                → /health
-///   routes/users.dart                 → /users
-///   routes/users/_id.dart             → /users/:id
+///   routes/index.dart                  → /
+///   routes/health.dart                 → /health
+///   routes/users.dart                  → /users
+///   routes/users/_id.dart              → /users/:id
 ///   routes/users/_uid/tags/_index.dart → /users/:uid/tags/:index
 ///
 /// A leading `_` on a file or directory marks a capture; `index` denotes the
@@ -105,30 +81,11 @@ List<RouteFile> discoverRouteFiles(
       );
     }
     byUrl[url] = rel;
-
-    final source = File(p.join(routesDir, rel)).readAsStringSync();
-    final exports = _topLevelNames(source, rel);
-    final methods = [
-      for (final m in httpMethods)
-        if (exports.contains(m)) m,
-    ];
-    if (methods.isEmpty) {
-      throw FormatException(
-        '"$rel" exports no HTTP method, so it serves nothing at $url. '
-        'Export one of ${httpMethods.join(', ')}, or delete the file.',
-      );
-    }
     result.add(
       RouteFile(
         importPath: p.url.join(importBase, rel),
         prefix: _uniquePrefix(_aliasFor(template), used),
         template: template,
-        methods: methods,
-        docs: {
-          for (final m in methods)
-            if (exports.contains('${m}Doc')) m,
-        },
-        declaresCaptures: exports.contains(capturesDeclaration),
       ),
     );
   }
@@ -147,13 +104,13 @@ List<String> _templateOf(String rel) {
 }
 
 /// A readable import alias: the URL's own words, in a namespace no hand-written
-/// name occupies. `/users/:id` → `\$users_id`.
+/// name occupies. `/users/:id` → `$users_id`.
 ///
-/// The `\$` is not decoration. An alias derived from a URL will sooner or later
+/// The `$` is not decoration. An alias derived from a URL will sooner or later
 /// be a word the app already uses — `routes/metrics.dart` wants `metrics`, and
 /// so does the app's own registry — and the loser of that collision would be
 /// the app, told to rename a URL because of a local variable. Generated names
-/// live in `\$`, which nothing hand-written does, so the collision cannot happen
+/// live in `$`, which nothing hand-written does, so the collision cannot happen
 /// rather than being detected and worked around.
 String _aliasFor(List<String> template) {
   final words = [
@@ -161,33 +118,6 @@ String _aliasFor(List<String> template) {
       part.startsWith(':') ? part.substring(1) : part,
   ];
   return '\$${_sanitize(words.isEmpty ? 'index' : words.join('_'))}';
-}
-
-/// The top-level function and variable names [source] declares.
-///
-/// Parsed, not resolved: which names a file declares is a syntactic question,
-/// and answering it syntactically means the manifest can be synced without a
-/// working analysis context — which matters, because the manifest is exactly
-/// what is missing when the context would fail to build.
-Set<String> _topLevelNames(String source, String rel) {
-  final result = parseString(content: source, throwIfDiagnostics: false);
-  if (result.errors.any((e) => e.severity.name == 'ERROR')) {
-    throw FormatException('"$rel" does not parse: ${result.errors.first}');
-  }
-  final names = <String>{};
-  for (final declaration in result.unit.declarations) {
-    switch (declaration) {
-      case FunctionDeclaration(:final name):
-        names.add(name.lexeme);
-      case TopLevelVariableDeclaration(:final variables):
-        for (final v in variables.variables) {
-          names.add(v.name.lexeme);
-        }
-      default:
-        break;
-    }
-  }
-  return names;
 }
 
 /// Turns a URL's words into the identifier part of an alias.

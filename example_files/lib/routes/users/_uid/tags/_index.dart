@@ -1,16 +1,18 @@
 import 'package:keta/keta.dart';
+import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 
 /// `/users/:uid/tags/:index` — four directories deep, two of them captures.
 ///
 /// The tree says *where*: `_uid` and `_index` are the parameters, and their
-/// names are established by the file's own location. This says *what*: `index`
-/// is an integer. Without the declaration it would be a string, and the OpenAPI
-/// document would say so — which is exactly the fidelity the string routing
-/// syntax cannot reach, since `:index` has no vocabulary for a type.
-const captures = {'index': integer};
+/// names come from the file's own location. The file says *what*: `index` is an
+/// integer. Without that the document would say string — the fidelity the
+/// string routing syntax cannot reach, since `:index` has no vocabulary for a
+/// type. A misspelling here is an unknown named argument, not a contract that
+/// quietly starts lying.
+final exported = Exported<Env>([const Get(_tag)], captures: {'index': integer});
 
-Future<Response> get(Context<Env> c) async {
+Future<Response> _tag(Context<Env> c) async {
   final rows = await c.env.db.reader.query(
     'select tags from users where id = ?',
     [c.param<String>('uid')],
