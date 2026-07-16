@@ -200,15 +200,18 @@ void main() {
       app.get(
         '/users/:id',
         (c) => c.text('x'),
-        doc: const RouteDoc(response: userDtoSchema, summary: 'get user'),
+        doc: const RouteDoc(
+          success: Success(schema: userDtoSchema),
+          summary: 'get user',
+        ),
       );
       app
           .on(root.segments('users'))
           .post(
             (c, _) => c.text('x'),
             doc: const RouteDoc(
+              success: Success(schema: userDtoSchema),
               requestBody: userDtoSchema,
-              response: userDtoSchema,
             ),
           );
       return app;
@@ -247,38 +250,39 @@ void main() {
       expect(schemas.keys, contains('UserDto'));
     });
 
-    test(
-      'does not fabricate a 200 when only other statuses are documented',
-      () {
-        final app = App<Ignored>();
-        app
-            .on(root.segments('users'))
-            .post(
-              (c, _) => c.text('x', status: 201),
-              doc: const RouteDoc(responses: {201: userDtoSchema}),
-            );
-        final op =
-            ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/users']
-                    as Map)['post']
-                as Map;
-        final responses = op['responses'] as Map;
-        expect(responses.keys, ['201']);
-        expect(responses.containsKey('200'), isFalse);
-      },
-    );
+    test('the declared success is the one that reaches the document', () {
+      // The status is declared, not guessed from an absence. The guess was 200
+      // whenever a route said nothing, and POST /users answers 201 — so it was
+      // documented as a 200 it never returns. Nothing fabricates a 200 beside
+      // this 201, because there is no fabrication left.
+      final app = App<Ignored>();
+      app
+          .on(root.segments('users'))
+          .post(
+            (c, _) => c.text('x', status: 201),
+            doc: const RouteDoc(success: Success(status: 201)),
+          );
+      final op =
+          ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/users']
+                  as Map)['post']
+              as Map;
+      expect((op['responses'] as Map).keys, ['201']);
+    });
 
-    test('a documented failure does not take the success away', () {
-      // `responses` is "beyond 200": a route declaring its 403 still answers
-      // 200 on the happy path. Conflating "documented anything" with
-      // "documented a success" made the document say /admin/ping never
-      // succeeds while its handler returned 'pong' — found by spectral's
-      // operation-success-response, which every keta-side test had missed.
+    test('a declared failure sits beside the success, not over it', () {
+      // The emitter used to skip the 200 whenever any response was declared, so
+      // /admin/ping — which declares only its 403 — carried no 2xx while its
+      // handler returned 'pong'. `success` being required is what makes that
+      // unwritable now; this holds the two apart.
       final app = App<Ignored>();
       app
           .on(root.segments('ping'))
           .get(
             (c, _) => c.text('pong'),
-            doc: const RouteDoc(responses: {403: userDtoSchema}),
+            doc: const RouteDoc(
+              success: Success(),
+              failureResponses: {403: userDtoSchema},
+            ),
           );
       final op =
           ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/ping']
@@ -287,6 +291,33 @@ void main() {
       final responses = op['responses'] as Map;
       expect(responses.containsKey('200'), isTrue, reason: 'the happy path');
       expect(responses.containsKey('403'), isTrue, reason: "the user's own");
+    });
+
+    test('a success in failureResponses is rejected, naming the route', () {
+      // `Map<int, Schema>` cannot exclude 2xx, so the field name carries the
+      // rule and this holds callers to it — a route has exactly one success,
+      // and it lives in `success`. (`Success(status: 500)` needs no test: the
+      // const assert makes it a compile error.)
+      final app = App<Ignored>();
+      app
+          .on(root.segments('users'))
+          .post(
+            (c, _) => c.text('x', status: 201),
+            doc: const RouteDoc(
+              success: Success(),
+              failureResponses: {201: userDtoSchema},
+            ),
+          );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('POST /users'), contains('201')),
+          ),
+        ),
+      );
     });
 
     test('toYaml emits a document that parses back to the same structure', () {

@@ -12,6 +12,12 @@ final exported = Exported<Env>(
     (c) => c.text('ok'),
     // `security: []` is not "no opinion" — it is "public", and it overrides the
     // global default. A route that omits it inherits the default instead.
-    doc: const RouteDoc(summary: 'Liveness probe', security: []),
+    doc: const RouteDoc(
+      // No schema: the probe answers `text/plain`, and a JSON schema over it
+      // would be a document saying something false. Saying nothing is not.
+      success: Success(),
+      summary: 'Liveness probe',
+      security: [],
+    ),
   ),
 );

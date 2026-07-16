@@ -26,6 +26,7 @@ final exported = Exported<Env>(
       return c.json({'fields': fields, 'files': files});
     },
     doc: const RouteDoc(
+      success: Success(),
       summary: 'Accept a multipart/form-data upload',
       requestBody: uploadFormSchema,
       requestBodyType: 'multipart/form-data',

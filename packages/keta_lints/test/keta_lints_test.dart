@@ -30,7 +30,10 @@ Map<String, Object?> get _doc => {
             },
           },
         },
-        'responses': {'200': <String, Object?>{}},
+        // A create answers 201. The scaffold has to read that from the
+        // document rather than assume 200, or the code it materializes starts
+        // out contradicting the contract it was generated from.
+        'responses': {'201': <String, Object?>{}},
       },
     },
   },
@@ -87,9 +90,12 @@ void main() {
         routes,
         contains("throw const NotImplementedYet('not implemented')"),
       );
-      expect(routes, contains('response: userDtoSchema'));
+      expect(routes, contains('success: Success(schema: userDtoSchema)'));
       expect(routes, contains("app.post('/users',"));
       expect(routes, contains('requestBody: userDtoSchema'));
+      // The status comes from the document's own 2xx, not from the 200 slot:
+      // the contract says 201, so the skeleton says 201.
+      expect(routes, contains('success: Success(status: 201)'));
     });
 
     test('materializes a DTO contract test', () {

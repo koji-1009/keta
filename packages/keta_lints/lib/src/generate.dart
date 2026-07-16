@@ -390,13 +390,13 @@ String _generateRoutes(
       final method = opEntry.key;
       if (!_httpMethods.contains(method)) continue;
       final op = (opEntry.value as Map).cast<String, Object?>();
-      final doc = _routeDoc(op);
+      // Always a doc: RouteDoc.success is required, so there is no scaffolded
+      // route without a declared success.
       buffer.writeln("  app.$method('${_ketaPath(pathEntry.key)}',");
       buffer.writeln(
-        "      (c) => throw const NotImplementedYet('not implemented')"
-        '${doc == null ? '' : ','}',
+        "      (c) => throw const NotImplementedYet('not implemented'),",
       );
-      if (doc != null) buffer.writeln('      doc: $doc,');
+      buffer.writeln('      doc: ${_routeDoc(op)},');
       buffer.writeln('  );');
     }
   }
@@ -421,21 +421,41 @@ String _generateRoutes(
   return buffer.toString();
 }
 
-String? _routeDoc(Map<String, Object?> op) {
-  final parts = <String>[];
+String _routeDoc(Map<String, Object?> op) {
+  final parts = <String>['success: ${_successDecl(op)}'];
   final summary = op['summary'];
   if (summary is String) parts.add('summary: ${dartStringLiteral(summary)}');
   final request = _schemaRefName(((op['requestBody'] as Map?)?['content']));
   if (request != null) parts.add('requestBody: ${_lowerFirst(request)}Schema');
-  final ok = (op['responses'] as Map?)?['200'];
-  final response = _schemaRefName((ok as Map?)?['content']);
-  if (response != null) parts.add('response: ${_lowerFirst(response)}Schema');
   final security = _securityDecl(op['security']);
   if (security != null) parts.add('security: $security');
   final query = _queryDecl(op);
   if (query != null) parts.add('query: $query');
-  if (parts.isEmpty) return null;
   return 'RouteDoc(${parts.join(', ')})';
+}
+
+/// The `success:` argument, taken from the operation's own 2xx/3xx rather than
+/// from the 200 slot alone: a document declaring 201 scaffolds a 201, and the
+/// code does not start out contradicting the spec it was generated from. The
+/// lowest success wins when several are declared; with none, 200 is the only
+/// thing there is to say.
+String _successDecl(Map<String, Object?> op) {
+  final responses = op['responses'];
+  if (responses is! Map) return 'Success()';
+  final declared =
+      responses.keys
+          .map((key) => int.tryParse('$key'))
+          .nonNulls
+          .where((status) => status >= 200 && status < 400)
+          .toList()
+        ..sort();
+  final status = declared.isEmpty ? 200 : declared.first;
+  final schema = _schemaRefName((responses['$status'] as Map?)?['content']);
+  final args = <String>[
+    if (status != 200) 'status: $status',
+    if (schema != null) 'schema: ${_lowerFirst(schema)}Schema',
+  ];
+  return 'Success(${args.join(', ')})';
 }
 
 /// The `query:` argument for a generated RouteDoc from the operation's

@@ -38,7 +38,7 @@ void main() {
           (a) => a.get(
             '/x',
             (c) => c.text('ok'),
-            doc: const RouteDoc(security: [bearer]),
+            doc: const RouteDoc(success: Success(), security: [bearer]),
           ),
         );
         expect((await TestClient(app, Env()).get('/x')).status, 401);
@@ -60,7 +60,7 @@ void main() {
           (a) => a.get(
             '/x',
             (c) => c.text('ok'),
-            doc: const RouteDoc(security: []),
+            doc: const RouteDoc(success: Success(), security: []),
           ),
         );
         expect((await TestClient(app, Env()).get('/x')).status, 200);

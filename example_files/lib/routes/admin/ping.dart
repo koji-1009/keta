@@ -19,8 +19,9 @@ final exported = Exported<Env>(
     // handler above, not from the security gate, and a status the gate never
     // produces still has to reach the document.
     doc: const RouteDoc(
+      success: Success(),
       summary: 'Admin-only liveness check',
-      responses: {403: errorSchema},
+      failureResponses: {403: errorSchema},
     ),
   ),
 );

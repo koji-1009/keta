@@ -218,10 +218,18 @@ void main() {
       final env = await bootTestEnv();
       addTearDown(env.close);
       final app = buildApp(requestTimeout: const Duration(milliseconds: 20))
-        ..get('/slow', (c) async {
-          await Future<void>.delayed(const Duration(seconds: 1));
-          return c.text('too late');
-        }, doc: const RouteDoc(summary: 'Deliberately slow', security: []));
+        ..get(
+          '/slow',
+          (c) async {
+            await Future<void>.delayed(const Duration(seconds: 1));
+            return c.text('too late');
+          },
+          doc: const RouteDoc(
+            success: Success(),
+            summary: 'Deliberately slow',
+            security: [],
+          ),
+        );
 
       final r = await TestClient(
         app,

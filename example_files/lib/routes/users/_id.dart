@@ -11,14 +11,20 @@ import 'package:keta_openapi/keta_openapi.dart';
 /// slots rather than in one: `id` is the URL's, and all three methods below
 /// read it.
 final exported = Exported<Env>(
-  get: Serve((c) async {
-    final rows = await c.env.db.reader.query(
-      'select id, name, age, role, tags from users where id = ?',
-      [c.param<String>('id')],
-    );
-    if (rows.isEmpty) throw const NotFound('user not found');
-    return c.json(UserDto.fromRow(rows.first).toJson());
-  }, doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user')),
+  get: Serve(
+    (c) async {
+      final rows = await c.env.db.reader.query(
+        'select id, name, age, role, tags from users where id = ?',
+        [c.param<String>('id')],
+      );
+      if (rows.isEmpty) throw const NotFound('user not found');
+      return c.json(UserDto.fromRow(rows.first).toJson());
+    },
+    doc: const RouteDoc(
+      success: Success(schema: userDtoSchema),
+      summary: 'Fetch a user',
+    ),
+  ),
   put: Serve(
     // A write with no matching row is a 404, not a silent no-op.
     (c) async {
@@ -39,17 +45,25 @@ final exported = Exported<Env>(
       return c.json(dto.toJson());
     },
     doc: const RouteDoc(
+      success: Success(schema: userDtoSchema),
       requestBody: userDtoSchema,
-      response: userDtoSchema,
       summary: 'Replace a user',
     ),
   ),
-  delete: Serve((c) async {
-    final changed = await c.get(txConn).execute(
-      'delete from users where id = ?',
-      [c.param<String>('id')],
-    );
-    if (changed == 0) throw const NotFound('user not found');
-    return Response(204);
-  }, doc: const RouteDoc(summary: 'Delete a user')),
+  delete: Serve(
+    (c) async {
+      final changed = await c.get(txConn).execute(
+        'delete from users where id = ?',
+        [c.param<String>('id')],
+      );
+      if (changed == 0) throw const NotFound('user not found');
+      return Response(204);
+      // 204 with no body, which is what the handler answers. Declared, because a
+      // fabricated 200 was right only by luck and here it was wrong.
+    },
+    doc: const RouteDoc(
+      success: Success(status: 204),
+      summary: 'Delete a user',
+    ),
+  ),
 );

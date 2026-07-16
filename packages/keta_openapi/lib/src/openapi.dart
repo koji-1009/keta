@@ -106,33 +106,42 @@ Map<String, Object?> _operation(
     }
   }
   final responses = <String, Object?>{};
-  if (doc?.response != null) {
-    responses['200'] = {'description': 'OK', ..._jsonBody(doc!.response!)};
-  }
-  if (doc?.responses != null) {
-    for (final entry in doc!.responses!.entries) {
-      responses['${entry.key}'] = {
-        'description': '',
-        ..._jsonBody(entry.value),
-      };
+  if (doc != null) {
+    // The success is not conditional: [RouteDoc.success] is required, so there
+    // is no branch here that could leave a document without a 2xx, and no guess
+    // about which one it is.
+    responses['${doc.success.status}'] = {
+      'description': 'OK',
+      if (doc.success.schema != null)
+        ..._body(doc.success.schema!, doc.success.contentType),
+    };
+    final failures = doc.failureResponses;
+    if (failures != null) {
+      for (final entry in failures.entries) {
+        // The field name says non-2xx; the type cannot hold it to that, so it
+        // is held here, where the route can be named.
+        if (entry.key >= 200 && entry.key < 400) {
+          throw StateError(
+            '${route.method} ${_openApiPath(route.segments)}: '
+            'failureResponses carries ${entry.key}, which is a success — '
+            'a route has exactly one, and it belongs in RouteDoc.success',
+          );
+        }
+        responses['${entry.key}'] = {
+          'description': '',
+          ..._jsonBody(entry.value),
+        };
+      }
     }
+  } else {
+    // A route carrying no RouteDoc declares no contract at all. It still
+    // answers something, and 200 is the only thing there is to say.
+    responses['200'] = {'description': 'OK'};
   }
   // A secured operation gains a 401 automatically — a deterministic projection
   // of the declaration — unless the user documented 401 themselves (theirs wins).
   if (security.isNotEmpty && !responses.containsKey('401')) {
     responses['401'] = {'description': 'Unauthorized'};
-  }
-  // `responses` is "beyond 200" (§5), so a declared failure does not replace the
-  // success: an operation documenting only its 403 still answers 200 on the
-  // happy path, and a document with no 2xx says it never succeeds — lying about
-  // the handler. Fabricate only when no success is documented; a route that
-  // declares its own 201 keeps that alone.
-  final documentsSuccess = responses.keys.any((status) {
-    final code = int.tryParse(status);
-    return code != null && code >= 200 && code < 400;
-  });
-  if (!documentsSuccess) {
-    responses['200'] = {'description': 'OK'};
   }
   return {
     if (doc?.summary != null) 'summary': doc!.summary,

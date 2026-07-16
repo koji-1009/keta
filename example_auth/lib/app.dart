@@ -21,7 +21,11 @@ App<Env> buildApp() {
     ..get(
       '/whoami',
       (c) => c.json({'role': c.get(authRole)}),
-      doc: const RouteDoc(security: [bearer], summary: 'The caller identity'),
+      doc: const RouteDoc(
+        success: Success(),
+        security: [bearer],
+        summary: 'The caller identity',
+      ),
     );
 
   return app;

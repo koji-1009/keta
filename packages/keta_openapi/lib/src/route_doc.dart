@@ -24,21 +24,51 @@ const apiKey = SecurityScheme('apiKey', {
   'name': 'X-API-Key',
 });
 
+/// What a route answers with when it succeeds: the status, and the body when it
+/// has one to document.
+///
+/// Required on every [RouteDoc], so a contract declaring no success cannot be
+/// written — the shape carries what a check would otherwise have to. The
+/// emitter used to fabricate a 200 whenever nothing was declared, and a guess is
+/// right only by luck: `POST /users` answers 201 and `DELETE /users/:id`
+/// answers 204, and both were documented as 200 with nothing to say so.
+final class Success {
+  const Success({
+    this.status = 200,
+    this.schema,
+    this.contentType = 'application/json',
+  }) : assert(status >= 200 && status < 400, 'a success is a 2xx or a 3xx');
+
+  /// The status this route answers with — 201 for a create, 204 for a delete.
+  final int status;
+
+  /// The body's schema, or null when there is no body to document: a 204, or a
+  /// `text/plain` liveness probe. Saying nothing is not a lie; a JSON schema
+  /// over a text body would be one.
+  final Schema? schema;
+
+  /// The media type of [schema], projected as-is. Mirrors
+  /// [RouteDoc.requestBodyType].
+  final String contentType;
+}
+
 /// Per-route documentation, passed to a route as its opaque `doc` and read back
 /// here when emitting OpenAPI.
 class RouteDoc {
   const RouteDoc({
-    this.response,
+    required this.success,
     this.requestBody,
     this.requestBodyType = 'application/json',
     this.summary,
-    this.responses,
+    this.failureResponses,
     this.security,
     this.query,
   });
 
-  /// The schema of the 200 response body.
-  final Schema? response;
+  /// What this route answers with when it succeeds. Required: there is nowhere
+  /// to write a contract without one, so a document with no 2xx is
+  /// unrepresentable rather than caught after the fact.
+  final Success success;
 
   /// The schema of the request body.
   final Schema? requestBody;
@@ -51,8 +81,10 @@ class RouteDoc {
 
   final String? summary;
 
-  /// Responses for statuses other than 200.
-  final Map<int, Schema>? responses;
+  /// The statuses this route fails with. The name is the constraint: a success
+  /// lives in [success], and a route has exactly one. A 2xx here is rejected
+  /// when the document is emitted, naming the route.
+  final Map<int, Schema>? failureResponses;
 
   /// The security schemes that satisfy this route, OR-combined (any one
   /// suffices). `null` follows the global default passed to
@@ -67,9 +99,9 @@ class RouteDoc {
 
   /// Every schema this doc references, for transitive component collection.
   Iterable<Schema> get schemas => [
-    ?response,
+    ?success.schema,
     ?requestBody,
-    ...?responses?.values,
+    ...?failureResponses?.values,
   ];
 }
 

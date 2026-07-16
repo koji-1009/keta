@@ -58,12 +58,12 @@ void main() {
       ..get(
         '/events',
         (c) => c.text('x'),
-        doc: const RouteDoc(response: eventSchema),
+        doc: const RouteDoc(success: Success(schema: eventSchema)),
       )
       ..get(
         '/events2',
         (c) => c.text('x'),
-        doc: const RouteDoc(response: eventSchema),
+        doc: const RouteDoc(success: Success(schema: eventSchema)),
       );
     final schemas =
         (OpenApi.fromRoutes(app.routes).toJson()['components']
@@ -90,7 +90,11 @@ void main() {
 
   test('a documented route with no response fabricates a 200', () {
     final app = App<Ignored>()
-      ..get('/s', (c) => c.text('x'), doc: const RouteDoc(summary: 'just s'));
+      ..get(
+        '/s',
+        (c) => c.text('x'),
+        doc: const RouteDoc(success: Success(), summary: 'just s'),
+      );
     final op =
         ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/s']
                 as Map)['get']
@@ -200,7 +204,7 @@ void main() {
           ..get(
             '/secret',
             (c) => c.text('x'),
-            doc: const RouteDoc(security: [bearer]),
+            doc: const RouteDoc(success: Success(), security: [bearer]),
           );
         final doc = OpenApi.fromRoutes(app.routes).toJson();
         final o = op(doc, '/secret');
@@ -225,7 +229,11 @@ void main() {
 
     test('an empty security list overrides the default to public', () {
       final app = App<Ignored>()
-        ..get('/open', (c) => c.text('x'), doc: const RouteDoc(security: []));
+        ..get(
+          '/open',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(), security: []),
+        );
       final doc = OpenApi.fromRoutes(app.routes, security: [bearer]).toJson();
       final o = op(doc, '/open');
       expect(o.containsKey('security'), isFalse);
@@ -239,8 +247,9 @@ void main() {
           '/s',
           (c) => c.text('x'),
           doc: const RouteDoc(
+            success: Success(),
             security: [bearer],
-            responses: {401: createdSchema},
+            failureResponses: {401: createdSchema},
           ),
         );
       final doc = OpenApi.fromRoutes(app.routes).toJson();
@@ -262,6 +271,7 @@ void main() {
             '/s',
             (c) => c.text('x'),
             doc: const RouteDoc(
+              success: Success(),
               query: [
                 QueryParam('page', integer),
                 QueryParam('q', string, required: true),
@@ -283,7 +293,10 @@ void main() {
       final app = App<Ignored>()
         ..on(root.segments('u').capture(integer('id'))).get(
           (c, _) => c.text('x'),
-          doc: const RouteDoc(query: [QueryParam('id', string)]),
+          doc: const RouteDoc(
+            success: Success(),
+            query: [QueryParam('id', string)],
+          ),
         );
       final ps = params(OpenApi.fromRoutes(app.routes).toJson(), '/u/{id}');
       // No StateError: (name, in) distinguishes the path id from the query id.
@@ -298,7 +311,7 @@ void main() {
         app.get(
           p,
           (c) => c.text('x'),
-          doc: const RouteDoc(response: createdSchema),
+          doc: const RouteDoc(success: Success(schema: createdSchema)),
         );
       }
       return app;
@@ -324,7 +337,7 @@ void main() {
         ..post(
           '/u',
           (c) => c.text('x'),
-          doc: const RouteDoc(requestBody: createdSchema),
+          doc: const RouteDoc(success: Success(), requestBody: createdSchema),
         );
       final c = content(OpenApi.fromRoutes(app.routes).toJson(), '/u');
       expect(c.keys, ['application/json']);
@@ -336,6 +349,7 @@ void main() {
           '/u',
           (c) => c.text('x'),
           doc: const RouteDoc(
+            success: Success(),
             requestBody: createdSchema,
             requestBodyType: 'multipart/form-data',
           ),

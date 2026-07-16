@@ -13,6 +13,10 @@ import 'package:keta_otel/keta_otel.dart';
 final exported = Exported<Env>(
   get: Serve(
     metricsHandler<Env>(metrics),
-    doc: const RouteDoc(summary: 'Prometheus metrics', security: [apiKey]),
+    doc: const RouteDoc(
+      success: Success(),
+      summary: 'Prometheus metrics',
+      security: [apiKey],
+    ),
   ),
 );

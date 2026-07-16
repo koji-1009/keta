@@ -14,6 +14,7 @@ final exported = Exported<Env>(
     // `security: [bearer]` is declared, not inherited: `c.get` above asserts a
     // principal is present, and only the bearer verifier sets one.
     doc: const RouteDoc(
+      success: Success(),
       summary: 'The authenticated caller',
       security: [bearer],
     ),

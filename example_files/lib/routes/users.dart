@@ -30,7 +30,7 @@ final exported = Exported<Env>(
       );
     },
     doc: const RouteDoc(
-      response: userListSchema,
+      success: Success(schema: userListSchema),
       summary: 'List users',
       query: [QueryParam('limit', integer), QueryParam('role', string)],
     ),
@@ -54,6 +54,12 @@ final exported = Exported<Env>(
         },
       );
     },
-    doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'),
+    doc: const RouteDoc(
+      // 201, because that is what the handler above answers. The status lives
+      // in the declaration rather than being guessed from its absence.
+      success: Success(status: 201),
+      requestBody: userDtoSchema,
+      summary: 'Create a user',
+    ),
   ),
 );

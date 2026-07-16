@@ -49,7 +49,11 @@ App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
   app.get(
     '/metrics',
     metricsHandler(metrics),
-    doc: const RouteDoc(summary: 'Prometheus metrics', security: [apiKey]),
+    doc: const RouteDoc(
+      success: Success(),
+      summary: 'Prometheus metrics',
+      security: [apiKey],
+    ),
   );
   return app;
 }

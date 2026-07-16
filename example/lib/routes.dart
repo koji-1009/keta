@@ -17,7 +17,13 @@ void register(App<Env> app) {
   app.get(
     '/health',
     (c) => c.text('ok'),
-    doc: const RouteDoc(summary: 'Liveness probe', security: []),
+    doc: const RouteDoc(
+      // No schema: the probe answers `text/plain`, and a JSON schema over it
+      // would be a document saying something false. Saying nothing is not.
+      success: Success(),
+      summary: 'Liveness probe',
+      security: [],
+    ),
   );
 
   // A list endpoint: query parameters drive pagination (?limit) and filtering
@@ -45,7 +51,7 @@ void register(App<Env> app) {
       );
     },
     doc: const RouteDoc(
-      response: userListSchema,
+      success: Success(schema: userListSchema),
       summary: 'List users',
       query: [QueryParam('limit', integer), QueryParam('role', string)],
     ),
@@ -61,26 +67,38 @@ void register(App<Env> app) {
       if (rows.isEmpty) throw const NotFound('user not found');
       return c.json(UserDto.fromRow(rows.first).toJson());
     },
-    doc: const RouteDoc(response: userDtoSchema, summary: 'Fetch a user'),
+    doc: const RouteDoc(
+      success: Success(schema: userDtoSchema),
+      summary: 'Fetch a user',
+    ),
   );
 
-  app.on(root.segments('users')).post((c, _) async {
-    final dto = UserDto.fromJson(
-      userDtoSchema.require(await c.body()) as Map<String, Object?>,
-    );
-    await c.get(txConn).execute(
-      'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
-      [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
-    );
-    // 201 Created with a Location header — response headers via the helper.
-    return c.text(
-      'created',
-      status: 201,
-      headers: {
-        'location': ['/users/${dto.id}'],
-      },
-    );
-  }, doc: const RouteDoc(requestBody: userDtoSchema, summary: 'Create a user'));
+  app.on(root.segments('users')).post(
+    (c, _) async {
+      final dto = UserDto.fromJson(
+        userDtoSchema.require(await c.body()) as Map<String, Object?>,
+      );
+      await c.get(txConn).execute(
+        'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
+        [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
+      );
+      // 201 Created with a Location header — response headers via the helper.
+      return c.text(
+        'created',
+        status: 201,
+        headers: {
+          'location': ['/users/${dto.id}'],
+        },
+      );
+    },
+    doc: const RouteDoc(
+      // 201, because that is what the handler above answers. The status lives in
+      // the declaration rather than being guessed from its absence.
+      success: Success(status: 201),
+      requestBody: userDtoSchema,
+      summary: 'Create a user',
+    ),
+  );
 
   app
       .on(
@@ -125,20 +143,29 @@ void register(App<Env> app) {
       return c.json(dto.toJson());
     },
     doc: const RouteDoc(
+      success: Success(schema: userDtoSchema),
       requestBody: userDtoSchema,
-      response: userDtoSchema,
       summary: 'Replace a user',
     ),
   );
 
-  app.delete('/users/:id', (c) async {
-    final changed = await c.get(txConn).execute(
-      'delete from users where id = ?',
-      [c.param<String>('id')],
-    );
-    if (changed == 0) throw const NotFound('user not found');
-    return Response(204);
-  }, doc: const RouteDoc(summary: 'Delete a user'));
+  app.delete(
+    '/users/:id',
+    (c) async {
+      final changed = await c.get(txConn).execute(
+        'delete from users where id = ?',
+        [c.param<String>('id')],
+      );
+      if (changed == 0) throw const NotFound('user not found');
+      return Response(204);
+      // 204 with no body, which is what the handler answers. Declared, because a
+      // fabricated 200 was right only by luck and here it was wrong.
+    },
+    doc: const RouteDoc(
+      success: Success(status: 204),
+      summary: 'Delete a user',
+    ),
+  );
 
   // The other half of authentication: the gate put the caller in the request
   // store, and the handler reads it back with the same typed Key. Nothing is
@@ -155,6 +182,7 @@ void register(App<Env> app) {
       return c.json({'id': who.id, 'admin': who.admin});
     },
     doc: const RouteDoc(
+      success: Success(),
       summary: 'The authenticated caller',
       security: [bearer],
     ),
@@ -163,9 +191,9 @@ void register(App<Env> app) {
   // Authorization is ordinary middleware, scoped to a group rather than the
   // whole app: `enforceSecurity` answers "who are you", `requireAdmin` answers
   // "may you". Keeping them apart is why 401 and 403 stay distinguishable.
-  // The 403 is part of the contract, so it is declared. `responses` is how a
-  // status the gate never produces — this one comes from requireAdmin, not
-  // enforceSecurity — still reaches the document.
+  // The 403 is part of the contract, so it is declared. `failureResponses` is
+  // how a status the gate never produces — this one comes from requireAdmin,
+  // not enforceSecurity — still reaches the document.
   app
       .group('/admin')
       .use(requireAdmin())
@@ -173,8 +201,9 @@ void register(App<Env> app) {
         '/ping',
         (c) => c.text('pong'),
         doc: const RouteDoc(
+          success: Success(),
           summary: 'Admin-only liveness check',
-          responses: {403: errorSchema},
+          failureResponses: {403: errorSchema},
         ),
       );
 
@@ -201,6 +230,7 @@ void register(App<Env> app) {
       return c.json({'fields': fields, 'files': files});
     },
     doc: const RouteDoc(
+      success: Success(),
       summary: 'Accept a multipart/form-data upload',
       requestBody: uploadFormSchema,
       requestBodyType: 'multipart/form-data',
