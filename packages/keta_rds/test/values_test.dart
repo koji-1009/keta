@@ -19,10 +19,7 @@ void main() {
     final instant = DateTime.utc(2026, 7, 17, 10, 30, 15, 123);
 
     test('timestamptz is emitted as UTC with a Z (a real instant)', () {
-      expect(
-        mapValue(instant, Type.timestampTz),
-        '2026-07-17T10:30:15.123Z',
-      );
+      expect(mapValue(instant, Type.timestampTz), '2026-07-17T10:30:15.123Z');
     });
 
     test('timestamp (no tz) is emitted WITHOUT an offset designator', () {

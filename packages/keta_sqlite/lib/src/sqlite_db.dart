@@ -56,7 +56,8 @@ class SqliteDb implements Db {
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),
     bool wal = false,
-  }) => SqliteDb._(_open(sqlite3.open(path), lockTimeout, wal: wal), lockTimeout);
+  }) =>
+      SqliteDb._(_open(sqlite3.open(path), lockTimeout, wal: wal), lockTimeout);
 
   /// Opens a private in-memory database. See [open] for [lockTimeout].
   ///

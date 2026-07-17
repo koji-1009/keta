@@ -260,8 +260,7 @@ class Pool<C> {
   /// isolate, the same posture as StdoutLog.dispose() cancelling its flush
   /// timer.
   void _syncReaper() {
-    final wanted =
-        !_closed && maxIdleTime > Duration.zero && _idle.isNotEmpty;
+    final wanted = !_closed && maxIdleTime > Duration.zero && _idle.isNotEmpty;
     if (wanted && _reaper == null) {
       _reaper = Timer.periodic(maxIdleTime, (_) => _reap());
     } else if (!wanted && _reaper != null) {

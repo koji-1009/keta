@@ -208,11 +208,10 @@ Discovery discover(String routesDir, {String importBase = 'routes'}) {
         // admin wraps the handler. `middleware` is already sorted by path, but
         // depth is the ordering that matters and two scopes never tie (a tie
         // would be two `_middleware.dart` in one directory, which cannot exist).
-        middleware:
-            [
-              for (final m in middleware)
-                if (_isPrefix(m.dir, routeDir)) m,
-            ]..sort((a, b) => a.dir.length.compareTo(b.dir.length)),
+        middleware: [
+          for (final m in middleware)
+            if (_isPrefix(m.dir, routeDir)) m,
+        ]..sort((a, b) => a.dir.length.compareTo(b.dir.length)),
       ),
     );
   }

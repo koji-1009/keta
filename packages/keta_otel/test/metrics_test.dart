@@ -36,7 +36,12 @@ void main() {
       // have truncated sub-unit samples like these to 0.
       final registry = MetricsRegistry()
         ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 0.5)
-        ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 0.25);
+        ..record(
+          method: 'GET',
+          route: '/x',
+          status: 200,
+          durationSeconds: 0.25,
+        );
       expect(
         registry.prometheus(),
         contains(
@@ -67,28 +72,31 @@ void main() {
     );
   });
 
-  test('identical keys aggregate; any differing field is a separate series', () {
-    final registry = MetricsRegistry()
-      ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 5)
-      ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 7)
-      ..record(method: 'POST', route: '/x', status: 200, durationSeconds: 1)
-      ..record(method: 'GET', route: '/y', status: 200, durationSeconds: 1)
-      ..record(method: 'GET', route: '/x', status: 500, durationSeconds: 1);
-    final body = registry.prometheus();
+  test(
+    'identical keys aggregate; any differing field is a separate series',
+    () {
+      final registry = MetricsRegistry()
+        ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 5)
+        ..record(method: 'GET', route: '/x', status: 200, durationSeconds: 7)
+        ..record(method: 'POST', route: '/x', status: 200, durationSeconds: 1)
+        ..record(method: 'GET', route: '/y', status: 200, durationSeconds: 1)
+        ..record(method: 'GET', route: '/x', status: 500, durationSeconds: 1);
+      final body = registry.prometheus();
 
-    expect(
-      body,
-      contains('keta_requests_total{method="GET",route="/x",status="200"} 2'),
-    );
-    expect(
-      body,
-      contains(
-        'keta_request_duration_seconds_sum'
-        '{method="GET",route="/x",status="200"} 12',
-      ),
-    );
-    expect(body, contains('{method="POST",route="/x",status="200"} 1'));
-    expect(body, contains('{method="GET",route="/y",status="200"} 1'));
-    expect(body, contains('{method="GET",route="/x",status="500"} 1'));
-  });
+      expect(
+        body,
+        contains('keta_requests_total{method="GET",route="/x",status="200"} 2'),
+      );
+      expect(
+        body,
+        contains(
+          'keta_request_duration_seconds_sum'
+          '{method="GET",route="/x",status="200"} 12',
+        ),
+      );
+      expect(body, contains('{method="POST",route="/x",status="200"} 1'));
+      expect(body, contains('{method="GET",route="/y",status="200"} 1'));
+      expect(body, contains('{method="GET",route="/x",status="500"} 1'));
+    },
+  );
 }

@@ -141,10 +141,7 @@ void main() {
 
     test('a non-upgrade request to an upgrade route gets 426', () async {
       final app = App<Env>();
-      app.get(
-        '/ws',
-        (c) => Response.upgrade((channel) => channel.close()),
-      );
+      app.get('/ws', (c) => Response.upgrade((channel) => channel.close()));
       final server = await app.serve(boot, port: 8133);
 
       final client = HttpClient();
@@ -201,89 +198,92 @@ void main() {
       await server.shutdown(grace: const Duration(milliseconds: 200));
     });
 
-    test('shutdown with an open socket completes within grace + margin',
-        () async {
-      final app = App<Env>();
-      app.get(
-        '/ws',
-        (c) => Response.upgrade((channel) {
-          channel.messages.listen((_) {}); // idle, never closes on its own
-        }),
-      );
-      final server = await app.serve(boot, port: 8135);
+    test(
+      'shutdown with an open socket completes within grace + margin',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/ws',
+          (c) => Response.upgrade((channel) {
+            channel.messages.listen((_) {}); // idle, never closes on its own
+          }),
+        );
+        final server = await app.serve(boot, port: 8135);
 
-      final ws = await WebSocket.connect('ws://127.0.0.1:8135/ws');
-      // The socket is idle and open. Shutdown must force it closed rather than
-      // wait on it forever.
-      final watch = Stopwatch()..start();
-      await server.shutdown(grace: const Duration(milliseconds: 500));
-      watch.stop();
-      expect(
-        watch.elapsed,
-        lessThan(const Duration(seconds: 3)),
-        reason: 'an open socket must not hang shutdown',
-      );
-      // The client observes the going-away close.
-      await ws.drain<void>().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () {},
-      );
-      expect(ws.closeCode, isNotNull);
-      await ws.close();
-    });
+        final ws = await WebSocket.connect('ws://127.0.0.1:8135/ws');
+        // The socket is idle and open. Shutdown must force it closed rather than
+        // wait on it forever.
+        final watch = Stopwatch()..start();
+        await server.shutdown(grace: const Duration(milliseconds: 500));
+        watch.stop();
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 3)),
+          reason: 'an open socket must not hang shutdown',
+        );
+        // The client observes the going-away close.
+        await ws.drain<void>().timeout(
+          const Duration(seconds: 2),
+          onTimeout: () {},
+        );
+        expect(ws.closeCode, isNotNull);
+        await ws.close();
+      },
+    );
   });
 
   group('TestClient in-process upgrade', () {
-    test('connect upgrades and round-trips through the handler channel',
-        () async {
-      final app = App<Env>();
-      app.get(
-        '/ws',
-        (c) => Response.upgrade((channel) {
-          channel.messages.listen((m) => channel.send('echo:$m'));
-        }),
-      );
-      final client = TestClient(app, await boot());
+    test(
+      'connect upgrades and round-trips through the handler channel',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/ws',
+          (c) => Response.upgrade((channel) {
+            channel.messages.listen((m) => channel.send('echo:$m'));
+          }),
+        );
+        final client = TestClient(app, await boot());
 
-      final up = await client.connect('/ws');
-      expect(up.upgraded, isTrue);
-      final got = <Object>[];
-      up.socket!.messages.listen(got.add);
-      up.socket!.send('one');
-      up.socket!.send('two');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(got, ['echo:one', 'echo:two']);
+        final up = await client.connect('/ws');
+        expect(up.upgraded, isTrue);
+        final got = <Object>[];
+        up.socket!.messages.listen(got.add);
+        up.socket!.send('one');
+        up.socket!.send('two');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(got, ['echo:one', 'echo:two']);
 
-      await up.socket!.close();
-      await up.socket!.done.timeout(const Duration(seconds: 1));
-    });
+        await up.socket!.close();
+        await up.socket!.done.timeout(const Duration(seconds: 1));
+      },
+    );
 
-    test('connect surfaces a middleware rejection instead of upgrading',
-        () async {
-      Middleware<Env> requireToken() => (c, next) {
-        if (c.header('authorization') != 'Bearer ok') {
-          throw const Unauthorized('authentication required');
-        }
-        return next(c);
-      };
-      final app = App<Env>()..use(requireToken());
-      app.get(
-        '/ws',
-        (c) => Response.upgrade((channel) => channel.close()),
-      );
-      final client = TestClient(app, await boot());
+    test(
+      'connect surfaces a middleware rejection instead of upgrading',
+      () async {
+        Middleware<Env> requireToken() => (c, next) {
+          if (c.header('authorization') != 'Bearer ok') {
+            throw const Unauthorized('authentication required');
+          }
+          return next(c);
+        };
+        final app = App<Env>()..use(requireToken());
+        app.get('/ws', (c) => Response.upgrade((channel) => channel.close()));
+        final client = TestClient(app, await boot());
 
-      final rejected = await client.connect('/ws');
-      expect(rejected.upgraded, isFalse);
-      expect(rejected.rejection!.status, 401);
+        final rejected = await client.connect('/ws');
+        expect(rejected.upgraded, isFalse);
+        expect(rejected.rejection!.status, 401);
 
-      final ok = await client.connect(
-        '/ws',
-        headers: {'authorization': 'Bearer ok'},
-      );
-      expect(ok.upgraded, isTrue);
-      await ok.socket!.close();
-    });
+        final ok = await client.connect(
+          '/ws',
+          headers: {'authorization': 'Bearer ok'},
+        );
+        expect(ok.upgraded, isTrue);
+        await ok.socket!.close();
+      },
+    );
 
     test('a client-side close completes the handler channel done', () async {
       final handlerDone = Completer<void>();
@@ -337,63 +337,65 @@ void main() {
       );
     });
 
-    test('cors actual-response path preserves upgrade (and merges headers)',
-        () async {
-      final r = await runMw(
-        cors(allowOrigins: const ['*']),
-        testContext(newEnv(), headers: {'origin': 'https://example.test'}),
-        upgradeResponse(),
-      );
-      expect(r.upgrade, isNotNull);
-      expect(r.status, 101);
-      expect(r.body, '');
-      expect(r.headers['access-control-allow-origin'], ['*']);
-    });
+    test(
+      'cors actual-response path preserves upgrade (and merges headers)',
+      () async {
+        final r = await runMw(
+          cors(allowOrigins: const ['*']),
+          testContext(newEnv(), headers: {'origin': 'https://example.test'}),
+          upgradeResponse(),
+        );
+        expect(r.upgrade, isNotNull);
+        expect(r.status, 101);
+        expect(r.body, '');
+        expect(r.headers['access-control-allow-origin'], ['*']);
+      },
+    );
 
-    test('cors preflight is answered independently, untouched by upgrade',
-        () async {
-      // A preflight never reaches the handler, so there is no upgrade to carry;
-      // this pins that our change left the preflight branch (a fresh 204) alone.
-      final r = await runMw(
-        cors(allowOrigins: const ['*']),
-        testContext(
-          newEnv(),
-          method: 'OPTIONS',
-          headers: {
-            'origin': 'https://example.test',
-            'access-control-request-method': 'GET',
-          },
-        ),
-        // The next handler is never invoked on the preflight path.
-        upgradeResponse(),
-      );
-      expect(r.status, 204);
-      expect(r.upgrade, isNull);
-    });
+    test(
+      'cors preflight is answered independently, untouched by upgrade',
+      () async {
+        // A preflight never reaches the handler, so there is no upgrade to carry;
+        // this pins that our change left the preflight branch (a fresh 204) alone.
+        final r = await runMw(
+          cors(allowOrigins: const ['*']),
+          testContext(
+            newEnv(),
+            method: 'OPTIONS',
+            headers: {
+              'origin': 'https://example.test',
+              'access-control-request-method': 'GET',
+            },
+          ),
+          // The next handler is never invoked on the preflight path.
+          upgradeResponse(),
+        );
+        expect(r.status, 204);
+        expect(r.upgrade, isNull);
+      },
+    );
 
     test('etag passes an upgrade through untouched (no tag, no 304)', () async {
-      final r = await runMw(
-        etag(),
-        testContext(newEnv()),
-        upgradeResponse(),
-      );
+      final r = await runMw(etag(), testContext(newEnv()), upgradeResponse());
       expect(r.upgrade, isNotNull);
       expect(r.status, 101);
       expect(r.headers.containsKey('etag'), isFalse);
     });
 
-    test('gzip passes an upgrade through untouched (no Vary, no encoding)',
-        () async {
-      final r = await runMw(
-        gzip(),
-        testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
-        upgradeResponse(),
-      );
-      expect(r.upgrade, isNotNull);
-      expect(r.status, 101);
-      expect(r.headers.containsKey('content-encoding'), isFalse);
-      expect(r.headers.containsKey('vary'), isFalse);
-    });
+    test(
+      'gzip passes an upgrade through untouched (no Vary, no encoding)',
+      () async {
+        final r = await runMw(
+          gzip(),
+          testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+          upgradeResponse(),
+        );
+        expect(r.upgrade, isNotNull);
+        expect(r.status, 101);
+        expect(r.headers.containsKey('content-encoding'), isFalse);
+        expect(r.headers.containsKey('vary'), isFalse);
+      },
+    );
 
     test('accessLog passes an upgrade through untouched', () async {
       final r = await runMw(
@@ -405,68 +407,68 @@ void main() {
       expect(r.status, 101);
     });
 
-    test('the composed chain (accessLog→cors→gzip→etag) preserves upgrade',
-        () async {
-      final r = await runMw(
-        accessLog(),
-        testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
-        await runMw(
-          cors(allowOrigins: const ['*']),
-          testContext(
-            newEnv(),
-            headers: {'accept-encoding': 'gzip'},
-          ),
+    test(
+      'the composed chain (accessLog→cors→gzip→etag) preserves upgrade',
+      () async {
+        final r = await runMw(
+          accessLog(),
+          testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
           await runMw(
-            gzip(),
+            cors(allowOrigins: const ['*']),
             testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
             await runMw(
-              etag(),
-              testContext(newEnv()),
-              upgradeResponse(),
+              gzip(),
+              testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+              await runMw(etag(), testContext(newEnv()), upgradeResponse()),
             ),
           ),
-        ),
-      );
-      expect(r.upgrade, isNotNull);
-      expect(r.status, 101);
-    });
+        );
+        expect(r.upgrade, isNotNull);
+        expect(r.status, 101);
+      },
+    );
 
-    test('TestClient.connect upgrades through the full middleware chain',
-        () async {
-      // The end-to-end proof: behind cors + gzip + etag + accessLog, a real
-      // handshake must actually switch and round-trip — not answer 101 and
-      // silently fail to upgrade (the reported defect).
-      final app = App<Env>()
-        ..use(accessLog())
-        ..use(cors(allowOrigins: const ['*']))
-        ..use(gzip())
-        ..use(etag());
-      app.get(
-        '/ws',
-        (c) => Response.upgrade((channel) {
-          channel.messages.listen((m) => channel.send('echo:$m'));
-        }),
-      );
-      final client = TestClient(app, await boot());
+    test(
+      'TestClient.connect upgrades through the full middleware chain',
+      () async {
+        // The end-to-end proof: behind cors + gzip + etag + accessLog, a real
+        // handshake must actually switch and round-trip — not answer 101 and
+        // silently fail to upgrade (the reported defect).
+        final app = App<Env>()
+          ..use(accessLog())
+          ..use(cors(allowOrigins: const ['*']))
+          ..use(gzip())
+          ..use(etag());
+        app.get(
+          '/ws',
+          (c) => Response.upgrade((channel) {
+            channel.messages.listen((m) => channel.send('echo:$m'));
+          }),
+        );
+        final client = TestClient(app, await boot());
 
-      final up = await client.connect(
-        '/ws',
-        headers: {'accept-encoding': 'gzip', 'origin': 'https://example.test'},
-      );
-      expect(
-        up.upgraded,
-        isTrue,
-        reason: 'the upgrade must survive the full middleware chain',
-      );
-      final got = <Object>[];
-      up.socket!.messages.listen(got.add);
-      up.socket!.send('one');
-      up.socket!.send('two');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(got, ['echo:one', 'echo:two']);
+        final up = await client.connect(
+          '/ws',
+          headers: {
+            'accept-encoding': 'gzip',
+            'origin': 'https://example.test',
+          },
+        );
+        expect(
+          up.upgraded,
+          isTrue,
+          reason: 'the upgrade must survive the full middleware chain',
+        );
+        final got = <Object>[];
+        up.socket!.messages.listen(got.add);
+        up.socket!.send('one');
+        up.socket!.send('two');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(got, ['echo:one', 'echo:two']);
 
-      await up.socket!.close();
-      await up.socket!.done.timeout(const Duration(seconds: 1));
-    });
+        await up.socket!.close();
+        await up.socket!.done.timeout(const Duration(seconds: 1));
+      },
+    );
   });
 }

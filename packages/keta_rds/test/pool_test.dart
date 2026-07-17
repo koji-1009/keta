@@ -257,26 +257,28 @@ void main() {
   });
 
   group('validate', () {
-    test('acquire skips a resource that no longer validates, opening fresh',
-        () async {
-      final f = Factory();
-      final pool = Pool<FakeConn>(
-        f.open,
-        f.close,
-        maxConnections: 2,
-        validate: (c) => c.open,
-      );
+    test(
+      'acquire skips a resource that no longer validates, opening fresh',
+      () async {
+        final f = Factory();
+        final pool = Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxConnections: 2,
+          validate: (c) => c.open,
+        );
 
-      final a = await pool.acquire();
-      pool.release(a); // now idle
-      a.open = false; // the server dropped it while it sat idle
+        final a = await pool.acquire();
+        pool.release(a); // now idle
+        a.open = false; // the server dropped it while it sat idle
 
-      final b = await pool.acquire();
-      expect(identical(a, b), isFalse); // not the dead one
-      expect(a.closed, isTrue); // the dead one was disposed
-      expect(f.opened, 2); // a fresh connection was opened
-      expect(pool.idle, 0);
-    });
+        final b = await pool.acquire();
+        expect(identical(a, b), isFalse); // not the dead one
+        expect(a.closed, isTrue); // the dead one was disposed
+        expect(f.opened, 2); // a fresh connection was opened
+        expect(pool.idle, 0);
+      },
+    );
 
     test('a still-valid idle resource is reused', () async {
       final f = Factory();
@@ -295,30 +297,32 @@ void main() {
   });
 
   group('idle reaper', () {
-    test('disposes an idle-expired connection; the pool reopens on demand',
-        () async {
-      final f = Factory();
-      final pool = Pool<FakeConn>(
-        f.open,
-        f.close,
-        maxConnections: 2,
-        maxIdleTime: const Duration(milliseconds: 40),
-      );
+    test(
+      'disposes an idle-expired connection; the pool reopens on demand',
+      () async {
+        final f = Factory();
+        final pool = Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxConnections: 2,
+          maxIdleTime: const Duration(milliseconds: 40),
+        );
 
-      final a = await pool.acquire();
-      pool.release(a); // idle, reaper now armed
-      expect(pool.idle, 1);
-      expect(pool.reaperActive, isTrue);
+        final a = await pool.acquire();
+        pool.release(a); // idle, reaper now armed
+        expect(pool.idle, 1);
+        expect(pool.reaperActive, isTrue);
 
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      expect(a.closed, isTrue); // reaped
-      expect(pool.idle, 0);
-      expect(pool.reaperActive, isFalse); // self-cancelled once idle emptied
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        expect(a.closed, isTrue); // reaped
+        expect(pool.idle, 0);
+        expect(pool.reaperActive, isFalse); // self-cancelled once idle emptied
 
-      final b = await pool.acquire(); // reopens on demand
-      expect(identical(a, b), isFalse);
-      expect(f.opened, 2);
-    });
+        final b = await pool.acquire(); // reopens on demand
+        expect(identical(a, b), isFalse);
+        expect(f.opened, 2);
+      },
+    );
 
     test('a non-positive maxIdleTime never arms the reaper', () async {
       final f = Factory();

@@ -223,13 +223,20 @@ void main() {
           'admin/ping.dart': _any,
         }).path,
       );
-      expect(found.middleware.map((m) => m.prefix), [r'$mw$root', r'$mw$admin']);
+      expect(found.middleware.map((m) => m.prefix), [
+        r'$mw$root',
+        r'$mw$admin',
+      ]);
       expect(found.routes.map((f) => f.prefix), containsAll([r'$mw']));
       final all = [
         ...found.routes.map((f) => f.prefix),
         ...found.middleware.map((m) => m.prefix),
       ];
-      expect(all.toSet(), hasLength(all.length), reason: 'all aliases distinct');
+      expect(
+        all.toSet(),
+        hasLength(all.length),
+        reason: 'all aliases distinct',
+      );
     });
 
     test('two scopes sanitizing to one alias stay distinct', () {
@@ -250,10 +257,7 @@ void main() {
       // Dead weight: the file exists but no route falls under it. Tolerated by
       // discovery, named by the check.
       final found = discover(
-        tree({
-          'admin/_middleware.dart': _any,
-          'public/health.dart': _any,
-        }).path,
+        tree({'admin/_middleware.dart': _any, 'public/health.dart': _any}).path,
       );
       final orphans = orphanMiddleware(found.routes, found.middleware);
       expect(orphans.map((m) => m.url), ['/admin']);

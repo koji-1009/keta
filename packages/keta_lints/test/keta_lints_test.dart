@@ -1576,9 +1576,11 @@ class P {
       expect(applyCanonicalFix(source), source); // proof the fix is a no-op
     });
 
-    test('a fixable DTO with drift still recommends keta_lints:fix (negative: '
-        'the drift-recommendation gate did not over-suppress the fix hint)', () {
-      const source = '''
+    test(
+      'a fixable DTO with drift still recommends keta_lints:fix (negative: '
+      'the drift-recommendation gate did not over-suppress the fix hint)',
+      () {
+        const source = '''
 class Bad {
   final String id;
   final String name;
@@ -1588,13 +1590,14 @@ class Bad {
   Map<String, Object?> toJson() => {'id': id};
 }
 ''';
-      final d = canonicalDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_canonical_drift');
-      expect(d.single.message, contains('run keta_lints:fix'));
-      // And the fix genuinely reconciles the mapper (not a no-op).
-      expect(applyCanonicalFix(source), isNot(source));
-    });
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_canonical_drift');
+        expect(d.single.message, contains('run keta_lints:fix'));
+        // And the fix genuinely reconciles the mapper (not a no-op).
+        expect(applyCanonicalFix(source), isNot(source));
+      },
+    );
 
     // --- item 3: inheritance is a safe refusal, never destructive ----------
 
@@ -1643,8 +1646,10 @@ class Dto {
       expect(applyCanonicalFix(source), source);
     });
 
-    test('a toJson with a collection-for element is treated as hand-modified', () {
-      const source = '''
+    test(
+      'a toJson with a collection-for element is treated as hand-modified',
+      () {
+        const source = '''
 class Dto {
   final String id;
   final List<String> keys;
@@ -1654,9 +1659,10 @@ class Dto {
   Map<String, Object?> toJson() => {'id': id, for (final k in keys) k: 1};
 }
 ''';
-      expect(canonicalDiagnostics(source), isEmpty);
-      expect(applyCanonicalFix(source), source);
-    });
+        expect(canonicalDiagnostics(source), isEmpty);
+        expect(applyCanonicalFix(source), source);
+      },
+    );
 
     test('a toJson with a computed (non-literal) key is treated as '
         'hand-modified', () {
@@ -1672,9 +1678,11 @@ class Dto {
       expect(applyCanonicalFix(source), source);
     });
 
-    test('a plain map literal with a genuine drift is still reported (negative: '
-        'the spread guard did not blanket-suppress drift)', () {
-      const source = '''
+    test(
+      'a plain map literal with a genuine drift is still reported (negative: '
+      'the spread guard did not blanket-suppress drift)',
+      () {
+        const source = '''
 class Dto {
   final String id;
   final String name;
@@ -1684,11 +1692,12 @@ class Dto {
   Map<String, Object?> toJson() => {'id': id};
 }
 ''';
-      final d = canonicalDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_canonical_drift');
-      expect(d.single.message, contains('fields not in toJson: name'));
-    });
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_canonical_drift');
+        expect(d.single.message, contains('fields not in toJson: name'));
+      },
+    );
   });
 
   group('scaffold — query', () {
@@ -1970,8 +1979,10 @@ class P {
       // The cast (`as int`) disagrees with `String a`, but the positional ctor
       // makes the class non-fixable; flagging type drift here would point at a
       // fix that no-ops. Silence, matching the other refusal gates.
-      expect(canonicalDiagnostics(source).any((d) => d.rule == 'keta_type_drift'),
-          isFalse);
+      expect(
+        canonicalDiagnostics(source).any((d) => d.rule == 'keta_type_drift'),
+        isFalse,
+      );
       expect(applyCanonicalFix(source), source);
     });
   });
@@ -1995,25 +2006,31 @@ class P {
       expect(drift.every((d) => d.rule == 'keta_contract_drift'), isTrue);
     });
 
-    test('a malformed oracle schema entry is reported as descriptive drift', () {
-      final drift = contractDrift(
-        {
-          'components': {
-            'schemas': {'D': 'not an object'},
+    test(
+      'a malformed oracle schema entry is reported as descriptive drift',
+      () {
+        final drift = contractDrift(
+          {
+            'components': {
+              'schemas': {'D': 'not an object'},
+            },
           },
-        },
-        {
-          'components': {'schemas': <String, Object?>{}},
-        },
-      );
-      expect(
-        drift.map((d) => d.message).join('\n'),
-        contains('schema "D" is not an object'),
-      );
-    });
+          {
+            'components': {'schemas': <String, Object?>{}},
+          },
+        );
+        expect(
+          drift.map((d) => d.message).join('\n'),
+          contains('schema "D" is not an object'),
+        );
+      },
+    );
 
     test('a non-mapping oracle "paths" is descriptive drift', () {
-      final drift = contractDrift({'paths': 'nope'}, {'paths': <String, Object?>{}});
+      final drift = contractDrift(
+        {'paths': 'nope'},
+        {'paths': <String, Object?>{}},
+      );
       expect(
         drift.map((d) => d.message).join('\n'),
         contains('"paths" is not a mapping'),
@@ -2067,25 +2084,28 @@ class P {
       );
     });
 
-    test('a required key with no matching property raises ScaffoldError instead '
-        'of silently dropping it from the contract-test sample', () {
-      expect(
-        () => generateScaffold({
-          'components': {
-            'schemas': {
-              'D': {
-                'type': 'object',
-                'required': ['ghost'],
-                'properties': {
-                  'id': {'type': 'string'},
+    test(
+      'a required key with no matching property raises ScaffoldError instead '
+      'of silently dropping it from the contract-test sample',
+      () {
+        expect(
+          () => generateScaffold({
+            'components': {
+              'schemas': {
+                'D': {
+                  'type': 'object',
+                  'required': ['ghost'],
+                  'properties': {
+                    'id': {'type': 'string'},
+                  },
                 },
               },
             },
-          },
-        }),
-        throwsA(isA<ScaffoldError>()),
-      );
-    });
+          }),
+          throwsA(isA<ScaffoldError>()),
+        );
+      },
+    );
 
     test('a discriminator carrying a \$ still emits a compiling error string '
         '(the sealed BadRequest message goes through dartStringLiteral)', () {
@@ -2162,16 +2182,24 @@ class P {
       expect(dtos, contains("'role': role.wire,"));
       // The enum's own Schema constant lists the WIRE strings (so drift is
       // compared against the wire vocabulary, requirement D-1.c).
-      expect(dtos, contains("const roleSchema = Schema('Role', "
-          "{'type': 'string', 'enum': ['admin', 'super-user']}"));
+      expect(
+        dtos,
+        contains(
+          "const roleSchema = Schema('Role', "
+          "{'type': 'string', 'enum': ['admin', 'super-user']}",
+        ),
+      );
     });
 
-    test('a reserved word and a leading-digit value derive legal identifiers', () {
-      final dtos = generateScaffold(docWith(['default', '2fa'])).dtos;
-      parseString(content: dtos, throwIfDiagnostics: true);
-      expect(dtos, contains("  default_('default'),"));
-      expect(dtos, contains(r"  $2fa('2fa');"));
-    });
+    test(
+      'a reserved word and a leading-digit value derive legal identifiers',
+      () {
+        final dtos = generateScaffold(docWith(['default', '2fa'])).dtos;
+        parseString(content: dtos, throwIfDiagnostics: true);
+        expect(dtos, contains("  default_('default'),"));
+        expect(dtos, contains(r"  $2fa('2fa');"));
+      },
+    );
 
     test('a plain enum (all values are identifiers) stays byte-identical to the '
         'pre-D-1 form — no wire field, no churn (requirement D-1.a)', () {
@@ -2180,7 +2208,10 @@ class P {
       expect(dtos, isNot(contains('final String wire')));
       expect(dtos, isNot(contains('fromWire')));
       // The plain form maps name<->wire, so the field mappers use .name/.byName.
-      expect(dtos, contains("role: Role.values.byName(json['role'] as String),"));
+      expect(
+        dtos,
+        contains("role: Role.values.byName(json['role'] as String),"),
+      );
       expect(dtos, contains("'role': role.name,"));
     });
 
@@ -2222,8 +2253,12 @@ class P {
       };
       final dtos = generateScaffold(doc).dtos;
       parseString(content: dtos, throwIfDiagnostics: true);
-      expect(dtos, contains(
-          "(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()"));
+      expect(
+        dtos,
+        contains(
+          "(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()",
+        ),
+      );
       expect(dtos, contains("'roles': roles.map((e) => e.wire).toList(),"));
     });
 
@@ -2242,7 +2277,9 @@ class P {
 
     test('the generated contract-test sample feeds a wire value fromWire '
         'accepts', () {
-      final test = generateScaffold(docWith(['super-user', 'admin'])).contractTest;
+      final test = generateScaffold(
+        docWith(['super-user', 'admin']),
+      ).contractTest;
       // The sample uses the first enum value verbatim (a wire string), which is
       // exactly what Role.fromWire matches on.
       expect(test, contains("'role': 'super-user'"));
@@ -2364,9 +2401,14 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'email'], 
       // The Schema is reconciled...
       expect(fixed, contains("'email': {'type': 'string'}"));
       // ...and the inline comment inside toJson survives verbatim.
-      expect(fixed, contains("        'id': id,\n"
+      expect(
+        fixed,
+        contains(
+          "        'id': id,\n"
           '        // keep me\n'
-          "        'email': email,"));
+          "        'email': email,",
+        ),
+      );
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });
@@ -2388,8 +2430,13 @@ class Dto {
 ''';
       final fixed = applyCanonicalFix(source);
       // fromJson (not drifted) keeps its comment...
-      expect(fixed, contains('        // keep me\n'
-          "        name: json['name'] as String,"));
+      expect(
+        fixed,
+        contains(
+          '        // keep me\n'
+          "        name: json['name'] as String,",
+        ),
+      );
       // ...while the drifted toJson gains the missing field.
       expect(fixed, contains("'name': name,"));
       expect(canonicalDiagnostics(fixed), isEmpty);
@@ -2416,8 +2463,13 @@ class Dto {
       // fromJson's cast is repaired...
       expect(fixed, contains("id: json['id'] as String,"));
       // ...and toJson's comment is untouched.
-      expect(fixed, contains('        // keep me\n'
-          "        'id': id,"));
+      expect(
+        fixed,
+        contains(
+          '        // keep me\n'
+          "        'id': id,",
+        ),
+      );
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });

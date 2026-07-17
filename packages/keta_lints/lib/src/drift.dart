@@ -165,7 +165,7 @@ Map<String, Set<String>> _paths(
       report(
         path,
         '$label path "$path" is not an operations mapping '
-            '(${item.runtimeType}); fix the document',
+        '(${item.runtimeType}); fix the document',
       );
       continue;
     }

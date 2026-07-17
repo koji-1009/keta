@@ -33,7 +33,8 @@ void main() {
       'parentId too short': '00-0af7651916cd43dd8448eb211c80319c-b7ad-01',
       'non-hex traceId (32 g\'s)':
           '00-gggggggggggggggggggggggggggggggg-b7ad6b7169203331-01',
-      'non-hex parentId': '00-0af7651916cd43dd8448eb211c80319c-gggggggggggggggg-01',
+      'non-hex parentId':
+          '00-0af7651916cd43dd8448eb211c80319c-gggggggggggggggg-01',
       'uppercase traceId':
           '00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01',
       'uppercase parentId':
@@ -52,8 +53,7 @@ void main() {
       // ('1' -> 1, '+a' -> 10); a valid flags octet is exactly two hex digits.
       'single-digit flags':
           '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-1',
-      'signed flags':
-          '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-+a',
+      'signed flags': '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-+a',
       'three-digit flags':
           '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-001',
       'non-hex flags':

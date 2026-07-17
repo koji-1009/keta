@@ -51,8 +51,7 @@ String _templateLiteral(List<String> template) => template.isEmpty
     ? 'const <String>[]'
     : "const [${template.map(_dartStringLiteral).join(', ')}]";
 
-String _importFor(RouteFile file) =>
-    _importLine(file.importPath, file.prefix);
+String _importFor(RouteFile file) => _importLine(file.importPath, file.prefix);
 
 /// A generated import line trips two analyzer infos in the consuming project,
 /// both inherent to the shape this generator emits and neither fixable by

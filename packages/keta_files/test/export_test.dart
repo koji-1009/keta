@@ -142,11 +142,10 @@ void main() {
     // Each middleware records its name before delegating; the handler records
     // itself last and returns the trace. The string it returns is the exact
     // order the pipeline ran.
-    Middleware<Env> mark(String name, List<String> trace) =>
-        (c, next) {
-          trace.add(name);
-          return next(c);
-        };
+    Middleware<Env> mark(String name, List<String> trace) => (c, next) {
+      trace.add(name);
+      return next(c);
+    };
 
     test('app-wide first, then outer→inner scope, then the handler', () async {
       final trace = <String>[];
@@ -156,10 +155,14 @@ void main() {
           trace.add('handler');
           return c.text(trace.join('>'));
         }),
-      ).bind(app, const ['admin', 'audit', 'log'], [
-        ScopedMiddleware([mark('root', trace)]),
-        ScopedMiddleware([mark('admin', trace)]),
-      ]);
+      ).bind(
+        app,
+        const ['admin', 'audit', 'log'],
+        [
+          ScopedMiddleware([mark('root', trace)]),
+          ScopedMiddleware([mark('admin', trace)]),
+        ],
+      );
 
       final res = await TestClient(app, Env()).get('/admin/audit/log');
       // The order the task pins: app-wide wraps the whole dispatch, the root
@@ -175,9 +178,13 @@ void main() {
           trace.add('handler');
           return c.text('ok');
         }),
-      ).bind(app, const ['x'], [
-        ScopedMiddleware([mark('first', trace), mark('second', trace)]),
-      ]);
+      ).bind(
+        app,
+        const ['x'],
+        [
+          ScopedMiddleware([mark('first', trace), mark('second', trace)]),
+        ],
+      );
 
       return TestClient(app, Env()).get('/x').then((_) {
         expect(trace, ['first', 'second', 'handler']);
@@ -194,9 +201,13 @@ void main() {
           handlerRan = true;
           return c.text('reached');
         }),
-      ).bind(app, const ['admin', 'secret'], [
-        ScopedMiddleware([(c, next) => c.text('denied')]),
-      ]);
+      ).bind(
+        app,
+        const ['admin', 'secret'],
+        [
+          ScopedMiddleware([(c, next) => c.text('denied')]),
+        ],
+      );
 
       final res = await TestClient(app, Env()).get('/admin/secret');
       expect(res.text(), 'denied');

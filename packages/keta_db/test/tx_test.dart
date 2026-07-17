@@ -93,32 +93,35 @@ void main() {
       expect(db.conn.executes, isEmpty);
     });
 
-    test('a query after the transaction ROLLS BACK throws StateError', () async {
-      final db = _FakeDb();
-      final c = testContext<_Env>(_Env(db));
-      late DbConn session;
+    test(
+      'a query after the transaction ROLLS BACK throws StateError',
+      () async {
+        final db = _FakeDb();
+        final c = testContext<_Env>(_Env(db));
+        late DbConn session;
 
-      Future<Response> run() async => await tx<_Env>()(c, (c) async {
-        session = c.get(txConn);
-        await session.execute('insert into t values (1)');
-        // A throw rolls the transaction back and propagates — the guard must
-        // still trip on this path, not only on commit.
-        throw StateError('handler blew up');
-      });
+        Future<Response> run() async => await tx<_Env>()(c, (c) async {
+          session = c.get(txConn);
+          await session.execute('insert into t values (1)');
+          // A throw rolls the transaction back and propagates — the guard must
+          // still trip on this path, not only on commit.
+          throw StateError('handler blew up');
+        });
 
-      await expectLater(
-        run(),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            'handler blew up',
+        await expectLater(
+          run(),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'handler blew up',
+            ),
           ),
-        ),
-      );
+        );
 
-      expect(() => session.query('select 1'), throwsA(_completed));
-      expect(() => session.execute('delete from t'), throwsA(_completed));
-    });
+        expect(() => session.query('select 1'), throwsA(_completed));
+        expect(() => session.execute('delete from t'), throwsA(_completed));
+      },
+    );
   });
 }

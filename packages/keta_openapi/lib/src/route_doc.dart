@@ -224,10 +224,7 @@ class RouteDoc {
     ?requestBody,
     if (failureResponses != null)
       for (final value in failureResponses!.values)
-        if (value is Schema)
-          value
-        else if (value is Failure)
-          value.schema,
+        if (value is Schema) value else if (value is Failure) value.schema,
   ];
 }
 

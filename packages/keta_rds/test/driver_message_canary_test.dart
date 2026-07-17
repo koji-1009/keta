@@ -83,9 +83,10 @@ Future<String> _driverSource() async {
   final config =
       jsonDecode(configFile.readAsStringSync()) as Map<String, Object?>;
   final packages = (config['packages'] as List).cast<Map<String, Object?>>();
-  final postgres = packages
-      .cast<Map<String, Object?>?>()
-      .firstWhere((p) => p!['name'] == 'postgres', orElse: () => null);
+  final postgres = packages.cast<Map<String, Object?>?>().firstWhere(
+    (p) => p!['name'] == 'postgres',
+    orElse: () => null,
+  );
   if (postgres == null) {
     fail(
       'No "postgres" entry in the package config ($configUri). keta_rds '

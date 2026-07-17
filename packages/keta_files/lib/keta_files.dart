@@ -26,6 +26,11 @@ export 'src/discover.dart'
         discoverRouteFiles,
         orphanMiddleware;
 export 'src/export.dart'
-    show Exported, ScopedMiddleware, Serve, exportedDeclaration, scopedDeclaration;
+    show
+        Exported,
+        ScopedMiddleware,
+        Serve,
+        exportedDeclaration,
+        scopedDeclaration;
 export 'src/manifest.dart' show registrationFor, syncManifest, unregistered;
 export 'src/route_path.dart' show routeSegments;

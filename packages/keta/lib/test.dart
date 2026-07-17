@@ -133,10 +133,9 @@ class TestClient<E> {
     // it closes the link so the client's `done` still completes — an in-process
     // mirror of the transport closing a socket whose handler blew up.
     unawaited(
-      Future.sync(() => upgrade.onConnected(_ServerChannel(link))).then(
-        (_) {},
-        onError: (Object _) => link._close(),
-      ),
+      Future.sync(
+        () => upgrade.onConnected(_ServerChannel(link)),
+      ).then((_) {}, onError: (Object _) => link._close()),
     );
     return TestUpgrade._(TestSocket._(link), null);
   }
@@ -277,8 +276,10 @@ class TestSocket {
 /// and completes both `done`s once — the ordering and finality a real socket
 /// gives, reproduced in memory so upgrade handlers are testable without sockets.
 class _InProcessLink {
-  final StreamController<Object> toServer = StreamController<Object>(); // client→server
-  final StreamController<Object> toClient = StreamController<Object>(); // server→client
+  final StreamController<Object> toServer =
+      StreamController<Object>(); // client→server
+  final StreamController<Object> toClient =
+      StreamController<Object>(); // server→client
   final Completer<void> serverDone = Completer<void>();
   final Completer<void> clientDone = Completer<void>();
   bool closed = false;

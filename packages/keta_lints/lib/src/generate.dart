@@ -243,7 +243,9 @@ void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
   buffer.writeln('enum $name {');
   for (var i = 0; i < values.length; i++) {
     final terminator = i == values.length - 1 ? ';' : ',';
-    buffer.writeln('  ${idents[i]}(${dartStringLiteral(values[i])})$terminator');
+    buffer.writeln(
+      '  ${idents[i]}(${dartStringLiteral(values[i])})$terminator',
+    );
   }
   buffer
     ..writeln('  const $name(this.wire);')
@@ -847,7 +849,10 @@ Object? _sample(
   }
   return {
     for (final key in required)
-      key: _sampleValue(_asSchemaObject(properties[key], '$name.$key'), schemas),
+      key: _sampleValue(
+        _asSchemaObject(properties[key], '$name.$key'),
+        schemas,
+      ),
   };
 }
 

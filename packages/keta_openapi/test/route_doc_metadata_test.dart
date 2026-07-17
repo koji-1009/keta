@@ -33,8 +33,10 @@ void main() {
           (c) => c.text('x'),
           doc: const RouteDoc(success: Success(), operationId: 'getUser'),
         );
-      expect(_get(OpenApi.fromRoutes(app.routes).toJson(), '/u')['operationId'],
-          'getUser');
+      expect(
+        _get(OpenApi.fromRoutes(app.routes).toJson(), '/u')['operationId'],
+        'getUser',
+      );
     });
 
     test('all three are absent when undeclared', () {
@@ -126,29 +128,27 @@ void main() {
           isA<StateError>().having(
             (e) => e.message,
             'message',
-            allOf(
-              contains('"dup"'),
-              contains('GET /a'),
-              contains('GET /b'),
-            ),
+            allOf(contains('"dup"'), contains('GET /a'), contains('GET /b')),
           ),
         ),
       );
     });
 
-    test('the same operationId on the same route across two documents is fine',
-        () {
-      // Uniqueness is within one document, not across builds — a second
-      // OpenApi.fromRoutes over the same app must not carry state from the
-      // first.
-      final app = App<Ignored>()
-        ..get(
-          '/a',
-          (c) => c.text('x'),
-          doc: const RouteDoc(success: Success(), operationId: 'once'),
-        );
-      expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
-      expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
-    });
+    test(
+      'the same operationId on the same route across two documents is fine',
+      () {
+        // Uniqueness is within one document, not across builds — a second
+        // OpenApi.fromRoutes over the same app must not carry state from the
+        // first.
+        final app = App<Ignored>()
+          ..get(
+            '/a',
+            (c) => c.text('x'),
+            doc: const RouteDoc(success: Success(), operationId: 'once'),
+          );
+        expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+        expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+      },
+    );
   });
 }

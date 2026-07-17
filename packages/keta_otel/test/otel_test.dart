@@ -182,43 +182,40 @@ void main() {
   });
 
   group('otelSpanKey exposure', () {
-    test(
-      'otel exposes the current trace identity to the handler, continuing a '
-      'valid incoming traceparent',
-      () async {
-        final captured = <String>[];
-        final exporter = OtlpExporter((p) async => captured.add(p));
-        addTearDown(exporter.close);
-        OtelSpanContext? seen;
-        final app = App<Env>()..use(otel(exporter: exporter));
-        app.get('/x', (c) {
-          seen = c.get(otelSpanKey);
-          return c.text('ok');
-        });
+    test('otel exposes the current trace identity to the handler, continuing a '
+        'valid incoming traceparent', () async {
+      final captured = <String>[];
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      OtelSpanContext? seen;
+      final app = App<Env>()..use(otel(exporter: exporter));
+      app.get('/x', (c) {
+        seen = c.get(otelSpanKey);
+        return c.text('ok');
+      });
 
-        await TestClient(app, Env()).get(
-          '/x',
-          headers: {
-            'traceparent':
-                '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
-          },
-        );
-        await exporter.flush();
+      await TestClient(app, Env()).get(
+        '/x',
+        headers: {
+          'traceparent':
+              '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+        },
+      );
+      await exporter.flush();
 
-        // The handler saw the trace identity: the traceId continues the
-        // incoming header (core's hardened parse accepted it), and the spanId
-        // is the fresh 16-hex id otel minted — not any value the header carried.
-        expect(seen, isNotNull);
-        expect(seen!.traceId, '0af7651916cd43dd8448eb211c80319c');
-        expect(seen!.spanId, matches(RegExp(r'^[0-9a-f]{16}$')));
+      // The handler saw the trace identity: the traceId continues the
+      // incoming header (core's hardened parse accepted it), and the spanId
+      // is the fresh 16-hex id otel minted — not any value the header carried.
+      expect(seen, isNotNull);
+      expect(seen!.traceId, '0af7651916cd43dd8448eb211c80319c');
+      expect(seen!.spanId, matches(RegExp(r'^[0-9a-f]{16}$')));
 
-        // The very ids the handler read are the ones on the exported span, so a
-        // handler that logged them can be correlated with the span downstream.
-        final span = _firstSpan(captured);
-        expect(span['traceId'], seen!.traceId);
-        expect(span['spanId'], seen!.spanId);
-      },
-    );
+      // The very ids the handler read are the ones on the exported span, so a
+      // handler that logged them can be correlated with the span downstream.
+      final span = _firstSpan(captured);
+      expect(span['traceId'], seen!.traceId);
+      expect(span['spanId'], seen!.spanId);
+    });
 
     test('a root request exposes a minted traceId and spanId', () async {
       OtelSpanContext? seen;
@@ -251,7 +248,10 @@ void main() {
         'text/plain; version=0.0.4; charset=utf-8',
       );
       // Conformance-renamed families: a seconds-unit summary, no `_ms` name.
-      expect(res.text(), contains('# TYPE keta_request_duration_seconds summary'));
+      expect(
+        res.text(),
+        contains('# TYPE keta_request_duration_seconds summary'),
+      );
       expect(
         res.text(),
         contains('keta_request_duration_seconds_sum{method="GET"'),

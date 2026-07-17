@@ -187,8 +187,8 @@ Middleware<E> otel<E>({
 /// (`text/plain; version=0.0.4; charset=utf-8`), not a bare `text/plain`: the
 /// `version=0.0.4` parameter is how a scraper recognizes the format, and
 /// omitting it leaves some scrapers guessing at the payload.
-Handler<E> metricsHandler<E>(MetricsRegistry registry) => (Context<E> c) =>
-    c.text(
+Handler<E> metricsHandler<E>(MetricsRegistry registry) =>
+    (Context<E> c) => c.text(
       registry.prometheus(),
       headers: {
         'content-type': const ['text/plain; version=0.0.4; charset=utf-8'],

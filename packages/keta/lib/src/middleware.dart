@@ -306,42 +306,43 @@ String _fnv1a64Hex(List<int> bytes) {
 /// correct post-compression `Content-Length` — gzip runs before framing.
 ///
 /// Ordering with [etag]: register `gzip()` **before** `etag()` (see [etag]).
-Middleware<E> gzip<E>({int threshold = 1024}) =>
-    (Context<E> c, Handler<E> next) {
-      return chain(next(c), (Response r) {
-        // An upgrade response has an empty body and switches protocols; there is
-        // nothing to compress and no representation to negotiate, so it must not
-        // gain a spurious `Vary: Accept-Encoding` — and above all its `upgrade`
-        // field must survive. Pass it through by identity. (See
-        // [Response.copyWith] for why rebuilding it here would drop the switch.)
-        if (r.upgrade != null) return r;
-        final body = r.body;
-        // A stream is not buffered; pass it through with nothing added.
-        if (body is! String && body is! List<int>) return r;
+Middleware<E> gzip<E>({
+  int threshold = 1024,
+}) => (Context<E> c, Handler<E> next) {
+  return chain(next(c), (Response r) {
+    // An upgrade response has an empty body and switches protocols; there is
+    // nothing to compress and no representation to negotiate, so it must not
+    // gain a spurious `Vary: Accept-Encoding` — and above all its `upgrade`
+    // field must survive. Pass it through by identity. (See
+    // [Response.copyWith] for why rebuilding it here would drop the switch.)
+    if (r.upgrade != null) return r;
+    final body = r.body;
+    // A stream is not buffered; pass it through with nothing added.
+    if (body is! String && body is! List<int>) return r;
 
-        final headers = _varyAcceptEncoding(r.headers);
+    final headers = _varyAcceptEncoding(r.headers);
 
-        final alreadyEncoded = r.headers.containsKey('content-encoding');
-        final compressible =
-            !alreadyEncoded &&
-            r.status != 204 &&
-            r.status != 304 &&
-            _acceptsGzip(c.header('accept-encoding'));
-        if (!compressible) {
-          return r.copyWith(headers: headers);
-        }
+    final alreadyEncoded = r.headers.containsKey('content-encoding');
+    final compressible =
+        !alreadyEncoded &&
+        r.status != 204 &&
+        r.status != 304 &&
+        _acceptsGzip(c.header('accept-encoding'));
+    if (!compressible) {
+      return r.copyWith(headers: headers);
+    }
 
-        final bytes = body is String ? utf8.encode(body) : body as List<int>;
-        // Compressing a body below the threshold adds header overhead for no
-        // real saving, so it is left as-is (but still Vary-tagged above).
-        if (bytes.length < threshold) {
-          return r.copyWith(headers: headers);
-        }
+    final bytes = body is String ? utf8.encode(body) : body as List<int>;
+    // Compressing a body below the threshold adds header overhead for no
+    // real saving, so it is left as-is (but still Vary-tagged above).
+    if (bytes.length < threshold) {
+      return r.copyWith(headers: headers);
+    }
 
-        headers['content-encoding'] = const ['gzip'];
-        return r.copyWith(headers: headers, body: io.gzip.encode(bytes));
-      });
-    };
+    headers['content-encoding'] = const ['gzip'];
+    return r.copyWith(headers: headers, body: io.gzip.encode(bytes));
+  });
+};
 
 /// True when [acceptEncoding] advertises gzip with a non-zero q-value — an
 /// explicit `gzip` token, or `*`, in either case not overridden by `;q=0`.

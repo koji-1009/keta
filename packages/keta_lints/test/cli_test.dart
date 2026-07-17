@@ -56,14 +56,19 @@ class Dto {
 ''';
 
     test('exits 0 on a clean file', () {
-      final r = _run(_script('check.dart'), ['canonical', write('clean.dart', clean)]);
+      final r = _run(_script('check.dart'), [
+        'canonical',
+        write('clean.dart', clean),
+      ]);
       expect(r.exitCode, 0);
       expect(r.stdout, contains('no canonical issues'));
     });
 
     test('exits 1 on a drifted file', () {
-      final r =
-          _run(_script('check.dart'), ['canonical', write('bad.dart', drifted)]);
+      final r = _run(_script('check.dart'), [
+        'canonical',
+        write('bad.dart', drifted),
+      ]);
       expect(r.exitCode, 1);
       expect(r.stdout, contains('keta_canonical_drift'));
     });
@@ -71,7 +76,10 @@ class Dto {
     test('walks a directory and flags a drift found in it', () {
       write('sub/clean.dart', clean);
       write('sub/bad.dart', drifted);
-      final r = _run(_script('check.dart'), ['canonical', p.join(dir.path, 'sub')]);
+      final r = _run(_script('check.dart'), [
+        'canonical',
+        p.join(dir.path, 'sub'),
+      ]);
       expect(r.exitCode, 1);
       expect(r.stderr, contains('finding(s)'));
     });
@@ -81,39 +89,44 @@ class Dto {
       expect(r.exitCode, 64);
     });
 
-    test('a finding carries the same stable id whether the file is addressed '
-        'absolutely (as the analyzer plugin supplies it) or relatively (as a '
-        'user invokes the CLI) — the item-1 portability guarantee, end to end', () {
-      File(p.join(dir.path, 'pubspec.yaml')).writeAsStringSync('name: fixture\n');
-      const rel = 'lib/foo.dart';
-      write(rel, '''
+    test(
+      'a finding carries the same stable id whether the file is addressed '
+      'absolutely (as the analyzer plugin supplies it) or relatively (as a '
+      'user invokes the CLI) — the item-1 portability guarantee, end to end',
+      () {
+        File(
+          p.join(dir.path, 'pubspec.yaml'),
+        ).writeAsStringSync('name: fixture\n');
+        const rel = 'lib/foo.dart';
+        write(rel, '''
 class Point {
   final int x;
   Point(this.x);
   Map<String, Object?> toJson() => {'x': x};
 }
 ''');
-      final abs = p.join(dir.path, rel);
-      // Run the CLI from INSIDE the fixture package both ways. The child
-      // process's own cwd resolves the relative path; the test process's cwd is
-      // never touched.
-      final relRun = Process.runSync(
-        _dart,
-        [_script('check.dart'), 'canonical', rel],
-        workingDirectory: dir.path,
-      );
-      final absRun = Process.runSync(
-        _dart,
-        [_script('check.dart'), 'canonical', abs],
-        workingDirectory: dir.path,
-      );
-      expect(relRun.exitCode, 1);
-      expect(absRun.exitCode, 1);
-      final relId = _idOf(relRun.stdout as String);
-      final absId = _idOf(absRun.stdout as String);
-      expect(relId, isNotNull);
-      expect(relId, absId);
-    });
+        final abs = p.join(dir.path, rel);
+        // Run the CLI from INSIDE the fixture package both ways. The child
+        // process's own cwd resolves the relative path; the test process's cwd is
+        // never touched.
+        final relRun = Process.runSync(_dart, [
+          _script('check.dart'),
+          'canonical',
+          rel,
+        ], workingDirectory: dir.path);
+        final absRun = Process.runSync(_dart, [
+          _script('check.dart'),
+          'canonical',
+          abs,
+        ], workingDirectory: dir.path);
+        expect(relRun.exitCode, 1);
+        expect(absRun.exitCode, 1);
+        final relId = _idOf(relRun.stdout as String);
+        final absId = _idOf(absRun.stdout as String);
+        expect(relId, isNotNull);
+        expect(relId, absId);
+      },
+    );
   });
 
   group('fix', () {
@@ -130,7 +143,10 @@ class Dto {
       final first = _run(_script('fix.dart'), ['canonical', path]);
       expect(first.exitCode, 0);
       expect(first.stdout, contains('fixed'));
-      expect(File(path).readAsStringSync(), contains('Map<String, Object?> toJson()'));
+      expect(
+        File(path).readAsStringSync(),
+        contains('Map<String, Object?> toJson()'),
+      );
 
       final second = _run(_script('fix.dart'), ['canonical', path]);
       expect(second.exitCode, 0);
@@ -168,7 +184,10 @@ components:
       expect(first.exitCode, 0);
       expect(first.stdout, contains('wrote'));
       expect(File(p.join(out, 'lib', 'dtos.dart')).existsSync(), isTrue);
-      expect(File(p.join(out, 'test', 'dto_contract_test.dart')).existsSync(), isTrue);
+      expect(
+        File(p.join(out, 'test', 'dto_contract_test.dart')).existsSync(),
+        isTrue,
+      );
 
       final second = _run(_script('scaffold.dart'), [specPath, out]);
       expect(second.exitCode, 0);

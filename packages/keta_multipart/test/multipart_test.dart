@@ -175,18 +175,21 @@ void main() {
       }(), completes);
     });
 
-    test('a malformed disposition header yields no parameters, not a crash', () {
-      // An unterminated quote makes HeaderValue.parse throw; a synchronous
-      // getter must degrade to null rather than tear the stream down.
-      final raw = body('B', [
-        ('Content-Disposition: form-data; name="unterminated', 'x'),
-      ]);
-      expect(() async {
-        await for (final p in parts(ctx(raw))) {
-          expect(p.name, isNull);
-        }
-      }(), completes);
-    });
+    test(
+      'a malformed disposition header yields no parameters, not a crash',
+      () {
+        // An unterminated quote makes HeaderValue.parse throw; a synchronous
+        // getter must degrade to null rather than tear the stream down.
+        final raw = body('B', [
+          ('Content-Disposition: form-data; name="unterminated', 'x'),
+        ]);
+        expect(() async {
+          await for (final p in parts(ctx(raw))) {
+            expect(p.name, isNull);
+          }
+        }(), completes);
+      },
+    );
   });
 
   group('boundary parsing', () {
@@ -206,10 +209,7 @@ void main() {
     test('an empty boundary parameter is a BadRequest', () {
       expect(
         parts(
-          ctx(
-            utf8.encode('x'),
-            contentType: 'multipart/form-data; boundary=',
-          ),
+          ctx(utf8.encode('x'), contentType: 'multipart/form-data; boundary='),
         ).toList(),
         throwsA(isA<BadRequest>()),
       );
@@ -217,18 +217,21 @@ void main() {
   });
 
   group('out-of-order / partial consumption', () {
-    test('skipping a part does not hang and the next is read in order', () async {
-      final raw = body('B', [
-        ('Content-Disposition: form-data; name="skip"', 'x' * 100),
-        ('Content-Disposition: form-data; name="keep"', 'ok'),
-      ]);
-      final seen = <String>[];
-      await for (final p in parts(ctx(raw))) {
-        if (p.name == 'skip') continue; // never touch the body
-        seen.add(await p.text());
-      }
-      expect(seen, ['ok']);
-    });
+    test(
+      'skipping a part does not hang and the next is read in order',
+      () async {
+        final raw = body('B', [
+          ('Content-Disposition: form-data; name="skip"', 'x' * 100),
+          ('Content-Disposition: form-data; name="keep"', 'ok'),
+        ]);
+        final seen = <String>[];
+        await for (final p in parts(ctx(raw))) {
+          if (p.name == 'skip') continue; // never touch the body
+          seen.add(await p.text());
+        }
+        expect(seen, ['ok']);
+      },
+    );
 
     test('bytes in a skipped part still count toward maxTotalBytes', () {
       // The skipped 100-byte part is drained through the total meter, so a

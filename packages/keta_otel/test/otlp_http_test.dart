@@ -206,49 +206,46 @@ void main() {
     },
   );
 
-  test(
-    'a 429 with Retry-After is retried, then the batch succeeds',
-    () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      final statuses = <int>[];
-      server.listen((req) async {
-        await req.drain<void>();
-        // First attempt is throttled with a Retry-After the client must honor;
-        // the retry lands on 200.
-        if (statuses.isEmpty) {
-          req.response.statusCode = 429;
-          req.response.headers.set('retry-after', '0');
-        } else {
-          req.response.statusCode = 200;
-        }
-        statuses.add(req.response.statusCode);
-        await req.response.close();
-      });
+  test('a 429 with Retry-After is retried, then the batch succeeds', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final statuses = <int>[];
+    server.listen((req) async {
+      await req.drain<void>();
+      // First attempt is throttled with a Retry-After the client must honor;
+      // the retry lands on 200.
+      if (statuses.isEmpty) {
+        req.response.statusCode = 429;
+        req.response.headers.set('retry-after', '0');
+      } else {
+        req.response.statusCode = 200;
+      }
+      statuses.add(req.response.statusCode);
+      await req.response.close();
+    });
 
-      final exporter = OtlpExporter.http(
-        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
-        // Zero fallback keeps the test fast; Retry-After: 0 is honored as an
-        // immediate retry either way.
-        retryBackoff: Duration.zero,
-      );
-      addTearDown(exporter.close);
+    final exporter = OtlpExporter.http(
+      Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+      // Zero fallback keeps the test fast; Retry-After: 0 is honored as an
+      // immediate retry either way.
+      retryBackoff: Duration.zero,
+    );
+    addTearDown(exporter.close);
 
-      // export() completing (not throwing) is the whole assertion: a single
-      // attempt would have surfaced the 429 as an HttpException.
-      await exporter.export([
-        OtelSpan(
-          traceId: 'a' * 32,
-          spanId: 'b' * 16,
-          name: 'GET /x',
-          startUnixNano: 1,
-          endUnixNano: 2,
-        ),
-      ]);
+    // export() completing (not throwing) is the whole assertion: a single
+    // attempt would have surfaced the 429 as an HttpException.
+    await exporter.export([
+      OtelSpan(
+        traceId: 'a' * 32,
+        spanId: 'b' * 16,
+        name: 'GET /x',
+        startUnixNano: 1,
+        endUnixNano: 2,
+      ),
+    ]);
 
-      expect(statuses, [429, 200]); // throttled once, then accepted.
-    },
-  );
+    expect(statuses, [429, 200]); // throttled once, then accepted.
+  });
 
   test(
     'a persistent 503 exhausts retries; the dropped batch is reported on the '
@@ -294,7 +291,9 @@ void main() {
       // Batch 2 succeeds (4th request 200) and carries the deferred drop count.
       exporter.enqueue([span]);
       await exporter.flush();
-      final dropReport = warnings.firstWhere((w) => w.key == 'OTLP spans dropped');
+      final dropReport = warnings.firstWhere(
+        (w) => w.key == 'OTLP spans dropped',
+      );
       expect(dropReport.value['dropped'], 1);
     },
   );

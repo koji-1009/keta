@@ -77,7 +77,10 @@ void _sourceCheck(
       // Normalize to a package-relative path so the stable id matches the one
       // the analyzer plugin computes from its absolute path, and matches across
       // machines regardless of how the file was addressed on the command line.
-      ...analyze(File(file).readAsStringSync(), file: packageRelativePath(file)),
+      ...analyze(
+        File(file).readAsStringSync(),
+        file: packageRelativePath(file),
+      ),
   ];
   _report(diagnostics, cleanMessage);
 }

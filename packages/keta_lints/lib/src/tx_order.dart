@@ -18,11 +18,13 @@ import 'diagnostic.dart';
 ///
 /// The [String] entrypoint parses [source] (the CLI path); the plugin holds a
 /// parsed unit and calls [txOrderDiagnosticsUnit], so it never re-parses.
-List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) =>
-    txOrderDiagnosticsUnit(
-      parseString(content: source, throwIfDiagnostics: false).unit,
-      file: file,
-    );
+List<Diagnostic> txOrderDiagnostics(
+  String source, {
+  String file = '<memory>',
+}) => txOrderDiagnosticsUnit(
+  parseString(content: source, throwIfDiagnostics: false).unit,
+  file: file,
+);
 
 /// [txOrderDiagnostics] over an already-parsed [unit].
 List<Diagnostic> txOrderDiagnosticsUnit(

@@ -76,8 +76,7 @@ void main() {
         ),
       );
       final json = OpenApi.fromRoutes(app.routes).toJson();
-      final responses =
-          _get(json, '/ws')['responses']! as Map<String, Object?>;
+      final responses = _get(json, '/ws')['responses']! as Map<String, Object?>;
       expect(responses.keys, contains('101'));
       expect(responses.keys, contains('426'));
       // The referenced schema is collected transitively into components.

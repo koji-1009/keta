@@ -167,23 +167,26 @@ void main() {
       scope: ['admin'],
     );
 
-    test('a route under scopes binds them as an outer→inner third argument', () {
-      final out = syncManifest(_imports, const [
-        RouteFile(
-          importPath: 'routes/admin/ping.dart',
-          prefix: r'$admin_ping',
-          template: ['admin', 'ping'],
-          middleware: [root, admin],
-        ),
-      ]);
-      expect(
-        out,
-        contains(
-          r"$admin_ping.exported.bind(app, const ['admin', 'ping'], "
-          r'[$mw$root.scoped, $mw$admin.scoped]);',
-        ),
-      );
-    });
+    test(
+      'a route under scopes binds them as an outer→inner third argument',
+      () {
+        final out = syncManifest(_imports, const [
+          RouteFile(
+            importPath: 'routes/admin/ping.dart',
+            prefix: r'$admin_ping',
+            template: ['admin', 'ping'],
+            middleware: [root, admin],
+          ),
+        ]);
+        expect(
+          out,
+          contains(
+            r"$admin_ping.exported.bind(app, const ['admin', 'ping'], "
+            r'[$mw$root.scoped, $mw$admin.scoped]);',
+          ),
+        );
+      },
+    );
 
     test('the imports region carries the scopes the routes reference', () {
       final out = syncManifest(_imports, const [
@@ -194,10 +197,7 @@ void main() {
           middleware: [root, admin],
         ),
       ]);
-      expect(
-        out,
-        contains(r"import 'routes/_middleware.dart' as $mw$root;"),
-      );
+      expect(out, contains(r"import 'routes/_middleware.dart' as $mw$root;"));
       expect(
         out,
         contains(r"import 'routes/admin/_middleware.dart' as $mw$admin;"),

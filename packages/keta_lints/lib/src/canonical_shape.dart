@@ -30,7 +30,9 @@ class CanonicalUnit {
     final dtoNames = <String>{...schemas.keys};
     for (final declaration in unit.declarations) {
       if (declaration is EnumDeclaration) {
-        enums[declaration.namePart.typeName.lexeme] = _readEnumInfo(declaration);
+        enums[declaration.namePart.typeName.lexeme] = _readEnumInfo(
+          declaration,
+        );
       } else if (declaration is ClassDeclaration && hasMapper(declaration)) {
         dtoNames.add(declaration.namePart.typeName.lexeme);
       }
@@ -379,7 +381,10 @@ Map<String, Expression> schemaInitializers(CompilationUnit unit) {
     for (final variable in declaration.variables.variables) {
       final init = variable.initializer;
       final (name, isSchema) = switch (init) {
-        InstanceCreationExpression(:final constructorName, :final argumentList) =>
+        InstanceCreationExpression(
+          :final constructorName,
+          :final argumentList,
+        ) =>
           (
             _firstStringArg(argumentList),
             constructorName.type.name.lexeme == 'Schema',
@@ -522,8 +527,7 @@ Set<String>? toJsonKeys(MethodDeclaration toJson) {
           keys.add(key.value);
         case IfElement():
           if (!collect([element.thenElement])) return false;
-          if (element.elseElement != null &&
-              !collect([element.elseElement!])) {
+          if (element.elseElement != null && !collect([element.elseElement!])) {
             return false;
           }
         default:
@@ -753,7 +757,12 @@ class TypeResolver {
     }
     final enumInfo = enums[base];
     if (enumInfo != null) {
-      return _EnumType(base, enumInfo.schemaValues, enumInfo.isEnhanced, nullable);
+      return _EnumType(
+        base,
+        enumInfo.schemaValues,
+        enumInfo.isEnhanced,
+        nullable,
+      );
     }
     if (dtoNames.contains(base)) return _DtoType(base, nullable);
     return null; // unknown/cross-file/non-canonical
