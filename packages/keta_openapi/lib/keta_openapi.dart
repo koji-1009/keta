@@ -7,6 +7,7 @@ export 'src/route_doc.dart'
     show
         RouteDoc,
         Success,
+        Failure,
         SwitchingProtocols,
         SecurityScheme,
         QueryParam,

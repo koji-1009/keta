@@ -32,6 +32,11 @@ class OpenApi {
     final schemasVisited = <Schema>{};
     final securitySchemes = <String, Map<String, Object?>>{};
     final routeConflicts = <String>{};
+    // operationId → the route that first claimed it, so a duplicate can name
+    // both sides. `tags` accumulates every route's tags for the document's
+    // top-level list, deduped and sorted at the end.
+    final operationIds = <String, String>{};
+    final allTags = <String>{};
 
     for (final route in routes) {
       final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
@@ -53,11 +58,29 @@ class OpenApi {
       // deliberately treats them as one conflict (its `conflictKey` collapses
       // every capture to `*` — packages/keta/lib/src/routing.dart, not
       // exported from keta's public API, so mirrored below as
-      // `_conflictKey`). The guard therefore keys off that same collapsed
+      // `conflictKey`). The guard therefore keys off that same collapsed
       // shape, not off `path`.
-      final conflict = _conflictKey(route.method, route.segments);
+      final conflict = conflictKey(route.method, route.segments);
       if (!routeConflicts.add(conflict)) {
         throw StateError('route conflict: $routeLabel registered twice');
+      }
+      if (doc != null) {
+        // Document-wide operationId uniqueness. Two operations sharing an id is
+        // an invalid OpenAPI document (tooling keys code generation off it), so
+        // it is a hard error naming both routes — the same collision posture the
+        // schema and security-scheme guards take, not a last-wins.
+        final id = doc.operationId;
+        if (id != null) {
+          final first = operationIds[id];
+          if (first != null) {
+            throw StateError(
+              'operationId "$id" is declared twice — first at $first, '
+              'again at $routeLabel',
+            );
+          }
+          operationIds[id] = routeLabel;
+        }
+        allTags.addAll(doc.tags ?? const []);
       }
       pathItem[method] = _operation(route, doc, effective);
       if (doc != null) {
@@ -103,6 +126,12 @@ class OpenApi {
         for (final path in paths.keys.toList()..sort())
           path: _sortedByKey(paths[path]!),
       },
+      // Sorted and deduped so the top-level list is a function of the route set
+      // alone, like every other generated collection above.
+      if (allTags.isNotEmpty)
+        'tags': [
+          for (final tag in allTags.toList()..sort()) {'name': tag},
+        ],
       if (components.isNotEmpty) 'components': components,
     };
     return OpenApi._(override == null ? document : override(document));
@@ -195,8 +224,9 @@ Map<String, Object?> _operation(
       // there is no branch here that could leave a non-upgrade document without
       // a 2xx, and no guess about which one it is.
       responses['${success.status}'] = {
-        'description': 'OK',
-        if (success.schema != null) ..._body(success.schema!, success.contentType),
+        'description': _reasonPhrase(success.status),
+        if (success.schema != null)
+          ..._body(success.schema!, success.contentType),
       };
     } else {
       // Neither a success nor an upgrade: unreachable through RouteDoc's
@@ -229,24 +259,51 @@ Map<String, Object?> _operation(
             'HTTP failure status — it must be 400-599',
           );
         }
+        // A value is either a bare Schema (application/json, the common case)
+        // or a Failure that names its own media type. `Map<int, Object>` cannot
+        // hold the value to that union, so it is held here — where the route can
+        // be named — matching the fail-fast treatment the range checks above
+        // give a bad key.
+        final value = entry.value;
+        final Schema schema;
+        final String contentType;
+        if (value is Schema) {
+          schema = value;
+          contentType = 'application/json';
+        } else if (value is Failure) {
+          schema = value.schema;
+          contentType = value.contentType;
+        } else {
+          throw StateError(
+            '${route.method} ${_openApiPath(route.segments)}: '
+            'failureResponses[${entry.key}] is a ${value.runtimeType} — '
+            'a failure body must be a Schema or a Failure',
+          );
+        }
         responses['${entry.key}'] = {
-          'description': '',
-          ..._jsonBody(entry.value),
+          'description': _reasonPhrase(entry.key),
+          ..._body(schema, contentType),
         };
       }
     }
   } else {
     // A route carrying no RouteDoc declares no contract at all. It still
     // answers something, and 200 is the only thing there is to say.
-    responses['200'] = {'description': 'OK'};
+    responses['200'] = {'description': _reasonPhrase(200)};
   }
   // A secured operation gains a 401 automatically — a deterministic projection
   // of the declaration — unless the user documented 401 themselves (theirs wins).
   if (security.isNotEmpty && !responses.containsKey('401')) {
-    responses['401'] = {'description': 'Unauthorized'};
+    responses['401'] = {'description': _reasonPhrase(401)};
   }
   return {
+    if (doc?.operationId != null) 'operationId': doc!.operationId,
     if (doc?.summary != null) 'summary': doc!.summary,
+    if (doc?.description != null) 'description': doc!.description,
+    // Projected as-is (data, not inference); the author's declared order is
+    // preserved. Document-wide aggregation into top-level `tags` is sorted and
+    // deduped in `fromRoutes`.
+    if (doc?.tags != null) 'tags': doc!.tags,
     if (parameters.isNotEmpty) 'parameters': parameters,
     if (doc?.requestBody != null)
       'requestBody': {
@@ -266,9 +323,12 @@ Map<String, T> _sortedByKey<T>(Map<String, T> map) => {
   for (final key in map.keys.toList()..sort()) key: map[key] as T,
 };
 
-/// A `content` body under [mediaType], referencing [schema]. Responses always
-/// use `application/json`; a request body honors its declared media type (e.g.
-/// `multipart/form-data`), so an upload is documented as what it truly consumes.
+/// A `content` body under [mediaType], referencing [schema]. Every body —
+/// request, success, or failure — honors its own declared media type: a request
+/// body (e.g. `multipart/form-data` for an upload), a [Success.contentType], and
+/// a [Failure.contentType] (e.g. `application/problem+json`) each document what
+/// is truly on the wire. A bare [Schema] failure still means `application/json`,
+/// the common case, but that default now lives at the call site, not here.
 Map<String, Object?> _body(Schema schema, String mediaType) => {
   'content': {
     mediaType: {
@@ -277,8 +337,61 @@ Map<String, Object?> _body(Schema schema, String mediaType) => {
   },
 };
 
-Map<String, Object?> _jsonBody(Schema schema) =>
-    _body(schema, 'application/json');
+/// The RFC 9110 (and companion RFC) reason phrase for [status], or an honest
+/// `'Status <code>'` for a code with no registered name. Used for every
+/// generated response `description` — success, failure, the fabricated 200, and
+/// the automatic 401 — so the description is a deterministic projection of the
+/// status, not a fixed `'OK'`/`''` that lied for a 201, 204, 302, or any 4xx.
+/// Only codes keta can actually emit (2xx/3xx successes, 4xx/5xx failures) need
+/// appear; 101 is described by [SwitchingProtocols], not from this table.
+String _reasonPhrase(int status) => _reasonPhrases[status] ?? 'Status $status';
+
+const _reasonPhrases = <int, String>{
+  200: 'OK',
+  201: 'Created',
+  202: 'Accepted',
+  203: 'Non-Authoritative Information',
+  204: 'No Content',
+  205: 'Reset Content',
+  206: 'Partial Content',
+  300: 'Multiple Choices',
+  301: 'Moved Permanently',
+  302: 'Found',
+  303: 'See Other',
+  304: 'Not Modified',
+  307: 'Temporary Redirect',
+  308: 'Permanent Redirect',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  402: 'Payment Required',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  406: 'Not Acceptable',
+  407: 'Proxy Authentication Required',
+  408: 'Request Timeout',
+  409: 'Conflict',
+  410: 'Gone',
+  411: 'Length Required',
+  412: 'Precondition Failed',
+  413: 'Content Too Large',
+  414: 'URI Too Long',
+  415: 'Unsupported Media Type',
+  416: 'Range Not Satisfiable',
+  417: 'Expectation Failed',
+  421: 'Misdirected Request',
+  422: 'Unprocessable Content',
+  426: 'Upgrade Required',
+  428: 'Precondition Required',
+  429: 'Too Many Requests',
+  431: 'Request Header Fields Too Large',
+  500: 'Internal Server Error',
+  501: 'Not Implemented',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+  504: 'Gateway Timeout',
+  505: 'HTTP Version Not Supported',
+};
 
 Iterable<(String, Map<String, Object?>)> _pathParameters(
   List<Segment> segments,
@@ -298,7 +411,15 @@ Iterable<(String, Map<String, Object?>)> _pathParameters(
 /// uses for exactly this check but which is not part of keta's public API
 /// (`package:keta/keta.dart` does not export it), hence the copy here rather
 /// than an import of keta's `src/`.
-String _conflictKey(String method, List<Segment> segments) {
+///
+/// A hand-copy of a private function is a silent drift channel: nothing breaks
+/// if keta changes its collapse rule and this does not. That channel is closed
+/// by `test/conflict_key_parity_test.dart`, which imports keta's implementation
+/// directly (`package:keta/src/routing.dart` — a workspace-internal test may)
+/// and asserts the two produce identical keys over a corpus. Public, not
+/// `_`-private, solely so that test can reach it; it is not exported from the
+/// package's public API.
+String conflictKey(String method, List<Segment> segments) {
   final buffer = StringBuffer(method);
   for (final segment in segments) {
     buffer.write('/');

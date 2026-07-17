@@ -90,6 +90,30 @@ final class SwitchingProtocols {
   final String description;
 }
 
+/// A failure response that carries a non-JSON body. Mirrors [Success] on the
+/// error side: a [Success] declares its `contentType`, but a bare [Schema] in
+/// [RouteDoc.failureResponses] could only ever mean `application/json` — an
+/// asymmetry that made a `text/plain` or `application/problem+json` error
+/// unrepresentable. Wrap the schema in a [Failure] to say what the error body
+/// truly is.
+///
+/// [RouteDoc.failureResponses] therefore accepts `Object` values: a bare
+/// [Schema] (the common case, still `application/json`) OR a [Failure]. The
+/// emitter type-checks each value and rejects anything else as a hard error
+/// naming the route — the same fail-fast posture the range and 2xx checks take,
+/// rather than a compile-time `Map<int, Schema | Failure>` the language cannot
+/// express.
+final class Failure {
+  const Failure(this.schema, {this.contentType = 'application/json'});
+
+  /// The error body's schema.
+  final Schema schema;
+
+  /// The media type of [schema], projected as-is onto the response's
+  /// `content`. Mirrors [Success.contentType].
+  final String contentType;
+}
+
 /// Per-route documentation, passed to a route as its opaque `doc` and read back
 /// here when emitting OpenAPI.
 class RouteDoc {
@@ -98,6 +122,9 @@ class RouteDoc {
     this.requestBody,
     this.requestBodyType = 'application/json',
     this.summary,
+    this.description,
+    this.tags,
+    this.operationId,
     this.failureResponses,
     this.security,
     this.query,
@@ -115,6 +142,9 @@ class RouteDoc {
     this.requestBody,
     this.requestBodyType = 'application/json',
     this.summary,
+    this.description,
+    this.tags,
+    this.operationId,
     this.failureResponses,
     this.security,
     this.query,
@@ -141,10 +171,34 @@ class RouteDoc {
 
   final String? summary;
 
+  /// A longer, human-readable prose description of the operation, projected onto
+  /// the operation's `description`. Complements the one-line [summary]. Optional:
+  /// absent means the operation carries no `description`.
+  final String? description;
+
+  /// Free-form tags for grouping this operation, projected onto the operation's
+  /// `tags` and aggregated (sorted and deduped) into the document's top-level
+  /// `tags` list so the whole document stays a deterministic function of the
+  /// route set. Optional.
+  final List<String>? tags;
+
+  /// A document-wide-unique identifier for this operation, projected onto the
+  /// operation's `operationId`. Uniqueness is enforced when the document is
+  /// emitted: two routes declaring the same [operationId] are a hard error
+  /// naming both, matching the package's collision posture for schemas and
+  /// security schemes. Optional.
+  final String? operationId;
+
   /// The statuses this route fails with. The name is the constraint: a success
   /// lives in [success], and a route has exactly one. A 2xx here is rejected
   /// when the document is emitted, naming the route.
-  final Map<int, Schema>? failureResponses;
+  ///
+  /// A value is either a bare [Schema] (an `application/json` body, the common
+  /// case) or a [Failure] (a body under any declared media type). The type is
+  /// `Object` because the language cannot spell `Schema | Failure`; the emitter
+  /// checks each value and rejects anything else as a hard error naming the
+  /// route.
+  final Map<int, Object>? failureResponses;
 
   /// The security schemes that satisfy this route, OR-combined (any one
   /// suffices). `null` follows the global default passed to
@@ -160,10 +214,20 @@ class RouteDoc {
   /// Every schema this doc references, for transitive component collection. An
   /// upgrade route has no [success] schema (its 101 carries no body), so that
   /// slot is simply absent.
+  ///
+  /// A [failureResponses] value is unwrapped to its [Schema] whether it is a
+  /// bare schema or a [Failure]. An unrecognized value is not surfaced here (it
+  /// carries no schema to collect); the emitter rejects it as a hard error, with
+  /// the route name in hand, before this collection would matter.
   Iterable<Schema> get schemas => [
     ?success?.schema,
     ?requestBody,
-    ...?failureResponses?.values,
+    if (failureResponses != null)
+      for (final value in failureResponses!.values)
+        if (value is Schema)
+          value
+        else if (value is Failure)
+          value.schema,
   ];
 }
 
