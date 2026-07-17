@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      # Lets keta_rds run its real contract suite instead of skipping it.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KETA_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      # package:sqlite3 loads the system libsqlite3.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: dart pub get
+      - run: dart format --output=none --set-exit-if-changed .
+      - run: dart analyze --fatal-infos
+      - name: Test every package and example
+        run: |
+          for d in packages/*/ example example_auth example_files; do
+            if [ -d "$d/test" ]; then
+              echo "=== $d"
+              (cd "$d" && dart test)
+            fi
+          done
