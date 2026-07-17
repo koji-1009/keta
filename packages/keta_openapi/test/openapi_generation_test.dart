@@ -193,6 +193,210 @@ void main() {
     );
   });
 
+  test('a duplicate method+template registered twice fails fast', () {
+    // Two routes emitting the same method+path would otherwise overwrite one
+    // another in `paths[path][method]`, making the document depend on
+    // registration order. App.compile catches this too, but OpenApi.fromRoutes
+    // can run standalone (a tool/openapi.dart that never serves), so it must
+    // catch it independently.
+    final app = App<Ignored>()
+      ..get('/dup', (c) => c.text('a'))
+      ..get('/dup', (c) => c.text('b'));
+    expect(
+      () => OpenApi.fromRoutes(app.routes),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('GET'), contains('/dup')),
+        ),
+      ),
+    );
+  });
+
+  group('schema-name collision', () {
+    test('two different Schema instances sharing a name fail fast', () {
+      const good = Schema('Dup', {'type': 'string'});
+      const bad = Schema('Dup', {'type': 'integer'});
+      final app = App<Ignored>()
+        ..get(
+          '/a',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(schema: good)),
+        )
+        ..get(
+          '/b',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(schema: bad)),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('"Dup"'), contains('GET /a'), contains('GET /b')),
+          ),
+        ),
+      );
+    });
+
+    test('the same content under a fresh (non-const, non-identical) instance '
+        'is not a collision', () {
+      // Two structurally-equal but non-identical Schema objects — not the
+      // same const — must dedupe like the identical-instance case, since
+      // only genuinely different content under one name is an authoring
+      // mistake. Deliberately not `const`: a const expression here would be
+      // canonicalized to one identical instance, defeating the point of the
+      // test (proving the content-equality fallback, not just `identical`).
+      // ignore: prefer_const_constructors
+      Schema same() => Schema('Same', {'type': 'string'});
+      final app = App<Ignored>()
+        ..get(
+          '/a',
+          (c) => c.text('x'),
+          doc: RouteDoc(success: Success(schema: same())),
+        )
+        ..get(
+          '/b',
+          (c) => c.text('x'),
+          doc: RouteDoc(success: Success(schema: same())),
+        );
+      expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+    });
+  });
+
+  group('security-scheme collision', () {
+    test('two different SecurityScheme instances sharing a name fail fast', () {
+      const good = SecurityScheme('key', {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'X-A',
+      });
+      const bad = SecurityScheme('key', {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'X-B',
+      });
+      final app = App<Ignored>()
+        ..get(
+          '/a',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(), security: [good]),
+        )
+        ..get(
+          '/b',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(), security: [bad]),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('"key"'),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'the same scheme content under a fresh instance is not a collision',
+      () {
+        // Deliberately not `const`, for the same reason as the Schema case
+        // above: canonicalization would make the two instances `identical`
+        // and never exercise the content-equality fallback.
+        // ignore: prefer_const_constructors
+        SecurityScheme same() => SecurityScheme('key', {
+          'type': 'apiKey',
+          'in': 'header',
+          'name': 'X-A',
+        });
+        final app = App<Ignored>()
+          ..get(
+            '/a',
+            (c) => c.text('x'),
+            doc: RouteDoc(success: const Success(), security: [same()]),
+          )
+          ..get(
+            '/b',
+            (c) => c.text('x'),
+            doc: RouteDoc(success: const Success(), security: [same()]),
+          );
+        expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+      },
+    );
+  });
+
+  group('failureResponses range', () {
+    test('a status below 400 that is also not a success (100) is rejected', () {
+      final app = App<Ignored>()
+        ..get(
+          '/x',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            success: Success(),
+            failureResponses: {100: createdSchema},
+          ),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('100'), contains('400-599')),
+          ),
+        ),
+      );
+    });
+
+    test('a status above 599 is rejected', () {
+      final app = App<Ignored>()
+        ..get(
+          '/x',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            success: Success(),
+            failureResponses: {999: createdSchema},
+          ),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('999'), contains('400-599')),
+          ),
+        ),
+      );
+    });
+
+    test('an arbitrary non-HTTP status (42) is rejected', () {
+      final app = App<Ignored>()
+        ..get(
+          '/x',
+          (c) => c.text('x'),
+          doc: const RouteDoc(
+            success: Success(),
+            failureResponses: {42: createdSchema},
+          ),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('42'), contains('400-599')),
+          ),
+        ),
+      );
+    });
+  });
+
   group('security', () {
     Map<String, Object?> op(Map<String, Object?> doc, String path) =>
         ((doc['paths'] as Map)[path] as Map)['get'] as Map<String, Object?>;

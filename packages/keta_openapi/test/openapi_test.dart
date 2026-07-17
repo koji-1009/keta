@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
@@ -296,8 +298,9 @@ void main() {
     test('a success in failureResponses is rejected, naming the route', () {
       // `Map<int, Schema>` cannot exclude 2xx, so the field name carries the
       // rule and this holds callers to it — a route has exactly one success,
-      // and it lives in `success`. (`Success(status: 500)` needs no test: the
-      // const assert makes it a compile error.)
+      // and it lives in `success`. (A `const Success(status: 500)` needs no
+      // test here: the assert makes it a compile error. A non-const one is
+      // covered below, where the assert can't run at all.)
       final app = App<Ignored>();
       app
           .on(root.segments('users'))
@@ -317,6 +320,33 @@ void main() {
             allOf(contains('POST /users'), contains('201')),
           ),
         ),
+      );
+    });
+
+    test('a non-const Success.status outside 2xx/3xx is a hard error at emit '
+        'time, not merely the constructor\'s assert', () async {
+      // `Success(status: 500)` trips the constructor's `assert` under
+      // `dart test`, which enables assertions — the assert would fire
+      // before OpenApi.fromRoutes is ever reached, so this in-process test
+      // cannot construct the bad value directly. A release binary (`dart
+      // run`, `dart compile exe`) runs with assertions off by default,
+      // which is exactly the scenario the emit-time guard exists for; a
+      // subprocess run that way is the only way to actually exercise it.
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'test/support/bad_success_release_mode.dart',
+      ]);
+      expect(
+        result.exitCode,
+        isNot(0),
+        reason: 'stdout: ${result.stdout}\nstderr: ${result.stderr}',
+      );
+      // An uncaught StateError prints as `Bad state: <message>` (its own
+      // `toString`), not the class name — assert on the message it carries.
+      expect(
+        result.stderr,
+        allOf(contains('Bad state:'), contains('not a 2xx/3xx')),
+        reason: 'stdout: ${result.stdout}\nstderr: ${result.stderr}',
       );
     });
 

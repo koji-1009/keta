@@ -27,23 +27,44 @@ class OpenApi {
   }) {
     final paths = <String, Map<String, Object?>>{};
     final schemas = <String, Map<String, Object?>>{};
+    final schemasSeen = <String, Schema>{};
+    final schemaFirstRoute = <String, String>{};
     final securitySchemes = <String, Map<String, Object?>>{};
 
     for (final route in routes) {
       final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
       // null follows the global default; an empty list is explicitly public.
       final effective = doc?.security ?? security;
-      final pathItem = paths.putIfAbsent(
-        _openApiPath(route.segments),
-        () => {},
-      );
-      pathItem[route.method.toLowerCase()] = _operation(route, doc, effective);
+      final path = _openApiPath(route.segments);
+      final routeLabel = '${route.method} $path';
+      final pathItem = paths.putIfAbsent(path, () => {});
+      final method = route.method.toLowerCase();
+      // Two routes with the same method+template would otherwise overwrite
+      // one another here, silently, in registration order — the document
+      // would then depend on registration order despite the determinism
+      // contract above. `App.compile` catches this too, but this walk can run
+      // standalone (a tool/openapi.dart that never serves), so it must catch
+      // it independently.
+      if (pathItem.containsKey(method)) {
+        throw StateError('route conflict: $routeLabel registered twice');
+      }
+      pathItem[method] = _operation(route, doc, effective);
       if (doc != null) {
         for (final schema in doc.schemas) {
-          _collect(schema, schemas);
+          _collect(schema, schemas, schemasSeen, schemaFirstRoute, routeLabel);
         }
       }
       for (final scheme in effective) {
+        final existing = securitySchemes[scheme.name];
+        // Last-wins would corrupt the document exactly as a schema collision
+        // would: two routes naming the same security scheme differently is an
+        // authoring mistake, not a thing to silently resolve by order.
+        if (existing != null && !_deepEquals(existing, scheme.json)) {
+          throw StateError(
+            'security scheme "${scheme.name}" is declared with two different '
+            'definitions — seen again at $routeLabel',
+          );
+        }
         securitySchemes[scheme.name] = scheme.json;
       }
     }
@@ -107,6 +128,17 @@ Map<String, Object?> _operation(
   }
   final responses = <String, Object?>{};
   if (doc != null) {
+    // Success.status is only an `assert` in its constructor, so a non-const
+    // `Success(status: 500)` sails through with asserts off (release builds).
+    // failureResponses gets a hard StateError for the mirror mistake below; the
+    // same invariant is enforced here too, so the two are no longer asymmetric.
+    if (doc.success.status < 200 || doc.success.status >= 400) {
+      throw StateError(
+        '${route.method} ${_openApiPath(route.segments)}: '
+        'Success.status is ${doc.success.status}, which is not a 2xx/3xx — '
+        'a success is always 2xx or 3xx',
+      );
+    }
     // The success is not conditional: [RouteDoc.success] is required, so there
     // is no branch here that could leave a document without a 2xx, and no guess
     // about which one it is.
@@ -125,6 +157,16 @@ Map<String, Object?> _operation(
             '${route.method} ${_openApiPath(route.segments)}: '
             'failureResponses carries ${entry.key}, which is a success — '
             'a route has exactly one, and it belongs in RouteDoc.success',
+          );
+        }
+        // Same treatment for anything outside 400-599: a 100, a 999, or any
+        // other non-HTTP-failure key would otherwise reach an invalid document
+        // unchallenged.
+        if (entry.key < 400 || entry.key > 599) {
+          throw StateError(
+            '${route.method} ${_openApiPath(route.segments)}: '
+            'failureResponses carries ${entry.key}, which is not a valid '
+            'HTTP failure status — it must be 400-599',
           );
         }
         responses['${entry.key}'] = {
@@ -207,10 +249,69 @@ String _openApiPath(List<Segment> segments) {
   return buffer.toString();
 }
 
-void _collect(Schema schema, Map<String, Map<String, Object?>> into) {
-  if (into.containsKey(schema.name)) return;
+/// Collects [schema] and its transitive [Schema.deps] into [into], keyed by
+/// name. The same schema legitimately reaches this walk many times (every
+/// route that references it), so a name already seen is fine — as long as it
+/// is the *same* schema. Two distinct definitions sharing a name would
+/// first-win silently and corrupt every `$ref` pointed at that name; that is
+/// caught here instead, naming the schema and (when known) the routes on both
+/// sides of the collision.
+void _collect(
+  Schema schema,
+  Map<String, Map<String, Object?>> into,
+  Map<String, Schema> seen,
+  Map<String, String> firstRoute,
+  String? routeLabel,
+) {
+  final existing = seen[schema.name];
+  if (existing != null) {
+    if (_sameSchema(existing, schema)) return;
+    final firstLabel = firstRoute[schema.name];
+    final seenAt = firstLabel != null && routeLabel != null
+        ? ' — first collected at $firstLabel, again at $routeLabel'
+        : '';
+    throw StateError(
+      'schema "${schema.name}" is registered with two different '
+      'definitions$seenAt; a \$ref target must be unambiguous',
+    );
+  }
+  seen[schema.name] = schema;
+  if (routeLabel != null) firstRoute[schema.name] = routeLabel;
   into[schema.name] = schema.json;
   for (final dep in schema.deps) {
-    _collect(dep, into);
+    _collect(dep, into, seen, firstRoute, routeLabel);
   }
+}
+
+/// Whether [a] and [b] are the same schema for collision purposes: the same
+/// instance (the common case — one `const Schema` referenced from many
+/// routes), or, failing that, equal content (json and the set of dep names).
+bool _sameSchema(Schema a, Schema b) {
+  if (identical(a, b)) return true;
+  if (!_deepEquals(a.json, b.json)) return false;
+  final aDeps = a.deps.map((d) => d.name).toSet();
+  final bDeps = b.deps.map((d) => d.name).toSet();
+  return aDeps.length == bDeps.length && aDeps.containsAll(bDeps);
+}
+
+/// Structural equality over JSON-shaped values (the only values a schema or
+/// security-scheme fragment ever carries), used to tell a genuine name/scheme
+/// collision from the same fragment reaching the collector more than once.
+bool _deepEquals(Object? a, Object? b) {
+  if (identical(a, b)) return true;
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key) || !_deepEquals(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_deepEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
 }

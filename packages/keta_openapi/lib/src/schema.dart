@@ -76,6 +76,10 @@ void _validate(
 
   final before = errors.length;
   switch (schema['type']) {
+    case null:
+      // No `type` declared at all: legitimate for an enum-only or `oneOf`
+      // fragment — nothing to check here beyond what already ran above.
+      break;
     case 'object':
       _validateObject(schema, value, path, errors, refs);
     case 'array':
@@ -96,6 +100,12 @@ void _validate(
       if (value is! bool) {
         errors.add('$path: expected boolean, got ${_typeName(value)}');
       }
+    default:
+      // A typo'd type name, a JSON Schema type array (`['string', 'null']`),
+      // or any other value outside the canonical subset (§4) must not be a
+      // silent pass — that would open the boundary `require()` is supposed to
+      // gate.
+      errors.add("$path: unknown schema type '${schema['type']}'");
   }
   // `enum` restricts the value regardless of type (a string, integer, or
   // type-less enum), and only once the value has passed its type check. The
@@ -117,7 +127,22 @@ void _validateObject(
     errors.add('$path: expected object, got ${_typeName(value)}');
     return;
   }
-  final required = (schema['required'] as List?)?.cast<String>() ?? const [];
+  // No `.cast<String>()`: a malformed `required` (not a list, or a list with
+  // non-string entries) must become a violation rather than a cast crash, the
+  // same posture already taken for `enum` below.
+  final requiredRaw = schema['required'];
+  final List<String> required;
+  if (requiredRaw == null) {
+    required = const [];
+  } else if (requiredRaw is List) {
+    required = requiredRaw.whereType<String>().toList();
+  } else {
+    errors.add(
+      '$path: "required" must be a list of strings, got '
+      '${_typeName(requiredRaw)}',
+    );
+    required = const [];
+  }
   for (final key in required) {
     if (!value.containsKey(key)) {
       errors.add('$path.$key: required property is missing');
@@ -131,13 +156,18 @@ void _validateObject(
       // A null for an optional property is accepted — the canonical toJson
       // omits nulls, so an explicit null means "absent".
       if (v == null && !required.contains(entry.key)) continue;
-      _validate(
-        entry.value as Map<String, Object?>,
-        v,
-        '$path.${entry.key}',
-        errors,
-        refs,
-      );
+      // No `as Map<String, Object?>`: a malformed property fragment (authored
+      // as a string, a list, ...) must become a violation on that property
+      // rather than a cast crash.
+      final sub = entry.value;
+      if (sub is! Map<String, Object?>) {
+        errors.add(
+          '$path.${entry.key}: schema fragment must be an object, got '
+          '${_typeName(sub)}',
+        );
+        continue;
+      }
+      _validate(sub, v, '$path.${entry.key}', errors, refs);
     }
   }
   // additionalProperties governs undeclared keys: a schema validates each of

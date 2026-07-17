@@ -191,6 +191,55 @@ void main() {
     });
   });
 
+  group('unknown schema type', () {
+    test('a typo\'d type is a validation error, not a silent pass', () {
+      const s = Schema('Typo', {'type': 'strng'});
+      expect(s.validate('anything'), [r"$: unknown schema type 'strng'"]);
+      expect(s.validate(42), [r"$: unknown schema type 'strng'"]);
+    });
+
+    test('a JSON Schema type array is out of the canonical subset', () {
+      const s = Schema('TypeArray', {
+        'type': ['string', 'null'],
+      });
+      expect(s.validate('x'), contains(matches(r'unknown schema type')));
+    });
+
+    test('an absent type is not an error (enum-only / oneOf fragments)', () {
+      const s = Schema('NoType', {
+        'enum': [1, 2],
+      });
+      expect(s.validate(1), isEmpty);
+    });
+  });
+
+  group('malformed schema fragments do not crash validation', () {
+    test('a non-list "required" is a violation, not a cast crash', () {
+      const s = Schema('BadRequired', {
+        'type': 'object',
+        'required': 'id',
+        'properties': {
+          'id': {'type': 'string'},
+        },
+      });
+      expect(
+        s.validate({'id': 'x'}),
+        contains(matches(r'"required" must be a list of strings')),
+      );
+    });
+
+    test('a non-map property sub-schema is a violation, not a cast crash', () {
+      const s = Schema('BadProperty', {
+        'type': 'object',
+        'properties': {'x': 'not-a-schema'},
+      });
+      expect(
+        s.validate({'x': 1}),
+        contains(matches(r'x: schema fragment must be an object')),
+      );
+    });
+  });
+
   group('oneOf implicit mapping', () {
     const cat = Schema('Cat', {
       'type': 'object',
