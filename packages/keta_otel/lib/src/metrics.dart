@@ -5,9 +5,12 @@ library;
 ///
 /// Cardinality is unbounded by design: every distinct (method, route, status)
 /// is a permanent series with no cap or eviction. This is safe only because
-/// `route` is the low-cardinality route *template* (`/users/:id`, not
-/// `/users/42`). Do not `record` with a high-cardinality or attacker-controlled
-/// route — it grows memory without bound.
+/// both `method` and `route` are bounded before they reach [record]: `route`
+/// is the low-cardinality route *template* (`/users/:id`, not `/users/42`,
+/// and a fixed label when unmatched), and `method` is folded to the closed
+/// set of keta verbs (a fixed label when not one of them) — see
+/// `middleware.dart`'s `otel()`. Do not `record` with a high-cardinality or
+/// attacker-controlled method or route — either grows memory without bound.
 class MetricsRegistry {
   final Map<_Key, int> _count = {};
   final Map<_Key, int> _durationMsSum = {};

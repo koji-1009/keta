@@ -10,15 +10,38 @@ import 'span.dart';
 
 final Random _random = Random.secure();
 
-/// The label recorded for the route dimension (metrics) and folded into the
-/// span name (traces) when a request matches no route.
+/// The known keta HTTP verbs (the closed set `App`'s DSL binds — see
+/// `packages/keta/lib/src/app.dart`). Matched case-insensitively against the
+/// incoming request line and normalized to uppercase; anything else folds to
+/// [_unknownMethod].
+const Set<String> _knownMethods = {
+  'GET',
+  'POST',
+  'PUT',
+  'DELETE',
+  'PATCH',
+  'HEAD',
+  'OPTIONS',
+};
+
+/// The label recorded for the method dimension (metrics), folded into the
+/// span name and `http.request.method` attribute (traces), when a request's
+/// method is not one of the seven keta verbs.
 ///
-/// App-level middleware wraps unmatched requests too (404/405), and for those
-/// `c.route` falls back to the raw request path — attacker-controlled and
-/// unbounded. Recording it would mint a permanent metrics series and a
-/// path-bearing span name per distinct path an attacker probes. This fixed
-/// label keeps the route dimension bounded regardless of what a client sends.
-const String _unmatchedRoute = '(unmatched)';
+/// The HTTP request line accepts any token as a method — attacker-controlled
+/// and unbounded, exactly like an unmatched path. Recording it verbatim would
+/// mint a permanent metrics series and a method-bearing span name per bogus
+/// method a client sends. This fixed label keeps the method dimension bounded
+/// regardless of what a client sends.
+const String _unknownMethod = '(other)';
+
+/// Folds [method] to one of the known keta verbs (uppercased), or
+/// [_unknownMethod] if it matches none. Keeps the method axis bounded on
+/// both the metrics registry and the exported span (name + attributes).
+String _foldMethod(String method) {
+  final upper = method.toUpperCase();
+  return _knownMethods.contains(upper) ? upper : _unknownMethod;
+}
 
 /// Records one server span per request and, optionally, request metrics.
 ///
@@ -27,7 +50,10 @@ const String _unmatchedRoute = '(unmatched)';
 /// cardinality. A request that matches no route is named just `METHOD`
 /// (OTel semconv: an unmatched-route SERVER span omits `http.route` and
 /// drops the path from the name), and its metrics record under
-/// [_unmatchedRoute] rather than the raw, attacker-controlled path. Export
+/// `unmatchedRoute` rather than the raw, attacker-controlled path. `METHOD`
+/// itself is folded to one of the seven known keta verbs (uppercased) or
+/// [_unknownMethod] — the HTTP request line accepts any token, so an
+/// unrecognized method is bounded the same way an unmatched route is. Export
 /// and metric recording happen after the response is produced and never
 /// block or fail the request.
 ///
@@ -56,9 +82,10 @@ Middleware<E> otel<E>({
     void finish(int status) {
       watch.stop();
       final template = c.routeTemplate;
+      final method = _foldMethod(c.method);
       metrics?.record(
-        method: c.method,
-        route: template ?? _unmatchedRoute,
+        method: method,
+        route: template ?? unmatchedRoute,
         status: status,
         durationMs: watch.elapsedMilliseconds,
       );
@@ -68,11 +95,11 @@ Middleware<E> otel<E>({
           traceId: traceId,
           spanId: spanId,
           parentSpanId: parent?.parentId,
-          name: template == null ? c.method : '${c.method} $template',
+          name: template == null ? method : '$method $template',
           startUnixNano: startNano,
           endUnixNano: _unixNano(),
           attributes: {
-            'http.request.method': c.method,
+            'http.request.method': method,
             'http.route': ?template,
             'http.response.status_code': status,
           },

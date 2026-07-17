@@ -34,7 +34,13 @@ class OtlpExporter implements Disposable {
   /// a collector that accepts the connection and never responds cannot hang
   /// `flush()`/`close()` (the latter runs inside server shutdown). A timeout
   /// surfaces as a [TimeoutException], the same failed-export path as any
-  /// other send error.
+  /// other send error, and also `abort()`s the in-flight request — a bare
+  /// `Future.timeout` only gives up on waiting, it does not tell the socket
+  /// to stop, so without the abort a dead collector accumulates one
+  /// ESTABLISHED connection per timed-out export forever. [close] also
+  /// force-closes the client so a still-open connection at shutdown (flush
+  /// already ran; anything left is exactly the stuck kind) is not left
+  /// dangling either.
   factory OtlpExporter.http(
     Uri endpoint, {
     String serviceName = 'keta',
@@ -42,25 +48,44 @@ class OtlpExporter implements Disposable {
     Duration timeout = const Duration(seconds: 10),
   }) {
     final client = HttpClient();
-    Future<void> post(String payload) async {
-      final request = await client.postUrl(endpoint);
-      request.headers.contentType = ContentType.json;
-      headers.forEach(request.headers.set);
-      request.add(utf8.encode(payload));
-      final response = await request.close();
-      await response.drain<void>();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-          'OTLP export rejected: HTTP ${response.statusCode}',
-        );
-      }
+
+    // `Future.timeout` on its own only abandons the *Future*: the collector
+    // side's socket stays ESTABLISHED forever because nothing ever tells the
+    // underlying HttpClientRequest to stop waiting for a response. `post`
+    // keeps a handle to the in-flight request so a timeout can `abort()` it
+    // — which is what actually tears down the socket — in addition to
+    // surfacing the same TimeoutException a bare `.timeout()` would. The
+    // original `pending` future is `ignore()`d once aborted: `abort()`
+    // completes it with an error asynchronously, after the returned future
+    // has already completed via `onTimeout`, so nothing is left to observe
+    // it — without `ignore()` that would surface as an unhandled async
+    // error.
+    Future<void> post(String payload) {
+      HttpClientRequest? request;
+      final pending = () async {
+        request = await client.postUrl(endpoint);
+        request!.headers.contentType = ContentType.json;
+        headers.forEach(request!.headers.set);
+        request!.add(utf8.encode(payload));
+        final response = await request!.close();
+        await response.drain<void>();
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw HttpException(
+            'OTLP export rejected: HTTP ${response.statusCode}',
+          );
+        }
+      }();
+      return pending.timeout(
+        timeout,
+        onTimeout: () {
+          request?.abort();
+          pending.ignore();
+          throw TimeoutException('OTLP export timed out after $timeout');
+        },
+      );
     }
 
-    return OtlpExporter._(
-      (payload) => post(payload).timeout(timeout),
-      serviceName,
-      client.close,
-    );
+    return OtlpExporter._(post, serviceName, () => client.close(force: true));
   }
   final OtlpSender _send;
   final String serviceName;

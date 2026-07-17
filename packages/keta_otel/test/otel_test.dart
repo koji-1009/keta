@@ -38,6 +38,27 @@ class MemLog implements Log {
   Log withFields(Map<String, Object?> f) => MemLog._(lines, {..._baked, ...f});
 }
 
+/// A minimal, directly-constructed request bypassing [TestClient] — its
+/// verb helpers (`get`/`post`/...) only ever send the seven known keta
+/// verbs, so a bogus/lowercase method needs the transport seam directly.
+class _RawRequest implements TransportRequest {
+  _RawRequest(this.method, String path)
+    : uri = Uri.parse(path),
+      headers = const {};
+  @override
+  final String method;
+  @override
+  final Uri uri;
+  @override
+  final Map<String, List<String>> headers;
+  @override
+  Stream<List<int>> get bodyStream => const Stream.empty();
+  @override
+  String get remoteAddress => 'test';
+  @override
+  Future<void> get closed => Completer<void>().future;
+}
+
 class LogEnv implements HasLog {
   LogEnv(this.log);
   @override
@@ -363,6 +384,100 @@ void main() {
       final span = _firstSpan(captured);
       expect(span['name'], 'GET /users/:id');
       expect(_attrsOf(span)['http.route'], {'stringValue': '/users/:id'});
+    });
+  });
+
+  group('method cardinality', () {
+    test('distinct bogus methods do not mint per-method series, just the '
+        'fixed label', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/x', (c) => c.text('ok'));
+      final router = app.compile(Env());
+
+      // /x exists (registered for GET), so an unrecognized method hits the
+      // 405 branch (RFC 9110 §15.5.6) rather than 404 — either way the
+      // route axis folds to "(unmatched)" and, after this fix, so does the
+      // method axis.
+      for (var i = 0; i < 500; i++) {
+        await router.dispatch(_RawRequest('BOGUS-$i', '/x'));
+      }
+      final body = metrics.prometheus();
+
+      expect(
+        body,
+        contains(
+          'keta_requests_total'
+          '{method="(other)",route="(unmatched)",status="405"} 500',
+        ),
+      );
+      expect(body, isNot(contains('BOGUS-')));
+      // Exactly one series for the (other) label, not one per bogus verb:
+      // one line in the count metric, one in the duration-sum metric.
+      expect('(other)'.allMatches(body).length, 2);
+    });
+
+    test(
+      "a bogus method's span name and attribute use the fixed label",
+      () async {
+        final captured = <String>[];
+        final app = App<Env>()
+          ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+        app.get('/x', (c) => c.text('ok'));
+        final router = app.compile(Env());
+
+        await router.dispatch(_RawRequest('BREW-COFFEE', '/x'));
+        await pumpEventQueue();
+
+        final span = _firstSpan(captured);
+        // The path exists but the method doesn't match any registered route
+        // (405), so there's no template to fold into the name — same as an
+        // unmatched-path span, just method-only.
+        expect(span['name'], '(other)');
+        expect(_attrsOf(span)['http.request.method'], {
+          'stringValue': '(other)',
+        });
+        expect(_attrsOf(span).containsKey('http.route'), isFalse);
+      },
+    );
+
+    test(
+      'a known verb sent lowercase still folds to its uppercase label',
+      () async {
+        final metrics = MetricsRegistry();
+        final app = App<Env>()..use(otel(metrics: metrics));
+        app.get('/x', (c) => c.text('ok'));
+        final router = app.compile(Env());
+
+        // The router itself matches methods case-sensitively (a lowercase
+        // "get" does not hit the registered GET route, hence the 405 and
+        // "(unmatched)" route), but the method label folds to the known verb
+        // regardless of case: it is not "(other)".
+        await router.dispatch(_RawRequest('get', '/x'));
+        final body = metrics.prometheus();
+
+        expect(
+          body,
+          contains(
+            'keta_requests_total{method="GET",route="(unmatched)",status="405"} 1',
+          ),
+        );
+        expect(body, isNot(contains('(other)')));
+      },
+    );
+
+    test('a registered GET request keeps the GET label untouched', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/users/:id', (c) => c.text('ok'));
+      await TestClient(app, Env()).get('/users/1');
+
+      expect(
+        metrics.prometheus(),
+        contains(
+          'keta_requests_total{method="GET",route="/users/:id",status="200"} 1',
+        ),
+      );
     });
   });
 

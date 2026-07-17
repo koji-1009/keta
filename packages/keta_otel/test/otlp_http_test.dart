@@ -93,13 +93,42 @@ void main() {
   );
 
   test('a collector that accepts the connection and never responds times out '
-      'rather than hanging', () async {
+      'rather than hanging, and observes its socket actually close '
+      'afterward', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     // Drain the request but never write a response: the client is left
     // waiting on `request.close()`/the response forever without a timeout.
+    // Detaching the socket (instead of just letting the request hang) gives
+    // this test a direct, server-side view of the TCP connection itself —
+    // the resource-lifecycle dimension a bare "the Future throws
+    // TimeoutException" assertion can't see: a stuck collector could leak
+    // one ESTABLISHED socket per export even while every export "fails
+    // correctly" from the client's point of view.
+    final socketClosed = Completer<void>();
+    void completeOnce() {
+      if (!socketClosed.isCompleted) socketClosed.complete();
+    }
+
+    Socket? detached;
+    addTearDown(() => detached?.destroy()); // safety net if the test fails
+    // before onDone/onError below ever fires.
     server.listen((req) async {
       await req.drain<void>();
+      final socket = await req.response.detachSocket(writeHeaders: false);
+      detached = socket;
+      socket.listen(
+        (_) {},
+        onDone: () {
+          completeOnce();
+          socket.destroy();
+        },
+        onError: (_) {
+          completeOnce();
+          socket.destroy();
+        },
+        cancelOnError: true,
+      );
     });
 
     final exporter = OtlpExporter.http(
@@ -119,6 +148,16 @@ void main() {
         ),
       ]),
       throwsA(isA<TimeoutException>()),
+    );
+
+    // Without aborting the in-flight request on timeout, the client never
+    // tells the socket to stop waiting, so the collector would never see it
+    // close — this would hang until the test framework's own timeout fires.
+    await socketClosed.future.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () => fail(
+        'server-observed socket never closed after the export timed out',
+      ),
     );
   });
 
