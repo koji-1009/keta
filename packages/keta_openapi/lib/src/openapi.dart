@@ -157,6 +157,20 @@ Map<String, Object?> _operation(
         'a success is always 2xx or 3xx',
       );
     }
+    // Mirrors Success's own constructor `assert` for the same reason the
+    // status-range check above mirrors it: `assert` is off in release builds,
+    // so a non-const `Success(status: 204, schema: notNull)` — bodyless per
+    // RFC 9110, yet paired with a schema here — would otherwise sail through
+    // and the emitted document would document a body on a response that never
+    // carries one.
+    if (doc.success.schema != null &&
+        (doc.success.status == 204 || doc.success.status == 304)) {
+      throw StateError(
+        '${route.method} ${_openApiPath(route.segments)}: '
+        'Success(status: ${doc.success.status}, schema: ...) declares a body '
+        'on a bodyless status — 204 and 304 must not carry a schema',
+      );
+    }
     // The success is not conditional: [RouteDoc.success] is required, so there
     // is no branch here that could leave a document without a 2xx, and no guess
     // about which one it is.

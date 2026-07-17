@@ -37,7 +37,11 @@ final class Success {
     this.status = 200,
     this.schema,
     this.contentType = 'application/json',
-  }) : assert(status >= 200 && status < 400, 'a success is a 2xx or a 3xx');
+  }) : assert(status >= 200 && status < 400, 'a success is a 2xx or a 3xx'),
+       assert(
+         schema == null || (status != 204 && status != 304),
+         'a 204 or 304 has no body — schema must be null',
+       );
 
   /// The status this route answers with — 201 for a create, 204 for a delete.
   final int status;
@@ -45,6 +49,13 @@ final class Success {
   /// The body's schema, or null when there is no body to document: a 204, or a
   /// `text/plain` liveness probe. Saying nothing is not a lie; a JSON schema
   /// over a text body would be one.
+  ///
+  /// 204 and 304 are bodyless by definition (RFC 9110 §15.3.5, §15.4.5) — a
+  /// [schema] paired with either is a contract lie the emitter would have
+  /// happily written down: "the body looks like this" over a response that
+  /// carries no body at all. The constructor's `assert` catches it in debug
+  /// builds; [OpenApi.fromRoutes] repeats the check as a hard error (asserts
+  /// are off in release builds) so the lie can never reach a shipped document.
   final Schema? schema;
 
   /// The media type of [schema], projected as-is. Mirrors

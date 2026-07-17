@@ -356,6 +356,49 @@ void main() {
       final normalized = _plain(parsed);
       expect(normalized, spec.toJson());
     });
+
+    group('bodyless success (204/304)', () {
+      test('the constructor asserts a schema is null for 204', () {
+        expect(
+          () => Success(status: 204, schema: userDtoSchema),
+          throwsA(isA<AssertionError>()),
+        );
+      });
+
+      test('the constructor asserts a schema is null for 304', () {
+        expect(
+          () => Success(status: 304, schema: userDtoSchema),
+          throwsA(isA<AssertionError>()),
+        );
+      });
+
+      test('a bodyless status with no schema is unaffected', () {
+        expect(() => const Success(status: 204), returnsNormally);
+        expect(() => const Success(status: 304), returnsNormally);
+      });
+
+      test('a non-const Success(204, schema: ...) is a hard error at emit '
+          'time, not merely the constructor\'s assert', () async {
+        // Same rationale as the status-range subprocess test above: `assert`
+        // is on under `dart test`, so an in-process test can never construct
+        // the bad value directly — only a release-mode run (assertions off)
+        // reaches OpenApi.fromRoutes with it.
+        final result = await Process.run(Platform.resolvedExecutable, [
+          'run',
+          'test/support/bad_success_body_release_mode.dart',
+        ]);
+        expect(
+          result.exitCode,
+          isNot(0),
+          reason: 'stdout: ${result.stdout}\nstderr: ${result.stderr}',
+        );
+        expect(
+          result.stderr,
+          allOf(contains('Bad state:'), contains('bodyless status')),
+          reason: 'stdout: ${result.stdout}\nstderr: ${result.stderr}',
+        );
+      });
+    });
   });
 }
 
