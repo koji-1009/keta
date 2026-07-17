@@ -330,7 +330,13 @@ void main() {
     addTearDown(env.close);
     final client = TestClient(buildApp(), env);
 
-    final preflight = await client.options('/users');
+    // A preflight is OPTIONS carrying access-control-request-method (keta's
+    // cors() contract); a plain OPTIONS falls through to the route instead,
+    // where /users' declared security would 401 it.
+    final preflight = await client.options(
+      '/users',
+      headers: const {'access-control-request-method': 'GET'},
+    );
     expect(preflight.status, 204);
     expect(preflight.headers['access-control-allow-origin'], '*');
 
