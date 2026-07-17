@@ -215,5 +215,101 @@ end;
 
       await expectLater(db.verifyMigrations(dir.path), completes);
     });
+
+    test(
+      'upgrades a real pre-checksum ledger with ALTER TABLE (sqlite3 syntax)',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('keta_alter');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        File(
+          '${dir.path}/0001_one.sql',
+        ).writeAsStringSync('create table one (id integer);');
+        final db = SqliteDb.memory();
+        addTearDown(db.close);
+
+        // Simulate a database migrated by an older keta_db: a ledger with the
+        // old (no-checksum) shape and 0001 already applied.
+        await db.writer.execute(
+          'create table _keta_migrations '
+          '(version text primary key, applied_at text not null)',
+        );
+        await db.writer.execute(
+          'insert into _keta_migrations (version, applied_at) values '
+          "('0001', '2020-01-01T00:00:00Z')",
+        );
+        await db.writer.execute('create table one (id integer)');
+
+        File(
+          '${dir.path}/0002_two.sql',
+        ).writeAsStringSync('create table two (id integer);');
+
+        // The real ALTER TABLE runs against sqlite3 here; 0002 applies and the
+        // legacy 0001 row keeps its NULL checksum.
+        final result = await applyMigrations(db, directory: dir.path);
+        expect(result.applied, ['0002']);
+        expect(result.alreadyApplied, ['0001']);
+        final rows = await db.reader.query(
+          'select version, checksum from _keta_migrations order by version',
+        );
+        expect(rows[0]['checksum'], isNull); // legacy 0001
+        expect(rows[1]['checksum'], isNotNull); // freshly-hashed 0002
+
+        // The NULL-checksum legacy row is accepted by verify.
+        await expectLater(db.verifyMigrations(dir.path), completes);
+      },
+    );
+
+    test('verify fails when an applied migration file was edited', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_drift');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}/0001_one.sql')
+        ..writeAsStringSync('create table one (id integer);');
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await applyMigrations(db, directory: dir.path);
+
+      file.writeAsStringSync('create table one (id integer, extra text);');
+      await expectLater(
+        db.verifyMigrations(dir.path),
+        throwsA(
+          isA<StateError>()
+              .having((e) => e.message, 'message', contains('checksum'))
+              .having((e) => e.message, 'message', contains('0001')),
+        ),
+      );
+    });
+
+    test('an out-of-order pending version is a hard error', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_ooo');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      File(
+        '${dir.path}/0001_one.sql',
+      ).writeAsStringSync('create table one (id integer);');
+      File(
+        '${dir.path}/0003_three.sql',
+      ).writeAsStringSync('create table three (id integer);');
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await applyMigrations(db, directory: dir.path);
+
+      File(
+        '${dir.path}/0002_two.sql',
+      ).writeAsStringSync('create table two (id integer);');
+      await expectLater(
+        applyMigrations(db, directory: dir.path),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('0002'),
+          ),
+        ),
+      );
+      // The escape hatch lets it through.
+      await expectLater(
+        applyMigrations(db, directory: dir.path, allowOutOfOrder: true),
+        completes,
+      );
+    });
   });
 }

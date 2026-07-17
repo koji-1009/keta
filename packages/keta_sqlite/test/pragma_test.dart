@@ -71,6 +71,49 @@ void main() {
     });
   });
 
+  group('WAL journal mode (opt-in)', () {
+    test('a file-backed db opened with wal:true reports journal_mode wal',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('keta_wal');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final db = SqliteDb.open('${dir.path}/app.db', wal: true);
+      addTearDown(db.close);
+
+      final rows = await db.reader.query('PRAGMA journal_mode');
+      expect(rows.single.values.single, 'wal');
+    });
+
+    test('the default (no wal) leaves the file on the rollback journal',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('keta_wal');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final db = SqliteDb.open('${dir.path}/app.db');
+      addTearDown(db.close);
+
+      final mode = (await db.reader.query('PRAGMA journal_mode')).single.values
+          .single;
+      // Whatever SQLite's file default is, it is not WAL unless asked for.
+      expect(mode, isNot('wal'));
+    });
+
+    test('memory(wal: true) still opens a working in-memory db', () async {
+      // WAL is a no-op for :memory: (no file for the -wal/-shm index); the flag
+      // is accepted and the database works normally, staying on 'memory' mode.
+      final db = SqliteDb.memory(wal: true);
+      addTearDown(db.close);
+      await db.writer.execute('create table t (n integer)');
+      await db.writer.execute('insert into t values (1)');
+      expect(
+        (await db.reader.query('select n from t')).single['n'],
+        1,
+      );
+      expect(
+        (await db.reader.query('PRAGMA journal_mode')).single.values.single,
+        'memory',
+      );
+    });
+  });
+
   group('busy_timeout PRAGMA / cross-connection SQLITE_BUSY', () {
     test('a second connection contending for the write lock gets Unavailable, '
         'not a raw SqliteException', () async {

@@ -308,6 +308,55 @@ void main() {
 
       await expectLater(db.verifyMigrations(dir.path), completes);
     });
+
+    test(
+      'upgrades a real pre-checksum ledger with ALTER TABLE (postgres syntax)',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('keta_rds_alter');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        final t = _table('alter_users');
+        File(
+          '${dir.path}/0001_one.sql',
+        ).writeAsStringSync('create table $t (id integer);');
+
+        final db = _connect();
+        addTearDown(() async {
+          await db.writer.execute('drop table if exists $t');
+          await db.writer.execute('drop table if exists _keta_migrations');
+          await db.close();
+        });
+        await db.writer.execute('drop table if exists $t');
+        await db.writer.execute('drop table if exists _keta_migrations');
+
+        // A ledger in the old (no-checksum) shape with 0001 already applied,
+        // exactly what an older keta_db would have left behind.
+        await db.writer.execute(
+          'create table _keta_migrations '
+          '(version text primary key, applied_at text not null)',
+        );
+        await db.writer.execute(
+          'insert into _keta_migrations (version, applied_at) values '
+          "('0001', '2020-01-01T00:00:00Z')",
+        );
+        await db.writer.execute('create table $t (id integer)');
+
+        File(
+          '${dir.path}/0002_two.sql',
+        ).writeAsStringSync('alter table $t add column email text;');
+
+        // The real ALTER TABLE ... ADD COLUMN runs against PostgreSQL here.
+        final result = await applyMigrations(db, directory: dir.path);
+        expect(result.applied, ['0002']);
+        expect(result.alreadyApplied, ['0001']);
+        final rows = await db.reader.query(
+          'select version, checksum from _keta_migrations order by version',
+        );
+        expect(rows[0]['checksum'], isNull); // legacy 0001
+        expect(rows[1]['checksum'], isNotNull); // freshly-hashed 0002
+
+        await expectLater(db.verifyMigrations(dir.path), completes);
+      },
+    );
   });
 
   group('lifecycle', () {

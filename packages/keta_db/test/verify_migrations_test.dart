@@ -76,6 +76,52 @@ void main() {
       },
     );
 
+    test('an edited already-applied file fails, naming the version', () async {
+      m('0001_one.sql', 'create table one (id integer);');
+      final db = FakeDb();
+      await applyMigrations(db, directory: dir.path);
+
+      // Edit the applied file: its checksum no longer matches the ledger.
+      m('0001_one.sql', 'create table one (id integer, extra text);');
+
+      await expectLater(
+        db.verifyMigrations(dir.path),
+        throwsA(
+          isA<StateError>()
+              .having((e) => e.message, 'message', contains('checksum'))
+              .having((e) => e.message, 'names the version', contains('0001')),
+        ),
+      );
+    });
+
+    test(
+      'a legacy NULL checksum is accepted (verify cannot vouch for it)',
+      () async {
+        // A ledger row applied before checksums were tracked (NULL checksum),
+        // its file present and unchanged on disk.
+        final db = FakeDb(legacyLedger: ['0001']);
+        m('0001_one.sql', 'create table one (id integer);');
+
+        await expectLater(db.verifyMigrations(dir.path), completes);
+      },
+    );
+
+    test(
+      'routes every ledger read through the writer, never the reader',
+      () async {
+        m('0001_one.sql', 'create table one (id integer);');
+        final db = FakeDb();
+        await applyMigrations(db, directory: dir.path);
+        db.queries.clear();
+
+        await db.verifyMigrations(dir.path);
+        // Replica lag right after a deploy's migration step would false-fail a
+        // reader-routed verify; every read must hit the writer.
+        expect(db.queries.map((q) => q.$1), everyElement('writer'));
+        expect(db.queries, isNotEmpty);
+      },
+    );
+
     test('an unreachable database surfaces its own error, not a '
         'pending-migrations StateError', () async {
       m('0001_one.sql', 'create table one (id integer);');

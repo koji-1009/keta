@@ -62,6 +62,10 @@ class RdsDb implements Db {
       (c) => c.close(),
       maxConnections: maxConnections,
       acquireTimeout: acquireTimeout,
+      // Skip and replace an idle connection the server dropped: isOpen is the
+      // driver's own liveness bit, so a proxy/NAT-reaped socket is reopened at
+      // acquire rather than surfacing as one failed query.
+      validate: (c) => c.isOpen,
     );
 
     final writer = poolFor(endpoint);
@@ -85,6 +89,8 @@ class RdsDb implements Db {
       (c) => c.close(),
       maxConnections: maxConnections,
       acquireTimeout: acquireTimeout,
+      // See the sibling factory: isOpen replaces a server-dropped idle socket.
+      validate: (c) => c.isOpen,
     );
 
     final writer = poolFor(url);

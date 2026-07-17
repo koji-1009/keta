@@ -38,15 +38,37 @@ class SqliteDb implements Db {
   /// lock — for up to [lockTimeout], not just the one call. Measured: a 500ms
   /// contention window fired zero event-loop timers on the blocked isolate.
   /// Deployments expecting cross-process writers should keep [lockTimeout]
-  /// modest rather than relying on its 30s default.
+  /// modest rather than relying on its 30s default. [transaction] opens with
+  /// `BEGIN IMMEDIATE`, so a write transaction takes the lock (and does its
+  /// bounded `busy_timeout` wait) at `BEGIN` rather than on first upgrade.
+  ///
+  /// **[wal]** (opt-in, default off) switches this file to WAL journaling:
+  /// readers no longer block the single writer, and the writer no longer blocks
+  /// readers — across processes, not just within this isolate — which is the
+  /// win under the cross-process contention this adapter targets. The cost:
+  /// WAL keeps a shared-memory index (`-wal`/`-shm` sidecar files) that every
+  /// connection to the database must reach through the *same host's*
+  /// filesystem, so a WAL database cannot live on a network filesystem (NFS);
+  /// [_enableWal] reads the mode back and fails loudly if the switch did not
+  /// take. Left off, the file uses SQLite's default rollback journal — the
+  /// prior behavior, unchanged. WAL is a no-op for [memory] (see there).
   factory SqliteDb.open(
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),
-  }) => SqliteDb._(_open(sqlite3.open(path), lockTimeout), lockTimeout);
+    bool wal = false,
+  }) => SqliteDb._(_open(sqlite3.open(path), lockTimeout, wal: wal), lockTimeout);
 
   /// Opens a private in-memory database. See [open] for [lockTimeout].
+  ///
+  /// [wal] is accepted for a uniform surface but is a deliberate no-op here: an
+  /// in-memory database has no file for WAL's `-wal`/`-shm` sidecar index, and
+  /// sqlite3 will not switch it — `PRAGMA journal_mode = WAL` silently returns
+  /// `memory` and the mode stays `memory` (measured). Rather than issue a pragma
+  /// whose result we would have to special-case, [memory] never asks for WAL, so
+  /// `memory(wal: true)` opens a normal in-memory database.
   factory SqliteDb.memory({
     Duration lockTimeout = const Duration(seconds: 30),
+    bool wal = false,
   }) => SqliteDb._(_open(sqlite3.openInMemory(), lockTimeout), lockTimeout);
 
   /// Applies the PRAGMA contract every connection opens with, then returns it.
@@ -62,10 +84,31 @@ class SqliteDb implements Db {
   /// `SQLITE_BUSY`, mirroring the in-process queue's [lockTimeout] bound — a
   /// second connection on the same file should wait no longer than a same-
   /// process caller does before getting a loud, bounded failure.
-  static Database _open(Database db, Duration lockTimeout) {
+  static Database _open(Database db, Duration lockTimeout, {bool wal = false}) {
     db.execute('PRAGMA foreign_keys = ON');
     db.execute('PRAGMA busy_timeout = ${lockTimeout.inMilliseconds}');
+    if (wal) _enableWal(db);
     return db;
+  }
+
+  /// Switches [db] to WAL journaling, failing loudly if the switch did not take.
+  ///
+  /// `PRAGMA journal_mode = WAL` returns the mode actually in force, not an
+  /// error. On a file-backed database that is `wal`; but if the filesystem
+  /// cannot host WAL's shared-memory index — a network filesystem such as NFS,
+  /// where WAL's requirement that all connections share one host's memory
+  /// cannot hold — sqlite quietly declines and returns the *old* mode. Reading
+  /// it back and throwing turns that into a startup failure, rather than
+  /// running under the false belief that cross-process readers no longer block
+  /// the writer when they still do.
+  static void _enableWal(Database db) {
+    final mode = db.select('PRAGMA journal_mode = WAL').rows.first.first;
+    if (mode != 'wal') {
+      throw StateError(
+        'requested WAL journal mode but sqlite reports "$mode"; WAL needs a '
+        'same-host filesystem for its -wal/-shm index (no NFS)',
+      );
+    }
   }
 
   final Database _db;
@@ -90,6 +133,21 @@ class SqliteDb implements Db {
   @override
   DbConn get writer => _conn;
 
+  /// Runs [f] inside a single write transaction, opened with `BEGIN IMMEDIATE`.
+  ///
+  /// The default `BEGIN` starts a *deferred* transaction that takes no lock
+  /// until the first statement, and only a read lock until the first write — so
+  /// a read-then-write body (the common `SELECT` current row, then `UPDATE`)
+  /// asks to upgrade a read lock to a write lock while another connection holds
+  /// the write lock. SQLite cannot honor `busy_timeout` on that upgrade: waiting
+  /// would risk deadlock (two readers each refusing to release), so it returns
+  /// `SQLITE_BUSY` *immediately*, bypassing the very bounded-wait this adapter
+  /// relies on. `BEGIN IMMEDIATE` takes the write lock up front, at `BEGIN`,
+  /// where `busy_timeout` does apply — the contending caller then does its
+  /// bounded wait and gets a loud, timed `Unavailable`, not a surprise busy on
+  /// the first `UPDATE`. Every [transaction] is a write transaction here (there
+  /// is no read-only variant), so paying the write lock at `BEGIN` costs
+  /// nothing a deferred read would have saved.
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) {
     if (_inActiveTxZone) {
@@ -99,7 +157,7 @@ class SqliteDb implements Db {
     return _synchronized(
       () => runZoned(() async {
         _currentTx = token;
-        _db.execute('BEGIN');
+        _db.execute('BEGIN IMMEDIATE');
         try {
           final result = await f(_conn);
           _db.execute('COMMIT');

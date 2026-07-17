@@ -4,11 +4,13 @@ import 'package:keta/keta.dart' show Unavailable;
 import 'package:keta_rds/src/pool.dart';
 import 'package:test/test.dart';
 
-/// A stand-in resource: knows its id and whether it was disposed.
+/// A stand-in resource: knows its id, whether it was disposed, and whether it
+/// still validates (stands in for a driver connection's `isOpen`).
 class FakeConn {
   FakeConn(this.id);
   final int id;
   bool closed = false;
+  bool open = true;
 }
 
 /// A counting factory so a test can assert how many resources were opened and
@@ -228,6 +230,125 @@ void main() {
 
       pool.release(a); // let close() finish rather than hang on the drain
       await closing;
+    });
+  });
+
+  group('release guard', () {
+    test('a double release throws instead of corrupting the counts', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 2);
+
+      final a = await pool.acquire();
+      pool.release(a);
+      expect(() => pool.release(a), throwsStateError);
+      // The bogus second release must not have handed back a phantom permit:
+      // the pool still tops out at maxConnections concurrent checkouts.
+      expect(pool.checkedOut, 0);
+      expect(pool.idle, 1); // the one legitimate release, not two
+    });
+
+    test('releasing a foreign resource throws', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 2);
+      await pool.acquire();
+      expect(() => pool.release(FakeConn(99)), throwsStateError);
+      expect(pool.checkedOut, 1); // untouched
+    });
+  });
+
+  group('validate', () {
+    test('acquire skips a resource that no longer validates, opening fresh',
+        () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 2,
+        validate: (c) => c.open,
+      );
+
+      final a = await pool.acquire();
+      pool.release(a); // now idle
+      a.open = false; // the server dropped it while it sat idle
+
+      final b = await pool.acquire();
+      expect(identical(a, b), isFalse); // not the dead one
+      expect(a.closed, isTrue); // the dead one was disposed
+      expect(f.opened, 2); // a fresh connection was opened
+      expect(pool.idle, 0);
+    });
+
+    test('a still-valid idle resource is reused', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 2,
+        validate: (c) => c.open,
+      );
+      final a = await pool.acquire();
+      pool.release(a);
+      final b = await pool.acquire();
+      expect(identical(a, b), isTrue);
+      expect(f.opened, 1);
+    });
+  });
+
+  group('idle reaper', () {
+    test('disposes an idle-expired connection; the pool reopens on demand',
+        () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 2,
+        maxIdleTime: const Duration(milliseconds: 40),
+      );
+
+      final a = await pool.acquire();
+      pool.release(a); // idle, reaper now armed
+      expect(pool.idle, 1);
+      expect(pool.reaperActive, isTrue);
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(a.closed, isTrue); // reaped
+      expect(pool.idle, 0);
+      expect(pool.reaperActive, isFalse); // self-cancelled once idle emptied
+
+      final b = await pool.acquire(); // reopens on demand
+      expect(identical(a, b), isFalse);
+      expect(f.opened, 2);
+    });
+
+    test('a non-positive maxIdleTime never arms the reaper', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 2,
+        maxIdleTime: Duration.zero,
+      );
+      final a = await pool.acquire();
+      pool.release(a);
+      expect(pool.idle, 1);
+      expect(pool.reaperActive, isFalse);
+    });
+
+    test('close cancels the reaper', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 2,
+        maxIdleTime: const Duration(seconds: 5),
+      );
+      final a = await pool.acquire();
+      pool.release(a);
+      expect(pool.reaperActive, isTrue);
+
+      await pool.close();
+      expect(pool.reaperActive, isFalse); // no timer left pinning the isolate
+      expect(a.closed, isTrue);
     });
   });
 

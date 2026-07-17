@@ -4,33 +4,63 @@ import 'package:keta_db/keta_db.dart';
 /// assert the migration body and its bookkeeping row are staged inside one
 /// transaction and only committed on a clean return.
 ///
-/// It supports exactly the three shapes `applyMigrations` uses — a writer
-/// `execute` for the ledger DDL, a reader `query` for applied versions, and a
-/// `transaction` wrapping the migration SQL plus the ledger insert — and throws
-/// on anything else, so it never silently accepts an unexpected call.
+/// It supports exactly the shapes the migration runner uses — a writer
+/// `execute` for the ledger DDL (and the legacy-upgrade `ALTER`), a `query` for
+/// applied versions/checksums, and a `transaction` wrapping the migration SQL
+/// plus the ledger insert — and throws on anything else, so it never silently
+/// accepts an unexpected call.
+///
+/// The reader and writer are distinct connection objects that tag every query
+/// with the side it came in on ([queries]); the runner routes all ledger reads
+/// through the writer (replica-lag safety), and tests assert on that here.
 class FakeDb implements Db {
+  /// [legacyLedger] pre-seeds rows written before the checksum column existed
+  /// (NULL checksum) and marks the ledger as lacking that column, so the runner
+  /// must `ALTER TABLE ... ADD COLUMN` before it can read checksums — the
+  /// old-deployment upgrade path.
+  FakeDb({List<String> legacyLedger = const []}) {
+    if (legacyLedger.isNotEmpty) {
+      hasChecksumColumn = false;
+      for (final version in legacyLedger) {
+        ledger.add({
+          'version': version,
+          'applied_at': 'legacy',
+          'checksum': null,
+        });
+      }
+    }
+  }
+
   /// SQL statements that actually committed, in order.
   final List<String> committed = [];
 
   /// Rows of the simulated `_keta_migrations` table.
   final List<Map<String, Object?>> ledger = [];
 
+  /// Every query issued, as `(side, sql)` — 'reader' or 'writer'. Ledger reads
+  /// must all be 'writer'.
+  final List<(String side, String sql)> queries = [];
+
+  /// Whether the simulated ledger has the `checksum` column. A legacy ledger
+  /// starts without it, so a `select ... checksum ...` throws until the runner
+  /// adds it with `ALTER TABLE`.
+  bool hasChecksumColumn = true;
+
   /// When set, an `execute` whose SQL contains this substring throws.
   String? failOn;
 
   /// When set, any `query` throws this instead of running — simulating a
   /// broken/unreachable connection (as opposed to a merely-missing ledger
-  /// table, which `_select` still reports through the normal "unexpected
-  /// query" path once this is checked first).
+  /// table).
   Error? unreachable;
 
   bool _inTx = false;
 
   @override
-  late final DbConn reader = _DirectConn(this);
+  late final DbConn reader = _DirectConn(this, 'reader');
 
   @override
-  DbConn get writer => reader;
+  late final DbConn writer = _DirectConn(this, 'writer');
 
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) async {
@@ -51,7 +81,13 @@ class FakeDb implements Db {
   void _commit(String sql, List<Object?> params) {
     committed.add(sql);
     if (sql.startsWith('insert into _keta_migrations')) {
-      ledger.add({'version': params[0], 'applied_at': params[1]});
+      ledger.add({
+        'version': params[0],
+        'applied_at': params[1],
+        'checksum': params.length > 2 ? params[2] : null,
+      });
+    } else if (sql.contains('add column checksum')) {
+      hasChecksumColumn = true;
     }
   }
 
@@ -61,12 +97,24 @@ class FakeDb implements Db {
     }
   }
 
-  List<Map<String, Object?>> _select(String sql) {
+  List<Map<String, Object?>> _select(String side, String sql) {
+    queries.add((side, sql));
     if (unreachable case final e?) throw e;
     if (sql == 'select 1') return const [];
     if (sql == 'select version from _keta_migrations') {
       return [
         for (final row in ledger) {'version': row['version']},
+      ];
+    }
+    if (sql == 'select version, checksum from _keta_migrations') {
+      // A legacy ledger has no checksum column: the read fails until the runner
+      // adds it, mirroring how sqlite3/PostgreSQL reject an unknown column.
+      if (!hasChecksumColumn) {
+        throw StateError('no such column: checksum');
+      }
+      return [
+        for (final row in ledger)
+          {'version': row['version'], 'checksum': row['checksum']},
       ];
     }
     throw UnsupportedError('FakeDb got an unexpected query: $sql');
@@ -78,14 +126,15 @@ class FakeDb implements Db {
 
 /// Reader/writer connection outside a transaction: `execute` commits directly.
 class _DirectConn implements DbConn {
-  _DirectConn(this._db);
+  _DirectConn(this._db, this._side);
   final FakeDb _db;
+  final String _side;
 
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [
     List<Object?> params = const [],
-  ]) async => _db._select(sql);
+  ]) async => _db._select(_side, sql);
 
   @override
   Future<int> execute(String sql, [List<Object?> params = const []]) async {
