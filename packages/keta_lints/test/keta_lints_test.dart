@@ -1343,7 +1343,7 @@ class Dto {
 
     test('a hand-modified fromJson with a back-compat alias key is left '
         'byte-identical by the fix, and produces no diagnostic (regression: '
-        'c2088e3 widened the drift trigger to read fromJson keys with no '
+        'the drift trigger was once widened to read fromJson keys with no '
         'canonical-shape gate, so this alias-preserving fromJson was silently '
         'collapsed to the naive one-liner, deleting the user_id branch)', () {
       const source = '''
@@ -1368,8 +1368,10 @@ class UserDto {
       expect(canonicalDiagnostics(source), isEmpty);
     });
 
-    test('a canonical fromJson with a stale key is still repaired (the case '
-        'c2088e3 legitimately fixed)', () {
+    test('a canonical fromJson with a stale key is still repaired (the '
+        'fix-shape gate must keep recognizing what check recognizes, so the '
+        'genuinely-canonical case the widened trigger legitimately caught is '
+        'still fixed)', () {
       const source = '''
 class Dto {
   final String uuid;

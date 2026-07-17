@@ -140,7 +140,11 @@ Middleware<E> cors<E>({
       if (allowed && exposeHeaders.isNotEmpty) {
         merged['access-control-expose-headers'] = [exposeHeaders.join(', ')];
       }
-      return Response(r.status, headers: merged, body: r.body);
+      // copyWith, not `Response(...)`: an upgrade response passing through here
+      // (a WebSocket handshake behind app-wide cors) must keep its `upgrade`
+      // field, which a fresh construction would silently drop — answering 101
+      // without ever switching. See [Response.copyWith].
+      return r.copyWith(headers: merged);
     });
   };
 }
@@ -206,6 +210,12 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
 /// instead would make the tag depend on byte-exact compressor reproducibility.
 Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
   return chain(next(c), (Response r) {
+    // An upgrade response switches protocols with an empty body and status 101;
+    // there is nothing to tag or conditionally 304, and its `upgrade` field must
+    // survive. Pass it through by identity rather than relying on the non-200
+    // check below to skip it. (See [Response.copyWith] for why a rebuild here
+    // would be a hazard.)
+    if (r.upgrade != null) return r;
     final body = r.body;
     // A stream's bytes are not buffered; leave it and any non-200 untouched.
     if (body is! String && body is! List<int>) return r;
@@ -236,13 +246,11 @@ Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
     }
 
     if (existing != null) return r;
-    return Response(
-      r.status,
+    return r.copyWith(
       headers: {
         ...r.headers,
         'etag': [tag],
       },
-      body: r.body,
     );
   });
 };
@@ -301,6 +309,12 @@ String _fnv1a64Hex(List<int> bytes) {
 Middleware<E> gzip<E>({int threshold = 1024}) =>
     (Context<E> c, Handler<E> next) {
       return chain(next(c), (Response r) {
+        // An upgrade response has an empty body and switches protocols; there is
+        // nothing to compress and no representation to negotiate, so it must not
+        // gain a spurious `Vary: Accept-Encoding` — and above all its `upgrade`
+        // field must survive. Pass it through by identity. (See
+        // [Response.copyWith] for why rebuilding it here would drop the switch.)
+        if (r.upgrade != null) return r;
         final body = r.body;
         // A stream is not buffered; pass it through with nothing added.
         if (body is! String && body is! List<int>) return r;
@@ -314,22 +328,18 @@ Middleware<E> gzip<E>({int threshold = 1024}) =>
             r.status != 304 &&
             _acceptsGzip(c.header('accept-encoding'));
         if (!compressible) {
-          return Response(r.status, headers: headers, body: body);
+          return r.copyWith(headers: headers);
         }
 
         final bytes = body is String ? utf8.encode(body) : body as List<int>;
         // Compressing a body below the threshold adds header overhead for no
         // real saving, so it is left as-is (but still Vary-tagged above).
         if (bytes.length < threshold) {
-          return Response(r.status, headers: headers, body: body);
+          return r.copyWith(headers: headers);
         }
 
         headers['content-encoding'] = const ['gzip'];
-        return Response(
-          r.status,
-          headers: headers,
-          body: io.gzip.encode(bytes),
-        );
+        return r.copyWith(headers: headers, body: io.gzip.encode(bytes));
       });
     };
 

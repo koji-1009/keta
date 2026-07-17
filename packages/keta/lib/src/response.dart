@@ -133,6 +133,34 @@ class Response {
     FutureOr<void> Function(UpgradedChannel channel) onConnected, {
     String? subprotocol,
   }) => Response(101, upgrade: Upgrade(onConnected, subprotocol: subprotocol));
+
+  /// Returns a copy with only the named fields replaced; every field left
+  /// unnamed — including [upgrade] — is carried over unchanged.
+  ///
+  /// This is the one sanctioned way for a middleware to rebuild a response, and
+  /// the invariant it exists to hold is structural: a middleware that only means
+  /// to touch the headers ([cors]) or the body ([gzip]) must never be able to
+  /// *silently* strip a semantic field it did not name. A fresh `Response(...)`
+  /// drops whatever the constructor call omits — which is exactly how an
+  /// app-wide `cors` once answered a WebSocket handshake with 101 yet never
+  /// switched, because rebuilding the response for its merged headers left
+  /// [upgrade] behind. Routing every rebuild through here makes that class of
+  /// bug impossible by construction: any field added to [Response] in future is
+  /// preserved by default, so a new rebuild site cannot omit it out of ignorance
+  /// of its existence. The constructor's invariants (the 101/empty-body upgrade
+  /// guard, header control-char rejection) re-run on the copy, so a rebuild that
+  /// *would* violate them — e.g. handing an upgrade response a body — throws
+  /// rather than producing a malformed value.
+  Response copyWith({
+    int? status,
+    Map<String, List<String>>? headers,
+    Object? body,
+  }) => Response(
+    status ?? this.status,
+    headers: headers ?? this.headers,
+    body: body ?? this.body,
+    upgrade: upgrade,
+  );
   final int status;
 
   /// Header names are lower-cased; each maps to its ordered values (multi-value,
