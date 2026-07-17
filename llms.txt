@@ -20,16 +20,16 @@ app.get('/health', (c) => c.text('ok'));
 app.get('/users/:id', (c) => c.text(c.param<String>('id')));
 ```
 
-Typed DSL — `app.on(path)` opens the same verbs; the handler receives the
-captured tuple. Build paths from `root` with `.lit()` and `.cap()`; captures
-are `str`, `integer`, `dbl`, `boolean`, named with `named(base, 'x')`:
+Typed DSL — `app.on(path)` opens the same verbs; the handler receives the captured tuple. Build paths from `root` with `.segments('a/b')` (a `/`-separated run of literals, batched in one call, arity-preserving) and `.capture(...)` (arity-transitioning). Built-in captures are the constants `string`, `integer`, `number`, `boolean`; naming has exactly one form — call the capture — `string('uid')` (there is no separate `named()` helper):
 
 ```dart
-app.on(root.lit('users').cap(named(str, 'uid')).lit('posts').cap(named(integer, 'postId')))
+app.on(root.segments('users').capture(string('uid')).segments('posts').capture(integer('postId')))
    .post((c, (String, int) p) async {
      return c.text('${p.$1}/${p.$2}');
    });
 ```
+
+A custom capture is a `parse` + `schema` pair: `Capture<T>(T Function(String) parse, {String? name, required Map<String, Object?> schema})`; `parse` must throw `BadRequest` on invalid input (every other exception is a defect → 500).
 
 Verbs: `get post put delete patch head options`. Registering the same
 method+template twice is a boot-time `StateError`. Match precedence is literal
@@ -37,23 +37,11 @@ over capture. `app.group('/prefix')..use(m)` scopes middleware to a subtree.
 
 ## Context
 
-`c.env` (your environment), `c.method`, `c.uri`, `c.header('name')` (lower-cased),
-`c.remoteAddress`. `c.param<T>('name')` parses String/int/double/bool (bad input
-→ 400). `c.get<T>(key)` / `c.tryGet` / `c.set` use identity `Key<T>('name')`
-(never const). `c.body()` decodes JSON (cached; bad JSON → 400; over the size
-limit → 413); `c.bodyBytes()` / `c.bodyStream()` for raw. `c.aborted` completes
-on timeout or disconnect (cooperative). Responses: `c.json(value, [status])`,
-`c.text(str, [status])`. `c.log` is `env.log` with reqId and route baked in.
+`c.env` (your environment), `c.method`, `c.uri`, `c.route` (the matched template, e.g. `/users/:id`), `c.header('name')` (lower-cased, first value), `c.headerAll('name')` (every value, multi-value symmetry), `c.remoteAddress`. `c.param<T>('name')` parses a path capture — String/int/double/bool (bad input → 400). Query parameters are fully symmetric with `param`: `c.query<T>('name')` (absence → 400 too — required-ness is expressed by which accessor you call, not by a flag), `c.tryQuery<T>('name')` (absence → null, the optional form), `c.queryAll<T>('name')` (repeated `?tag=a&tag=b` keys; absence → `[]`). `c.get<T>(key)` / `c.tryGet` / `c.set` use identity `Key<T>('name')` (never const). `c.body()` decodes JSON (cached; bad JSON → 400; over the size limit → 413); `c.bodyBytes()` / `c.bodyStream()` for raw. `c.aborted` completes on timeout or disconnect (cooperative). Responses: `c.json(value, {status})`, `c.text(str, {status})` — `status` is named (Dart forbids optional-positional after named). `c.log` is `env.log` with reqId and route baked in. `c.routeDoc` is the matched route's opaque `doc` (a keta_openapi `RouteDoc` when present) — the core carries it without interpreting it; `enforceSecurity` (below) is what reads it.
 
 ## Errors & middleware
 
-Throw `KetaException(status, message, [detail])` for a controlled response. A
-non-removable last-resort fallback converts any uncaught error just before the
-transport: `KetaException` → its status + `{"error": message}`, anything else →
-500 + empty body + logged. `recover()` is the customizable form of the same.
-Built-in middleware: `accessLog()`, `recover()`, `cors(allowOrigins: [...])`,
-`timeout(Duration)`, `tracing()`. Apply with `app.use(...)`; they run in
-registration order, app-wide before group.
+`KetaException` is sealed — everything a handler may throw or a client may receive is one named subtype, each `const Xxx(message, [detail])`: `BadRequest` (400, the canonical parse/validation failure), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `PayloadTooLarge` (413, `maxBodyBytes` exceeded), `UnprocessableEntity` (422), `NotImplementedYet` (501), `Unavailable` (503), `GatewayTimeout` (504, `timeout()`). For a status with no named subtype, use the factory `KetaException.status(status, message, [detail])`. The one-sentence rule: throw a `KetaException` subtype and the response carries its status; every other exception (`ArgumentError`, `StateError`, `FormatException`, ...) is a defect → 500, logged, no detail leaked. A non-removable last-resort fallback converts any uncaught error just before the transport: `KetaException` → its status + `{"error": message}`, anything else → 500 + empty body + logged. `recover()` is the customizable form of the same — being sealed, an exhaustive `switch` works when you override it. Built-in middleware: `accessLog()`, `recover()`, `cors(allowOrigins: [...])`, `timeout(Duration)`, `tracing()`. Apply with `app.use(...)`; they run in registration order, app-wide before group.
 
 ## Canonical forms (write these exactly)
 
@@ -122,23 +110,27 @@ sealed class Event {
   factory Event.fromJson(Map<String, Object?> json) => switch (json['type']) {
         'created' => Created.fromJson(json),
         'deleted' => Deleted.fromJson(json),
-        _ => throw const KetaException(400, 'unknown event type'),
+        _ => throw const BadRequest('unknown event type'),
       };
   Map<String, Object?> toJson();
 }
 ```
 
 A single `Schema` constant is one source of truth: OpenAPI output,
-`schema.validate(value)` (list of violations) and `schema.require<T>(value)`
-(throws `KetaException(400)` on any violation), and contract tests.
+`schema.validate(value)` (list of violations) and `schema.require(value)`
+(throws `BadRequest` with the violation list as `detail` on any violation),
+and contract tests.
 
 Usage: `final dto = UserDto.fromJson(userDtoSchema.require(await c.body()) as Map<String, Object?>);`
 (`require` validates and returns its input unchanged — `Object? require(Object?)`; the mapper does the typing.)
 
 ## OpenAPI
 
-Attach `doc: RouteDoc(response: schema, requestBody: schema, summary: ...,
-responses: {code: schema})` to a route. Emit the document (the code's shadow):
+Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., failureResponses: {code: schema}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe). `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag.
+
+Security is declared, never inferred from middleware. `RouteDoc.security: [bearer]` (an OR-list of schemes; provided constants `bearer`, `apiKey`) overrides the global default passed to `OpenApi.fromRoutes(security: [...])`; `null` follows that default, `[]` declares the route explicitly public. A route with declared security gains an automatic `401` response unless you documented one yourself. The runtime counterpart is opt-in: build one `SecurityPolicy(defaults: [...], verifiers: {schemeName: (c) => bool_or_Future<bool>})` and wire it once, upstream, with `app.use(enforceSecurity(policy))`. It reads the matched route's security off `c.routeDoc` (falling back to `policy.defaults` when the route declares none), OR-combines the required schemes' verifiers, and throws `Unauthorized` when none pass; an empty list (explicitly public) skips the check. A verifier may `c.set` a principal `Key` as a side effect on success — authorization (roles) stays ordinary middleware, not the gate's job.
+
+Emit the document (the code's shadow):
 
 ```dart
 final spec = OpenApi.fromRoutes(app.routes, title: 'API', version: '0.1.0');
@@ -157,8 +149,8 @@ as `String`.
 ## Testing
 
 `TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/
-delete/patch`, returning a `TestResponse` with `status`, `headers`, `text()`,
-`json()`. `testContext(env, ...)` builds a `Context` for a single handler.
+delete/patch/head/options`, returning a `TestResponse` with `status`,
+`headers`, `text()`, `json()`. `testContext(env, ...)` builds a `Context` for a single handler.
 `testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation
 against both the synchronous-throw and rejected-Future failure shapes.
 
