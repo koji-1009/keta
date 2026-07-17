@@ -1,0 +1,64 @@
+# keta_rds
+
+A PostgreSQL [`Db`](../keta_db) adapter for keta. It delegates the wire protocol to [package:postgres](https://pub.dev/packages/postgres) — keta writes no bytes of its own — and owns exactly three things: a bounded connection pool behind `reader`/`writer`, the translation of the driver's errors into keta's sealed exceptions, and the §3 type-mapping contract on the rows that come back.
+
+## Connecting
+
+```dart
+// From a URL (what KETA_DB carries; sslmode etc. ride as query params):
+final db = RdsDb.url('postgres://user:pass@host:5432/app?sslmode=disable');
+
+// Or from an endpoint, with an optional read replica:
+final db = RdsDb(
+  Endpoint(host: 'primary', database: 'app', username: 'u', password: 'p'),
+  readerEndpoint: Endpoint(host: 'replica', database: 'app', username: 'u', password: 'p'),
+  settings: const ConnectionSettings(sslMode: SslMode.require),
+);
+```
+
+`reader` and `writer` share one pool aimed at the primary unless a reader endpoint is given, in which case reads go to a second pool aimed at the replica.
+
+## The pool model
+
+Each `query`/`execute` checks out a connection for that one call and returns it immediately; `transaction(f)` pins one connection from the writer pool for its whole `BEGIN`..`COMMIT`/`ROLLBACK` span. At most `maxConnections` connections are ever live per pool (default 10). Opening is lazy and idle connections are reused. A checkout that cannot be satisfied within `acquireTimeout` (default 30s) fails with `Unavailable` (503) rather than blocking forever — a saturated pool is transient overload, not a deadlock.
+
+Pool ceilings are **per isolate and per pool**. Behind a proxy such as RDS Proxy, keep them small, and size the sum across isolates against the server's connection limit.
+
+## Placeholders
+
+SQL uses `?` positional placeholders, exactly as in keta_sqlite, so the same statement runs on either engine — the driver desugars them to PostgreSQL's `$1` form. A parameterless statement is sent via the simple query protocol, which is what lets a migration file carry several `;`-separated statements in one `execute`.
+
+## Error-translation floor
+
+The adapter translates only the conditions a caller can act on into keta's vocabulary, so a handler never imports package:postgres to learn what went wrong and does not break when pointed at another engine:
+
+| Condition | SQLSTATE / source | keta exception |
+|---|---|---|
+| uniqueness violation | `23505` | `Conflict` (409) — the driver's constraint/detail carried in `detail`, withheld from the client |
+| lock unobtainable in time | `55P03` | `Unavailable` (503) |
+| server refusing new work | `53300`, `57P03` | `Unavailable` (503) |
+| server unreachable / connection lost / pool-acquire timeout | socket error, connection-fatal `PgException`, pool timeout | `Unavailable` (503) |
+
+Everything else passes through exactly as the driver threw it. A NOT NULL, CHECK, or FOREIGN KEY violation is the app's own bug: it earns the 500 it gets, and a 409 would only tell the client to retry the unretryable. This is a floor — an adapter may translate more, never less.
+
+## Type contract
+
+Rows come back as column-name maps. `integer` → `int`, `double precision` → `double`, `boolean` → `bool`, `null` → `null` with the key present, and `numeric`/`decimal` → `String` (precision preserved — this adapter is the first that can fully honour that clause). Timestamps decode to ISO 8601 strings; `bytea` to a fixed-length `List<int>`. Values outside the contract (json/jsonb, arrays, geometric types) pass through as the driver decoded them.
+
+## Migrations
+
+```bash
+export KETA_DB='postgres://user:pass@host:5432/app'
+dart run keta_rds:migrate            # applies migrations/*.sql in numeric order
+dart run keta_rds:migrate ./schema   # override the directory
+```
+
+The runner lives in keta_db; the bin ships here because a pure keta_db bin cannot open a Postgres connection without a ring cycle. Files are `NNNN_name.sql`, applied in ascending numeric order, each recorded in `_keta_migrations` so it runs at most once. No down files — fixes go forward.
+
+### The single-applier rule
+
+`applyMigrations` assumes **exactly one concurrent applier** and ships no advisory-lock arbitration. A multi-node deployment serializes application externally — a CI/CD step, an init container, or a dedicated job runs the migrate bin **once, before any server isolate is spawned**. What runs per node/isolate at boot is the read-only `db.verifyMigrations(dir)`, which never writes (so N concurrent runs are safe) and fails loudly if the schema is behind. Should two appliers race anyway, the `_keta_migrations` primary key plus PostgreSQL's transactional DDL turns the collision into a loud failure, not silent corruption.
+
+## Tests
+
+Unit tests (pool checkout/exhaustion, error translation, URL parsing) run with no server. The contract suite in `test/rds_contract_test.dart` runs against a real database only when `KETA_TEST_PG` names one (a `postgres://` URL); absent that, it is reported as **skipped**, never as a silent pass.
