@@ -15,20 +15,48 @@ import 'package:sqlite3/sqlite3.dart';
 /// spanning the awaits inside `f`. This makes concurrent requests correct
 /// (no interleaving into an open transaction, no spurious "nesting" error) —
 /// serialization matches SQLite's semantics rather than compromising them.
+///
+/// **Stated constraint**: sqlite3 calls are synchronous FFI on the serving
+/// isolate. A slow query blocks that isolate's entire event loop — every other
+/// request it is handling, DB-bound or not, stalls until the call returns.
+/// This is a property of embedding SQLite in-process, not a bug; the
+/// mitigations are `serve(isolates: n)` (so one slow query does not stall the
+/// whole process) and keeping queries indexed and small.
 class SqliteDb implements Db {
   SqliteDb._(this._db, this._lockTimeout);
 
   /// Opens (creating if absent) the database at [path]. [lockTimeout] bounds how
-  /// long a statement waits to acquire the single-writer lock (default 30s).
+  /// long a statement waits to acquire the single-writer lock (default 30s), and
+  /// is also used as this connection's `busy_timeout` PRAGMA (see [_open]).
   factory SqliteDb.open(
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),
-  }) => SqliteDb._(sqlite3.open(path), lockTimeout);
+  }) => SqliteDb._(_open(sqlite3.open(path), lockTimeout), lockTimeout);
 
   /// Opens a private in-memory database. See [open] for [lockTimeout].
   factory SqliteDb.memory({
     Duration lockTimeout = const Duration(seconds: 30),
-  }) => SqliteDb._(sqlite3.openInMemory(), lockTimeout);
+  }) => SqliteDb._(_open(sqlite3.openInMemory(), lockTimeout), lockTimeout);
+
+  /// Applies the PRAGMA contract every connection opens with, then returns it.
+  ///
+  /// `foreign_keys = ON`: sqlite3 defaults this OFF for backwards compatibility
+  /// with pre-3.6.19 databases — a default this framework has no reason to
+  /// inherit. Without it, a migration that declares `FOREIGN KEY` constraints
+  /// gets silent non-enforcement, which is worse than not declaring the
+  /// constraint at all (the schema documents an invariant nothing checks).
+  ///
+  /// `busy_timeout`: bounds how long sqlite3's own retry loop waits for a
+  /// cross-connection (cross-process or cross-isolate) lock before returning
+  /// `SQLITE_BUSY`, mirroring the in-process queue's [lockTimeout] bound — a
+  /// second connection on the same file should wait no longer than a same-
+  /// process caller does before getting a loud, bounded failure.
+  static Database _open(Database db, Duration lockTimeout) {
+    db.execute('PRAGMA foreign_keys = ON');
+    db.execute('PRAGMA busy_timeout = ${lockTimeout.inMilliseconds}');
+    return db;
+  }
+
   final Database _db;
   final Object _txZoneKey = Object();
   // The token of the transaction currently executing, or null between them. Each
@@ -153,7 +181,7 @@ const _uniquenessViolations = {
 };
 
 /// Runs [action], translating the driver's uniqueness violations into keta's
-/// [Conflict].
+/// [Conflict], and a cross-connection lock timeout into [Unavailable].
 ///
 /// Without this the app has to catch `SqliteException` and match code 1555 to
 /// answer 409 — which means importing package:sqlite3 into a handler, coupling
@@ -172,6 +200,17 @@ T _translating<T>(T Function() action) {
       // `detail` is for: recover() logs it, and KetaException.toString() keeps
       // it out of the response.
       throw Conflict('row already exists', e.message);
+    }
+    if (e.resultCode == SqlError.SQLITE_BUSY) {
+      // The in-process lock (above) only ever serializes callers on *this*
+      // SqliteDb; SQLITE_BUSY means a *different* connection — another
+      // process, or another isolate that opened the same file — held the
+      // lock past our `busy_timeout`. Same "lock unobtainable in time"
+      // condition as the in-process queue's Unavailable, just crossing a
+      // connection boundary the queue cannot see.
+      throw const Unavailable(
+        'database busy: could not acquire the lock in time',
+      );
     }
     rethrow;
   }

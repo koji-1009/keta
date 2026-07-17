@@ -18,6 +18,12 @@ class FakeDb implements Db {
   /// When set, an `execute` whose SQL contains this substring throws.
   String? failOn;
 
+  /// When set, any `query` throws this instead of running — simulating a
+  /// broken/unreachable connection (as opposed to a merely-missing ledger
+  /// table, which `_select` still reports through the normal "unexpected
+  /// query" path once this is checked first).
+  Error? unreachable;
+
   bool _inTx = false;
 
   @override
@@ -56,6 +62,8 @@ class FakeDb implements Db {
   }
 
   List<Map<String, Object?>> _select(String sql) {
+    if (unreachable case final e?) throw e;
+    if (sql == 'select 1') return const [];
     if (sql == 'select version from _keta_migrations') {
       return [
         for (final row in ledger) {'version': row['version']},

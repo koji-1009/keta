@@ -75,5 +75,26 @@ void main() {
         );
       },
     );
+
+    test('an unreachable database surfaces its own error, not a '
+        'pending-migrations StateError', () async {
+      m('0001_one.sql', 'create table one (id integer);');
+      final db = FakeDb()..unreachable = StateError('connection closed');
+
+      // Before the connectivity probe, this failure was indistinguishable
+      // from "the ledger table does not exist" and got reported as 1
+      // unapplied migration — hiding the real problem (the db is
+      // unreachable) behind a misleading one.
+      await expectLater(
+        db.verifyMigrations(dir.path),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'connection closed',
+          ),
+        ),
+      );
+    });
   });
 }

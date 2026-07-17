@@ -28,6 +28,21 @@ class MigrationResult {
 /// once. Each migration and its bookkeeping row commit together, so a failure
 /// leaves the schema exactly at the last fully-applied version. There is no
 /// rollback path — fixes go forward.
+///
+/// **Single-applier contract (2026-07-17 adjudication)**: this function
+/// assumes exactly one concurrent applier. It takes no advisory lock and
+/// arbitrates nothing between callers — two processes racing this function
+/// against the same database can both read the ledger as "0003 pending" and
+/// both attempt to apply it. Multi-node deployments must serialize
+/// application externally (a CI/CD step, an init container, a dedicated job
+/// that runs once before the fleet boots) — keta ships no such arbitration.
+/// The division of labour is: apply is externally serialized (this
+/// function, run once); [VerifyMigrations.verifyMigrations] is what each
+/// node/isolate runs at boot, and it only reads. If the single-applier
+/// assumption is broken anyway, the ledger's per-version primary key plus
+/// transactional DDL (on engines that have it) turns the race into a loud
+/// failure — a duplicate-key violation surfacing as this function's
+/// [StateError] — rather than silent corruption.
 Future<MigrationResult> applyMigrations(
   Db db, {
   String directory = 'migrations',
@@ -132,16 +147,28 @@ extension VerifyMigrations on Db {
   /// database fails loudly once at boot rather than as a rain of per-request
   /// 500s. Unlike [applyMigrations] it never writes, so running it in every
   /// isolate concurrently is safe.
+  ///
+  /// A broken connection (unreachable database, corrupt file, ...) surfaces as
+  /// its own error, not as this function's "unapplied migrations" StateError:
+  /// those are different failures an operator must not confuse, so basic
+  /// connectivity is probed before the ledger table is even consulted.
   Future<void> verifyMigrations([String directory = 'migrations']) async {
     final onDisk = loadMigrations(directory);
+    // Prove the connection itself works before asking about the ledger table.
+    // Only *this* query is allowed to fail as "the db is unreachable" — left
+    // unguarded, it rethrows as-is, distinct from the missing-table fallback
+    // below.
+    await reader.query('select 1');
     Set<String> applied;
     try {
       final rows = await reader.query('select version from _keta_migrations');
       applied = {for (final row in rows) row['version'] as String};
     } on Object {
-      // The ledger table does not exist yet (nothing has ever been applied):
-      // treat it as empty rather than leaking a driver error. The pending list
-      // below reports every migration as unapplied, which is the truth.
+      // With connectivity already proven above, the only failure this catch
+      // can still see is "the ledger table does not exist yet" (nothing has
+      // ever been applied): treat it as empty rather than leaking a driver
+      // error. The pending list below reports every migration as unapplied,
+      // which is the truth.
       applied = const {};
     }
     final pending = [
