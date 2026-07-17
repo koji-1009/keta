@@ -5,12 +5,31 @@ import 'package:keta_openapi/keta_openapi.dart';
 
 import 'auth.dart';
 import 'env.dart';
+import 'events.dart';
 import 'user_dto.dart';
+
+/// A custom [Capture]: the typed-DSL extension point, projecting a `Role` into a
+/// path segment. `Capture<T>(parse, schema: ...)` is the whole contract — [parse]
+/// throws [BadRequest] on bad input (→ 400, decided by the declaration, not by a
+/// handler remembering to validate), and [schema] is the OpenAPI fragment carried
+/// as data. The enum is the single source of the role vocabulary: this `enum`
+/// lookup, the DTO schema's `enum` list, and this capture's `enum` schema all
+/// read from the same three names, so they cannot drift.
+final roleCapture = Capture<Role>(
+  (s) =>
+      Role.values.asNameMap()[s] ??
+      (throw BadRequest('unknown role: "$s" (expected admin or member)')),
+  schema: const {
+    'type': 'string',
+    'enum': ['admin', 'member'],
+  },
+);
 
 /// Registers every route on [app]. Both routing syntaxes appear: the string
 /// form with `c.param`, and the typed `on()`-builder handing the handler its
-/// captured tuple.
-void register(App<Env> app) {
+/// captured tuple. [events] is the buildApp-scoped feed the write handlers
+/// publish to and the `/users/events` SSE route streams from.
+void register(App<Env> app, UserEvents events) {
   // `security: []` is not "no opinion" — it is "public", and it overrides the
   // global default. A route that simply omits RouteDoc.security inherits the
   // default instead, which is why the distinction is worth showing.
@@ -26,26 +45,36 @@ void register(App<Env> app) {
     ),
   );
 
-  // A list endpoint: query parameters drive pagination (?limit) and filtering
-  // (?role) — declared for OpenAPI, read with the optional accessor + a
-  // code-side default. The response is a nested DTO (UserList wraps UserDto).
+  // A list endpoint: query parameters drive pagination (?limit=&offset=) and
+  // filtering (?role) — declared for OpenAPI, read with the optional accessor +
+  // a code-side default. The response is a nested DTO (UserList wraps UserDto):
+  // `items` is this page, `total` is the full match count so a client can page.
   app.get(
     '/users',
     (c) async {
-      final limit = c.tryQuery<int>('limit') ?? 20;
+      // Clamp both bounds rather than trust them: an unbounded limit lets one
+      // request scan the whole table, and a negative limit/offset is a SQL error
+      // waiting to happen. `clamp` turns an out-of-range value into the nearest
+      // legal one — a paging UI that overshoots the last page gets an empty
+      // `items` with the right `total`, not a 400 and not a crash.
+      final limit = (c.tryQuery<int>('limit') ?? 20).clamp(1, 100);
+      final offset = (c.tryQuery<int>('offset') ?? 0).clamp(0, 1 << 31);
       final role = c.tryQuery<String>('role');
       final where = role == null ? '' : ' where role = ?';
       final rows = await c.env.db.reader.query(
-        'select id, name, age, role, tags from users$where limit ?',
-        role == null ? [limit] : [role, limit],
+        'select id, name, age, role, tags from users$where '
+        'order by id limit ? offset ?',
+        role == null ? [limit, offset] : [role, limit, offset],
       );
+      // `total` counts the whole filtered set, independent of limit/offset — it
+      // is what a client divides by page size, so it must ignore the window.
       final total = await c.env.db.reader.query(
         'select count(*) as n from users$where',
         role == null ? const [] : [role],
       );
       return c.json(
         UserList(
-          users: [for (final r in rows) UserDto.fromRow(r)],
+          items: [for (final r in rows) UserDto.fromRow(r)],
           total: total.first['n'] as int,
         ).toJson(),
       );
@@ -53,9 +82,76 @@ void register(App<Env> app) {
     doc: const RouteDoc(
       success: Success(schema: userListSchema),
       summary: 'List users',
-      query: [QueryParam('limit', integer), QueryParam('role', string)],
+      query: [
+        QueryParam('limit', integer),
+        QueryParam('offset', integer),
+        QueryParam('role', string),
+      ],
     ),
   );
+
+  // A typed-DSL route driven by the custom [roleCapture]: `:role` is parsed to a
+  // `Role`, so an unknown role is a 400 at the boundary and the handler receives
+  // a value that is already valid. This is the same list+total shape as `/users`,
+  // narrowed to one role by the path rather than the `?role` query — a second,
+  // typed door onto the same data that shows a `Capture<T>` in the `on()` DSL.
+  app
+      .on(
+        root.segments('users').segments('by-role').capture(roleCapture('role')),
+      )
+      .get(
+        (c, (Role,) p) async {
+          final rows = await c.env.db.reader.query(
+            'select id, name, age, role, tags from users where role = ? order by id',
+            [p.$1.name],
+          );
+          return c.json(
+            UserList(
+              items: [for (final r in rows) UserDto.fromRow(r)],
+              total: rows.length,
+            ).toJson(),
+          );
+        },
+        doc: const RouteDoc(
+          success: Success(schema: userListSchema),
+          summary: 'List users of a role',
+        ),
+      );
+
+  // Server-Sent Events: a live feed of create/update/delete, streamed from the
+  // buildApp-scoped [events] bus the write handlers below publish to. The doc's
+  // Success carries the `text/event-stream` content type and a schema for each
+  // event's JSON `data` payload — the content type names the transport, the
+  // schema names what a single event decodes to (OpenAPI has no first-class
+  // event-stream shape, so this is the honest projection). Security is inherited,
+  // not declared: `/users/events` follows the secure-by-default [bearer], so the
+  // gate runs and answers 401 *before* `c.sse` ever opens a stream — an
+  // anonymous subscriber never gets a socket, only a status.
+  app.get(
+    '/users/events',
+    (c) => c.sse(events.stream, keepAlive: const Duration(seconds: 15)),
+    doc: const RouteDoc(
+      success: Success(
+        schema: userEventSchema,
+        contentType: 'text/event-stream',
+      ),
+      summary: 'Live feed of user create/update/delete events',
+      description:
+          'An EventSource stream. Each event is named created, updated, or '
+          'deleted and carries {"kind","id"}. Requires a bearer token: the '
+          'security gate answers 401 before the stream opens.',
+      tags: ['users', 'events'],
+      operationId: 'streamUserEvents',
+    ),
+  );
+
+  // The WebSocket companion to this SSE feed lives in examples/websocket, not
+  // here, for a concrete reason: this app mounts `cors()` app-wide, and cors
+  // rebuilds every response to merge its headers — a rebuild that does not carry
+  // the `Upgrade` value, so a handshake behind cors is answered 101 without ever
+  // switching. SSE survives (its stream body is preserved through the rebuild);
+  // an upgrade does not. The dedicated example demonstrates the working
+  // handshake (and the same 401-before-upgrade gate) with no cors in front.
 
   app.get(
     '/users/:id',
@@ -80,6 +176,12 @@ void register(App<Env> app) {
         'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
         [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
       );
+      // Publish only after the write succeeds: a duplicate id throws Conflict
+      // above and this line never runs, so the feed never announces a create
+      // that did not happen. (A production system would emit on transaction
+      // commit, not here — close enough for a demo where the tx wraps the
+      // request.)
+      events.publish('created', dto.id);
       // 201 Created with a Location header — response headers via the helper.
       return c.text(
         'created',
@@ -145,6 +247,7 @@ void register(App<Env> app) {
         [dto.name, dto.age, dto.role.name, dto.tags.join(','), pathId],
       );
       if (changed == 0) throw const NotFound('user not found');
+      events.publish('updated', pathId);
       return c.json(dto.toJson());
     },
     doc: const RouteDoc(
@@ -157,11 +260,13 @@ void register(App<Env> app) {
   app.delete(
     '/users/:id',
     (c) async {
+      final id = c.param<String>('id');
       final changed = await c.get(txConn).execute(
         'delete from users where id = ?',
-        [c.param<String>('id')],
+        [id],
       );
       if (changed == 0) throw const NotFound('user not found');
+      events.publish('deleted', id);
       return Response(204);
       // 204 with no body, which is what the handler answers. Declared, because a
       // fabricated 200 was right only by luck and here it was wrong.
@@ -221,15 +326,25 @@ void register(App<Env> app) {
       final fields = <String, String>{};
       final files = <Map<String, Object?>>[];
       await for (final part in parts(c)) {
+        // A form part with no `name` is malformed for a form submission, and the
+        // old `part.name ?? ''` silently collapsed every unnamed part onto the
+        // one `''` key — the second overwrote the first, losing data with no
+        // error. Reject it instead, naming the constraint. (Indexing unnamed
+        // parts by position would be the other honest choice; rejecting is the
+        // stricter one, and a demo should not invent field names.)
+        final name = part.name;
+        if (name == null) {
+          throw const BadRequest('every multipart part must carry a name');
+        }
         if (part.filename != null) {
           final bytes = await part.bytes();
           files.add({
-            'field': part.name,
+            'field': name,
             'filename': part.filename,
             'size': bytes.length,
           });
         } else {
-          fields[part.name ?? ''] = await part.text();
+          fields[name] = await part.text();
         }
       }
       return c.json({'fields': fields, 'files': files});

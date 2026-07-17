@@ -1,3 +1,4 @@
+import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
@@ -12,15 +13,25 @@ final exported = Exported<Env>(
       final fields = <String, String>{};
       final files = <Map<String, Object?>>[];
       await for (final part in parts(c)) {
+        // A form part with no `name` is malformed for a form submission, and the
+        // old `part.name ?? ''` silently collapsed every unnamed part onto the
+        // one `''` key — the second overwrote the first, losing data with no
+        // error. Reject it instead, naming the constraint. (Indexing unnamed
+        // parts by position would be the other honest choice; rejecting is the
+        // stricter one, and a demo should not invent field names.)
+        final name = part.name;
+        if (name == null) {
+          throw const BadRequest('every multipart part must carry a name');
+        }
         if (part.filename != null) {
           final bytes = await part.bytes();
           files.add({
-            'field': part.name,
+            'field': name,
             'filename': part.filename,
             'size': bytes.length,
           });
         } else {
-          fields[part.name ?? ''] = await part.text();
+          fields[name] = await part.text();
         }
       }
       return c.json({'fields': fields, 'files': files});

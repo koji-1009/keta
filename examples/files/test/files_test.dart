@@ -277,4 +277,93 @@ void main() {
       400,
     );
   });
+
+  test(
+    'pagination clamps bounds, pages with offset, and keeps ?role working',
+    () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+      // ids 1..3, ordered by id; roles let ?role be exercised alongside paging.
+      for (final r in [('1', 'admin'), ('2', 'member'), ('3', 'member')]) {
+        await client.post(
+          '/users',
+          headers: admin,
+          json: {
+            'id': r.$1,
+            'name': 'U${r.$1}',
+            'role': r.$2,
+            'tags': <String>[],
+          },
+        );
+      }
+      Future<List<String>> page(String q) async {
+        final body =
+            (await client.get('/users$q', headers: admin)).json()! as Map;
+        return [
+          for (final u in body['items'] as List) (u as Map)['id'] as String,
+        ];
+      }
+
+      final all = (await client.get('/users', headers: admin)).json()! as Map;
+      expect(all['total'], 3);
+      expect(await page(''), ['1', '2', '3']);
+      // Offset windows the page; total stays the full count.
+      expect(await page('?limit=2&offset=1'), ['2', '3']);
+      // Out of range → empty page, total intact (not a 400).
+      final over =
+          (await client.get('/users?offset=99', headers: admin)).json()! as Map;
+      expect(over['items'], isEmpty);
+      expect(over['total'], 3);
+      // Clamped bounds don't error.
+      expect(await page('?limit=9999'), ['1', '2', '3']);
+      expect(await page('?offset=-5'), ['1', '2', '3']);
+      // ?role still filters, with its own total.
+      final members =
+          (await client.get('/users?role=member', headers: admin)).json()!
+              as Map;
+      expect(members['total'], 2);
+      expect(await page('?role=member'), ['2', '3']);
+    },
+  );
+
+  test('a comma in a tag is a 400 naming the CSV constraint', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+    final bad = await client.post(
+      '/users',
+      headers: admin,
+      json: {
+        'id': '1',
+        'name': 'Ada',
+        'role': 'admin',
+        'tags': ['a,b'],
+      },
+    );
+    expect(bad.status, 400);
+    expect((bad.json()! as Map)['error'], contains('comma'));
+    // The write never happened — the boundary rejected before the insert.
+    expect((await client.get('/users/1', headers: admin)).status, 404);
+  });
+
+  test(
+    'the per-buildApp metrics registry is scraped through the store',
+    () async {
+      // routes/metrics.dart reads the registry provideMetrics put in the request
+      // store — the buildApp-scoped one otel records into. A broken wiring would
+      // be a 500 here (c.get on an absent key), so a green scrape proves the
+      // per-buildApp scoping actually reaches the file-routed handler.
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+      await client.get('/health'); // record a request into the registry
+      final scrape = await client.get(
+        '/metrics',
+        headers: const {'x-api-key': 'k-metrics'},
+      );
+      expect(scrape.status, 200);
+      expect(scrape.text(), contains('keta_requests_total'));
+    },
+  );
 }

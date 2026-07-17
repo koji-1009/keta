@@ -13,15 +13,15 @@ import 'observability.dart';
 
 // keta_files:imports
 // dart format off
-import 'routes/admin/ping.dart' as $admin_ping;
-import 'routes/health.dart' as $health;
-import 'routes/metrics.dart' as $metrics;
-import 'routes/uploads.dart' as $uploads;
-import 'routes/users.dart' as $users;
-import 'routes/users/_id.dart' as $users_id;
-import 'routes/users/_uid/tags/_index.dart' as $users_uid_tags_index;
-import 'routes/whoami.dart' as $whoami;
-import 'routes/admin/_middleware.dart' as $mw$admin;
+import 'routes/admin/ping.dart' as $admin_ping; // ignore: directives_ordering, library_prefixes
+import 'routes/health.dart' as $health; // ignore: directives_ordering, library_prefixes
+import 'routes/metrics.dart' as $metrics; // ignore: directives_ordering, library_prefixes
+import 'routes/uploads.dart' as $uploads; // ignore: directives_ordering, library_prefixes
+import 'routes/users.dart' as $users; // ignore: directives_ordering, library_prefixes
+import 'routes/users/_id.dart' as $users_id; // ignore: directives_ordering, library_prefixes
+import 'routes/users/_uid/tags/_index.dart' as $users_uid_tags_index; // ignore: directives_ordering, library_prefixes
+import 'routes/whoami.dart' as $whoami; // ignore: directives_ordering, library_prefixes
+import 'routes/admin/_middleware.dart' as $mw$admin; // ignore: directives_ordering, library_prefixes
 // dart format on
 // keta_files:end
 
@@ -39,12 +39,18 @@ import 'routes/admin/_middleware.dart' as $mw$admin;
 /// browser as an opaque CORS failure instead of the status it is. tx is
 /// innermost, so a request the gate rejects opens no transaction.
 App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
+  // Scoped here, not a global: otel records into this registry and
+  // routes/metrics.dart scrapes it, and two apps in one isolate must not share
+  // one — see observability.dart. provideMetrics hands it to the file-routed
+  // metrics handler through the request store, the only channel it has.
+  final metrics = MetricsRegistry();
   final app = App<Env>()
     ..use(accessLog())
     ..use(cors(allowOrigins: const ['*']))
     ..use(recover())
     ..use(timeout(requestTimeout))
     ..use(otel(metrics: metrics))
+    ..use(provideMetrics(metrics))
     ..use(enforceSecurity(securityPolicy()))
     ..use(tx());
   register(app);

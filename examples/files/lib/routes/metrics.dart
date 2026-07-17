@@ -7,12 +7,14 @@ import 'package:keta_otel/keta_otel.dart';
 /// Metrics are not public: apiKey rather than the bearer everything else uses,
 /// so the document carries two schemes and the gate honours both.
 ///
-/// `final`, not `const` like every other route file: metricsHandler closes over
-/// the registry, and a closure is not a constant. Built once here rather than
-/// rebuilt on every scrape.
+/// The registry is per-buildApp (see observability.dart), not a global this
+/// static value could close over. This handler reaches it the only way a
+/// file-routed handler can — through the request store that `provideMetrics`
+/// filled — and hands it to `metricsHandler` to render. The per-request
+/// `metricsHandler` allocation is trivial next to a Prometheus scrape.
 final exported = Exported<Env>(
   get: Serve(
-    metricsHandler<Env>(metrics),
+    (c) => metricsHandler<Env>(c.get(metricsRegistryKey))(c),
     doc: const RouteDoc(
       success: Success(),
       summary: 'Prometheus metrics',

@@ -5,6 +5,7 @@ import 'package:keta_otel/keta_otel.dart';
 
 import 'auth.dart';
 import 'env.dart';
+import 'events.dart';
 import 'routes.dart';
 
 /// Builds the fully-configured application: middleware plus every route. Pure
@@ -35,6 +36,10 @@ import 'routes.dart';
 /// untested ordering rule is a comment, not a rule.
 App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
   final metrics = MetricsRegistry();
+  // Scoped here, not a global: the write handlers and the SSE feed share this
+  // one bus, but two apps built in one isolate (every test that calls buildApp)
+  // must not cross-talk — the same reason `metrics` is a local.
+  final events = UserEvents();
   final app = App<Env>()
     ..use(accessLog())
     ..use(cors(allowOrigins: const ['*']))
@@ -43,7 +48,7 @@ App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
     ..use(otel(metrics: metrics))
     ..use(enforceSecurity(securityPolicy()))
     ..use(tx());
-  register(app);
+  register(app, events);
   // Metrics are not public: apiKey rather than the bearer everything else uses,
   // so the document carries two schemes and the gate honours both.
   app.get(

@@ -25,3 +25,4 @@ workspace:
   - examples/register
   - examples/files
   - examples/auth
+  - examples/websocket

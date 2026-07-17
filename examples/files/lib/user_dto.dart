@@ -1,6 +1,27 @@
+import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 
 enum Role { admin, member }
+
+/// Rejects a tag containing a comma, at the parse boundary where client input
+/// first becomes a [UserDto]. The demo stores tags as a comma-joined CSV column
+/// (see [UserDto.fromRow]), so a tag with its own comma would split into two on
+/// the way back out — a silent, data-corrupting round-trip. A real app would use
+/// a join table and this limit would not exist; the guard is the honest cost of
+/// the CSV shortcut, named at the boundary instead of hidden. Returns the tags
+/// unchanged when they are all legal, so it reads inline in `fromJson`.
+List<String> _checkedTags(List<String> tags) {
+  for (final tag in tags) {
+    if (tag.contains(',')) {
+      throw BadRequest(
+        'a tag may not contain a comma ("$tag"): tags are stored as a CSV '
+        'column, so a comma would corrupt the round-trip — a real app would '
+        'use a join table',
+      );
+    }
+  }
+  return tags;
+}
 
 class UserDto {
   const UserDto({
@@ -11,12 +32,17 @@ class UserDto {
     required this.tags,
   });
 
+  // Kept as the canonical `=> UserDto(field: json['key'] as T, ...)` shape so
+  // keta_lints' canonical checker still recognizes and round-trips it — the tag
+  // validation rides in through the `tags:` argument's helper rather than a
+  // hand-written block body, which would make the factory "hand-modified" and
+  // silently disable the drift check.
   factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
     id: json['id'] as String,
     name: json['name'] as String,
     age: json['age'] as int?,
     role: Role.values.byName(json['role'] as String),
-    tags: (json['tags'] as List).cast<String>(),
+    tags: _checkedTags((json['tags'] as List).cast<String>()),
   );
 
   /// Constructs from a database row, where `tags` is a comma-joined column and
@@ -66,20 +92,27 @@ const userDtoSchema = Schema('UserDto', {
 
 /// A paginated list response — a nested DTO: it references [UserDto] via `$ref`
 /// and carries it in `deps`, so the walker collects it into components.
+///
+/// `items` + `total` is the generic pagination envelope: `items` is this page's
+/// rows (bounded by `?limit`/`?offset`), `total` is how many match the query
+/// across all pages. `fromJson` is kept even though the server only emits this
+/// shape: a Schema-backed DTO is round-trippable by this repo's canonical
+/// convention (keta_lints' `keta_canonical_missing` flags a class with a Schema
+/// and `toJson` but no `fromJson`).
 class UserList {
-  const UserList({required this.users, required this.total});
+  const UserList({required this.items, required this.total});
 
   factory UserList.fromJson(Map<String, Object?> json) => UserList(
-    users: (json['users'] as List)
+    items: (json['items'] as List)
         .map((e) => UserDto.fromJson(e as Map<String, Object?>))
         .toList(),
     total: json['total'] as int,
   );
-  final List<UserDto> users;
+  final List<UserDto> items;
   final int total;
 
   Map<String, Object?> toJson() => {
-    'users': [for (final u in users) u.toJson()],
+    'items': [for (final u in items) u.toJson()],
     'total': total,
   };
 }
@@ -88,9 +121,9 @@ const userListSchema = Schema(
   'UserList',
   {
     'type': 'object',
-    'required': ['users', 'total'],
+    'required': ['items', 'total'],
     'properties': {
-      'users': {
+      'items': {
         'type': 'array',
         'items': {r'$ref': '#/components/schemas/UserDto'},
       },
