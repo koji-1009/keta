@@ -19,7 +19,7 @@ List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
   final diagnostics = <Diagnostic>[];
   unit.accept(
-    _CascadeVisitor((offset) {
+    _CascadeVisitor((offset, length) {
       diagnostics.add(
         Diagnostic(
           rule: 'keta_tx_outside_recover',
@@ -30,6 +30,8 @@ List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) {
               'recover() first — ..use(recover())..use(tx())',
           file: file,
           scope: 'tx@$offset',
+          offset: offset,
+          length: length,
         ),
       );
     }),
@@ -39,35 +41,42 @@ List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) {
 
 class _CascadeVisitor extends RecursiveAstVisitor<void> {
   _CascadeVisitor(this.report);
-  final void Function(int txOffset) report;
+  final void Function(int txOffset, int txLength) report;
 
   @override
   void visitCascadeExpression(CascadeExpression node) {
     int? recoverOffset;
     int? txOffset;
+    int? txLength;
     for (final section in node.cascadeSections) {
       final mw = _useMiddleware(section);
       if (mw == null) continue;
       if (mw.$1 == 'recover') recoverOffset ??= mw.$2;
-      if (mw.$1 == 'tx') txOffset ??= mw.$2;
+      if (mw.$1 == 'tx' && txOffset == null) {
+        txOffset = mw.$2;
+        txLength = mw.$3;
+      }
     }
     // Flag only when both are present and tx() is registered first (outer).
     // tx() without recover() is fine — the core's last-resort fallback runs
     // outside all app middleware, so a rollback still precedes it.
     if (txOffset != null && recoverOffset != null && txOffset < recoverOffset) {
-      report(txOffset);
+      report(txOffset, txLength!);
     }
     super.visitCascadeExpression(node);
   }
 }
 
-/// If [section] is a `..use(mw())` cascade section, returns `(mwName, offset)`.
-(String, int)? _useMiddleware(Expression section) {
+/// If [section] is a `..use(mw())` cascade section, returns `(mwName, offset,
+/// length)` of the inner middleware call.
+(String, int, int)? _useMiddleware(Expression section) {
   if (section is! MethodInvocation || section.methodName.name != 'use') {
     return null;
   }
   final args = section.argumentList.arguments;
   if (args.length != 1) return null;
   final arg = args.first;
-  return arg is MethodInvocation ? (arg.methodName.name, arg.offset) : null;
+  return arg is MethodInvocation
+      ? (arg.methodName.name, arg.offset, arg.length)
+      : null;
 }

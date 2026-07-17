@@ -50,14 +50,14 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
   }
 
   void _check(FunctionExpression handler, Expression? doc) {
-    final accesses = <(String, String)>[];
+    final accesses = <(String, String, SimpleStringLiteral)>[];
     handler.body.accept(_QueryAccessCollector(accesses));
     if (accesses.isEmpty) return;
 
     final declared = _declaredQuery(doc);
     if (declared == null) return; // not an inspectable declaration
 
-    for (final (name, accessor) in accesses) {
+    for (final (name, accessor, literal) in accesses) {
       if (!declared.containsKey(name)) {
         diagnostics.add(
           Diagnostic(
@@ -67,6 +67,8 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
                 "add QueryParam('$name', ...) or fix the name",
             file: file,
             scope: name,
+            offset: literal.offset,
+            length: literal.length,
           ),
         );
       } else if (declared[name] == true && accessor == 'tryQuery') {
@@ -78,6 +80,8 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
                 'use c.query for a required parameter (or drop required:)',
             file: file,
             scope: name,
+            offset: literal.offset,
+            length: literal.length,
           ),
         );
       }
@@ -142,7 +146,7 @@ Expression? _namedArg(ArgumentList args, String name) {
 
 class _QueryAccessCollector extends RecursiveAstVisitor<void> {
   _QueryAccessCollector(this.accesses);
-  final List<(String, String)> accesses;
+  final List<(String, String, SimpleStringLiteral)> accesses;
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
@@ -150,10 +154,8 @@ class _QueryAccessCollector extends RecursiveAstVisitor<void> {
     if (_accessors.contains(node.methodName.name) &&
         args.length == 1 &&
         args.first is SimpleStringLiteral) {
-      accesses.add((
-        (args.first as SimpleStringLiteral).value,
-        node.methodName.name,
-      ));
+      final literal = args.first as SimpleStringLiteral;
+      accesses.add((literal.value, node.methodName.name, literal));
     }
     super.visitMethodInvocation(node);
   }

@@ -89,7 +89,8 @@ void _checkClass(
     }
   }
 
-  final className = node.namePart.typeName.lexeme;
+  final nameToken = node.namePart.typeName;
+  final className = nameToken.lexeme;
   // A DTO by signal only; abstract/sealed carriers are never canonical DTOs.
   final isDto =
       schemaNames.contains(className) || fromJson != null || toJson != null;
@@ -107,6 +108,8 @@ void _checkClass(
             'run keta_lints:fix to materialize the canonical mapper',
         file: file,
         scope: className,
+        offset: nameToken.offset,
+        length: nameToken.length,
       ),
     );
     return;
@@ -138,6 +141,8 @@ void _checkClass(
             'run keta_lints:fix to reconcile the mapper',
         file: file,
         scope: className,
+        offset: nameToken.offset,
+        length: nameToken.length,
       ),
     );
   }

@@ -22,7 +22,7 @@ List<Diagnostic> internalAwaitDiagnostics(
   final lines = source.split('\n');
   final diagnostics = <Diagnostic>[];
 
-  void report(int offset) {
+  void report(int offset, int length) {
     final line = lineInfo.getLocation(offset).lineNumber; // 1-based
     final current = line <= lines.length ? lines[line - 1] : '';
     final previous = line >= 2 ? lines[line - 2] : '';
@@ -38,6 +38,8 @@ List<Diagnostic> internalAwaitDiagnostics(
             'chain()/guard(), or justify it with // keta:allow-await',
         file: file,
         scope: 'L$line',
+        offset: offset,
+        length: length,
       ),
     );
   }
@@ -48,18 +50,20 @@ List<Diagnostic> internalAwaitDiagnostics(
 
 class _AwaitVisitor extends RecursiveAstVisitor<void> {
   _AwaitVisitor(this.report);
-  final void Function(int offset) report;
+  final void Function(int offset, int length) report;
 
   @override
   void visitAwaitExpression(AwaitExpression node) {
-    report(node.awaitKeyword.offset);
+    report(node.awaitKeyword.offset, node.awaitKeyword.length);
     super.visitAwaitExpression(node);
   }
 
   @override
   void visitForStatement(ForStatement node) {
     final awaitKeyword = node.awaitKeyword;
-    if (awaitKeyword != null) report(awaitKeyword.offset);
+    if (awaitKeyword != null) {
+      report(awaitKeyword.offset, awaitKeyword.length);
+    }
     super.visitForStatement(node);
   }
 }

@@ -37,20 +37,19 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
         args.length >= 2 &&
         args[0] is SimpleStringLiteral &&
         args[1] is FunctionExpression) {
-      _check(
-        (args[0] as SimpleStringLiteral).value,
-        args[1] as FunctionExpression,
-      );
+      _check(args[0] as SimpleStringLiteral, args[1] as FunctionExpression);
     }
     super.visitMethodInvocation(node);
   }
 
-  void _check(String path, FunctionExpression handler) {
+  void _check(SimpleStringLiteral pathLiteral, FunctionExpression handler) {
+    final path = pathLiteral.value;
     final captures = _captures(path);
-    final used = <String>{};
+    final used = <String, SimpleStringLiteral>{};
     handler.body.accept(_ParamCollector(used));
 
-    for (final name in used.difference(captures)) {
+    for (final name in used.keys.toSet().difference(captures)) {
+      final at = used[name]!;
       diagnostics.add(
         Diagnostic(
           rule: 'keta_param_unknown',
@@ -59,10 +58,12 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
               'add :$name to the route or fix the name',
           file: file,
           scope: '$path#$name',
+          offset: at.offset,
+          length: at.length,
         ),
       );
     }
-    for (final capture in captures.difference(used)) {
+    for (final capture in captures.difference(used.keys.toSet())) {
       diagnostics.add(
         Diagnostic(
           rule: 'keta_capture_unused',
@@ -71,6 +72,8 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
               'read it or remove it from the route',
           file: file,
           scope: '$path#$capture',
+          offset: pathLiteral.offset,
+          length: pathLiteral.length,
         ),
       );
     }
@@ -79,16 +82,18 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
 
 class _ParamCollector extends RecursiveAstVisitor<void> {
   _ParamCollector(this.names);
-  final Set<String> names;
+
+  /// Each read name mapped to the string literal of its first `c.param('...')`
+  /// occurrence, so an unknown-param diagnostic points at the offending call.
+  final Map<String, SimpleStringLiteral> names;
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (node.methodName.name == 'param' &&
         node.argumentList.arguments.length == 1 &&
         node.argumentList.arguments.first is SimpleStringLiteral) {
-      names.add(
-        (node.argumentList.arguments.first as SimpleStringLiteral).value,
-      );
+      final literal = node.argumentList.arguments.first as SimpleStringLiteral;
+      names.putIfAbsent(literal.value, () => literal);
     }
     super.visitMethodInvocation(node);
   }
