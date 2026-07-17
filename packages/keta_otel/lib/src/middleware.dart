@@ -10,12 +10,26 @@ import 'span.dart';
 
 final Random _random = Random.secure();
 
+/// The label recorded for the route dimension (metrics) and folded into the
+/// span name (traces) when a request matches no route.
+///
+/// App-level middleware wraps unmatched requests too (404/405), and for those
+/// `c.route` falls back to the raw request path — attacker-controlled and
+/// unbounded. Recording it would mint a permanent metrics series and a
+/// path-bearing span name per distinct path an attacker probes. This fixed
+/// label keeps the route dimension bounded regardless of what a client sends.
+const String _unmatchedRoute = '(unmatched)';
+
 /// Records one server span per request and, optionally, request metrics.
 ///
 /// The span continues an incoming `traceparent` when present (otherwise it
 /// starts a new trace) and is named `METHOD /route/template` for low
-/// cardinality. Export and metric recording happen after the response is
-/// produced and never block or fail the request.
+/// cardinality. A request that matches no route is named just `METHOD`
+/// (OTel semconv: an unmatched-route SERVER span omits `http.route` and
+/// drops the path from the name), and its metrics record under
+/// [_unmatchedRoute] rather than the raw, attacker-controlled path. Export
+/// and metric recording happen after the response is produced and never
+/// block or fail the request.
 ///
 /// The upstream sampled flag is honored by default: an incoming traceparent
 /// with the sampled bit clear is not exported. Pass [exportUnsampled] `true` to
@@ -41,9 +55,10 @@ Middleware<E> otel<E>({
 
     void finish(int status) {
       watch.stop();
+      final template = c.routeTemplate;
       metrics?.record(
         method: c.method,
-        route: c.route,
+        route: template ?? _unmatchedRoute,
         status: status,
         durationMs: watch.elapsedMilliseconds,
       );
@@ -53,12 +68,12 @@ Middleware<E> otel<E>({
           traceId: traceId,
           spanId: spanId,
           parentSpanId: parent?.parentId,
-          name: '${c.method} ${c.route}',
+          name: template == null ? c.method : '${c.method} $template',
           startUnixNano: startNano,
           endUnixNano: _unixNano(),
           attributes: {
             'http.request.method': c.method,
-            'http.route': c.route,
+            'http.route': ?template,
             'http.response.status_code': status,
           },
           // OTel SERVER-span convention: Error only for 5xx; otherwise Unset

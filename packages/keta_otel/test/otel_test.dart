@@ -295,6 +295,77 @@ void main() {
     );
   });
 
+  group('route cardinality', () {
+    test('an unmatched request records metrics under the fixed label, not the '
+        'raw path', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/users/:id', (c) => c.text('ok'));
+      final client = TestClient(app, Env());
+
+      await client.get('/scanner-path-123');
+      await client.get('/another-probe');
+      final body = metrics.prometheus();
+
+      expect(
+        body,
+        contains(
+          'keta_requests_total{method="GET",route="(unmatched)",status="404"} 2',
+        ),
+      );
+      expect(body, isNot(contains('scanner-path-123')));
+      expect(body, isNot(contains('another-probe')));
+    });
+
+    test('a matched request still records its route template', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/users/:id', (c) => c.text('ok'));
+      final client = TestClient(app, Env());
+
+      await client.get('/users/42');
+
+      expect(
+        metrics.prometheus(),
+        contains(
+          'keta_requests_total{method="GET",route="/users/:id",status="200"} 1',
+        ),
+      );
+    });
+
+    test(
+      'an unmatched request emits a path-free, method-only span name',
+      () async {
+        final captured = <String>[];
+        final app = App<Env>()
+          ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+        app.get('/users/:id', (c) => c.text('ok'));
+
+        await TestClient(app, Env()).get('/scanner-path-123');
+        await pumpEventQueue();
+
+        final span = _firstSpan(captured);
+        expect(span['name'], 'GET');
+        final attrs = _attrsOf(span);
+        expect(attrs.containsKey('http.route'), isFalse);
+      },
+    );
+
+    test('a matched request keeps its templated span name', () async {
+      final captured = <String>[];
+      final app = App<Env>()
+        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      app.get('/users/:id', (c) => c.text('ok'));
+
+      await TestClient(app, Env()).get('/users/42');
+      await pumpEventQueue();
+
+      final span = _firstSpan(captured);
+      expect(span['name'], 'GET /users/:id');
+      expect(_attrsOf(span)['http.route'], {'stringValue': '/users/:id'});
+    });
+  });
+
   group('encodeOtlp / OtlpExporter', () {
     test('export of no spans never invokes the sender', () async {
       var calls = 0;

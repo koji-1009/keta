@@ -29,26 +29,35 @@ class OtlpExporter implements Disposable {
   /// response is treated as a failure (so a persistently-down collector is
   /// visible to the caller), and the underlying [HttpClient] is released by
   /// [close].
+  ///
+  /// The whole request/response cycle is bounded by [timeout] (default 10s):
+  /// a collector that accepts the connection and never responds cannot hang
+  /// `flush()`/`close()` (the latter runs inside server shutdown). A timeout
+  /// surfaces as a [TimeoutException], the same failed-export path as any
+  /// other send error.
   factory OtlpExporter.http(
     Uri endpoint, {
     String serviceName = 'keta',
     Map<String, String> headers = const {},
+    Duration timeout = const Duration(seconds: 10),
   }) {
     final client = HttpClient();
+    Future<void> post(String payload) async {
+      final request = await client.postUrl(endpoint);
+      request.headers.contentType = ContentType.json;
+      headers.forEach(request.headers.set);
+      request.add(utf8.encode(payload));
+      final response = await request.close();
+      await response.drain<void>();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException(
+          'OTLP export rejected: HTTP ${response.statusCode}',
+        );
+      }
+    }
+
     return OtlpExporter._(
-      (payload) async {
-        final request = await client.postUrl(endpoint);
-        request.headers.contentType = ContentType.json;
-        headers.forEach(request.headers.set);
-        request.add(utf8.encode(payload));
-        final response = await request.close();
-        await response.drain<void>();
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw HttpException(
-            'OTLP export rejected: HTTP ${response.statusCode}',
-          );
-        }
-      },
+      (payload) => post(payload).timeout(timeout),
       serviceName,
       client.close,
     );
@@ -94,9 +103,20 @@ class OtlpExporter implements Disposable {
     return future;
   }
 
-  /// Awaits every in-flight export. Call before shutdown so pending spans land.
-  Future<void> flush() =>
-      Future.wait(_inFlight.toList()).then((_) {}).catchError((_) {});
+  /// Awaits every in-flight export, looping until none remain. Call before
+  /// shutdown so pending spans land.
+  ///
+  /// A snapshot-and-wait would miss exports [enqueue]d while the wait was in
+  /// flight — e.g. a request still finishing during shutdown's drain window.
+  /// Looping instead picks those up too; it stays bounded because each
+  /// export races the sender's own timeout (see `OtlpExporter.http`), so a
+  /// stuck collector cannot make this loop over indefinitely, only requests
+  /// that keep enqueuing new exports forever can.
+  Future<void> flush() async {
+    while (_inFlight.isNotEmpty) {
+      await Future.wait(_inFlight.toList()).then((_) {}).catchError((_) {});
+    }
+  }
 
   /// Flushes, then releases resources (the HTTP client). Idempotent-ish; safe to
   /// call from `Server.shutdown` via [Disposable].
