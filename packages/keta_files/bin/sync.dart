@@ -18,7 +18,19 @@ void main(List<String> args) {
     stderr.writeln('no manifest at $manifestPath (create it with the markers)');
     exit(66);
   }
-  final files = discoverRouteFiles(routesDir);
-  manifest.writeAsStringSync(syncManifest(manifest.readAsStringSync(), files));
-  stdout.writeln('synced ${files.length} route file(s) into $manifestPath');
+  final found = discover(routesDir);
+  manifest.writeAsStringSync(
+    syncManifest(manifest.readAsStringSync(), found.routes),
+  );
+  // Middleware is counted by what a route falls under, not by how many files
+  // exist: a `_middleware.dart` scoping nothing is imported nowhere, and is the
+  // check's job to name — sync only wires what runs.
+  final scopes = {
+    for (final r in found.routes)
+      for (final m in r.middleware) m.importPath,
+  }.length;
+  stdout.writeln(
+    'synced ${found.routes.length} route file(s)'
+    '${scopes == 0 ? '' : ' under $scopes middleware scope(s)'} into $manifestPath',
+  );
 }

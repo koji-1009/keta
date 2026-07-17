@@ -134,4 +134,150 @@ void main() {
       expect(prefixes, everyElement(startsWith(r'$a_b')));
     });
   });
+
+  group('a directory scopes middleware over the routes beneath it', () {
+    test('_middleware.dart is a scope, never a route', () {
+      // A leading `_` reads as a capture everywhere else (`_id` → `:id`); the
+      // middleware filename is carved out before that interpretation, so it
+      // never becomes the `:middleware` route nobody wrote, and never lands in
+      // the route list at all.
+      final found = discover(
+        tree({'admin/_middleware.dart': _any, 'admin/ping.dart': _any}).path,
+      );
+      expect(found.routes.map((f) => f.url), ['/admin/ping']);
+      expect(found.middleware.map((m) => m.importPath), [
+        'routes/admin/_middleware.dart',
+      ]);
+    });
+
+    test('a route carries the outer→inner chain of the scopes above it', () {
+      // routes/admin/audit/log.dart falls under routes/_middleware.dart and
+      // routes/admin/_middleware.dart — root first, then admin, then the file.
+      final found = discover(
+        tree({
+          '_middleware.dart': _any,
+          'admin/_middleware.dart': _any,
+          'admin/audit/log.dart': _any,
+        }).path,
+      );
+      final log = found.routes.single;
+      expect(log.url, '/admin/audit/log');
+      expect(log.middleware.map((m) => m.url), ['/', '/admin']);
+    });
+
+    test('a scope reaches only its own subtree, not a sibling', () {
+      final found = discover(
+        tree({
+          'admin/_middleware.dart': _any,
+          'admin/ping.dart': _any,
+          'public/health.dart': _any,
+        }).path,
+      );
+      final byUrl = {for (final r in found.routes) r.url: r.middleware};
+      expect(byUrl['/admin/ping']!.map((m) => m.url), ['/admin']);
+      expect(byUrl['/public/health'], isEmpty);
+    });
+
+    test('a scope under a capture directory scopes the capture subtree', () {
+      final found = discover(
+        tree({
+          'users/_id/_middleware.dart': _any,
+          'users/_id/posts.dart': _any,
+        }).path,
+      );
+      final posts = found.routes.single;
+      expect(posts.url, '/users/:id/posts');
+      final scope = posts.middleware.single;
+      expect(scope.url, '/users/:id');
+      // The scope's raw directory is what the prefix test runs on, in the
+      // filename's own alphabet — `:id` is only the human-facing rendering.
+      expect(scope.dir, ['users', '_id']);
+    });
+
+    test('the root scope wraps every route, the root route included', () {
+      final found = discover(
+        tree({
+          '_middleware.dart': _any,
+          'index.dart': _any,
+          'health.dart': _any,
+        }).path,
+      );
+      for (final r in found.routes) {
+        expect(
+          r.middleware.map((m) => m.url),
+          ['/'],
+          reason: '${r.url} falls under the root scope',
+        );
+      }
+    });
+
+    test('middleware aliases are \$mw\$-led and cannot meet a route alias', () {
+      // A route alias is one `$` then identifier characters; a middleware alias
+      // carries a second `$`, so the two namespaces cannot intersect — even when
+      // a route is literally named `mw`.
+      final found = discover(
+        tree({
+          '_middleware.dart': _any,
+          'admin/_middleware.dart': _any,
+          'mw.dart': _any,
+          'admin/ping.dart': _any,
+        }).path,
+      );
+      expect(found.middleware.map((m) => m.prefix), [r'$mw$root', r'$mw$admin']);
+      expect(found.routes.map((f) => f.prefix), containsAll([r'$mw']));
+      final all = [
+        ...found.routes.map((f) => f.prefix),
+        ...found.middleware.map((m) => m.prefix),
+      ];
+      expect(all.toSet(), hasLength(all.length), reason: 'all aliases distinct');
+    });
+
+    test('two scopes sanitizing to one alias stay distinct', () {
+      final found = discover(
+        tree({
+          'a-b/_middleware.dart': _any,
+          'a-b/x.dart': _any,
+          'a_b/_middleware.dart': _any,
+          'a_b/y.dart': _any,
+        }).path,
+      );
+      final prefixes = found.middleware.map((m) => m.prefix).toList();
+      expect(prefixes.toSet(), hasLength(2));
+      expect(prefixes, everyElement(startsWith(r'$mw$a_b')));
+    });
+
+    test('a scope guarding nothing beneath it is an orphan', () {
+      // Dead weight: the file exists but no route falls under it. Tolerated by
+      // discovery, named by the check.
+      final found = discover(
+        tree({
+          'admin/_middleware.dart': _any,
+          'public/health.dart': _any,
+        }).path,
+      );
+      final orphans = orphanMiddleware(found.routes, found.middleware);
+      expect(orphans.map((m) => m.url), ['/admin']);
+    });
+
+    test('a scope with a route under it is not an orphan', () {
+      final found = discover(
+        tree({'admin/_middleware.dart': _any, 'admin/ping.dart': _any}).path,
+      );
+      expect(orphanMiddleware(found.routes, found.middleware), isEmpty);
+    });
+
+    test('a middleware file is not a route, so it is never unregistered', () {
+      // The strict-set check reports route files the manifest does not serve. A
+      // middleware file is not a route, so an empty manifest against a tree of
+      // only scopes-and-routes reports the routes, never the scope.
+      final found = discover(
+        tree({'admin/_middleware.dart': _any, 'admin/ping.dart': _any}).path,
+      );
+      const empty =
+          '// keta_files:imports\n// keta_files:end\n'
+          '// keta_files:routes\n// keta_files:end\n';
+      final missing = unregistered(empty, found.routes);
+      expect(missing.map((f) => f.url), ['/admin/ping']);
+    });
+  });
 }

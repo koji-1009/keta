@@ -128,6 +128,121 @@ void main() {
     });
   });
 
+  group('a scope rides along on the routes it wraps', () {
+    const root = MiddlewareFile(
+      importPath: 'routes/_middleware.dart',
+      prefix: r'$mw$root',
+      dir: [],
+      scope: [],
+    );
+    const admin = MiddlewareFile(
+      importPath: 'routes/admin/_middleware.dart',
+      prefix: r'$mw$admin',
+      dir: ['admin'],
+      scope: ['admin'],
+    );
+
+    test('a route under scopes binds them as an outer→inner third argument', () {
+      final out = syncManifest(_imports, const [
+        RouteFile(
+          importPath: 'routes/admin/ping.dart',
+          prefix: r'$admin_ping',
+          template: ['admin', 'ping'],
+          middleware: [root, admin],
+        ),
+      ]);
+      expect(
+        out,
+        contains(
+          r"$admin_ping.exported.bind(app, const ['admin', 'ping'], "
+          r'[$mw$root.scoped, $mw$admin.scoped]);',
+        ),
+      );
+    });
+
+    test('the imports region carries the scopes the routes reference', () {
+      final out = syncManifest(_imports, const [
+        RouteFile(
+          importPath: 'routes/admin/ping.dart',
+          prefix: r'$admin_ping',
+          template: ['admin', 'ping'],
+          middleware: [root, admin],
+        ),
+      ]);
+      expect(
+        out,
+        contains(r"import 'routes/_middleware.dart' as $mw$root;"),
+      );
+      expect(
+        out,
+        contains(r"import 'routes/admin/_middleware.dart' as $mw$admin;"),
+      );
+    });
+
+    test('a scope shared by two routes is imported once', () {
+      final out = syncManifest(_imports, const [
+        RouteFile(
+          importPath: 'routes/admin/ping.dart',
+          prefix: r'$admin_ping',
+          template: ['admin', 'ping'],
+          middleware: [root, admin],
+        ),
+        RouteFile(
+          importPath: 'routes/admin/stats.dart',
+          prefix: r'$admin_stats',
+          template: ['admin', 'stats'],
+          middleware: [root, admin],
+        ),
+      ]);
+      expect(
+        r"import 'routes/admin/_middleware.dart' as $mw$admin;"
+            .allMatches(out)
+            .length,
+        1,
+      );
+    });
+
+    test('a route under no scope keeps the plain two-argument form', () {
+      // The feature does not churn a manifest with no middleware in it: the
+      // binding is byte-for-byte what it was before scopes existed.
+      final out = syncManifest(_imports, [
+        file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']),
+      ]);
+      expect(out, contains(r"$x.exported.bind(app, const ['x']);"));
+    });
+
+    test('a manifest with scopes is idempotent, and drift-free', () {
+      const f = RouteFile(
+        importPath: 'routes/admin/ping.dart',
+        prefix: r'$admin_ping',
+        template: ['admin', 'ping'],
+        middleware: [root, admin],
+      );
+      final synced = syncManifest(_imports, [f]);
+      expect(syncManifest(synced, [f]), synced, reason: 'settled');
+      expect(unregistered(synced, [f]), isEmpty);
+    });
+
+    test('a drifted scope chain leaves the route reported as unregistered', () {
+      // The third argument is part of the binding line, so a manifest synced
+      // when the route had no scope no longer matches once a scope appears.
+      final withoutScope = syncManifest(_imports, const [
+        RouteFile(
+          importPath: 'routes/admin/ping.dart',
+          prefix: r'$admin_ping',
+          template: ['admin', 'ping'],
+        ),
+      ]);
+      const withScope = RouteFile(
+        importPath: 'routes/admin/ping.dart',
+        prefix: r'$admin_ping',
+        template: ['admin', 'ping'],
+        middleware: [root, admin],
+      );
+      expect(unregistered(withoutScope, [withScope]), [withScope]);
+    });
+  });
+
   group('the generator refuses to corrupt what it cannot parse', () {
     test('a start marker with no end', () {
       expect(

@@ -30,16 +30,48 @@ const _formatOn = '// dart format on';
 /// it is, in the same words the tree uses. What the file serves is not spelled
 /// out here — that is its `exported`'s type to state and the compiler's to
 /// check, not this generator's to guess.
-String registrationFor(RouteFile file) =>
-    '${file.prefix}.$exportedDeclaration'
-    '.bind(app, ${_templateLiteral(file.template)});';
+///
+/// When the file falls under one or more `_middleware.dart` directories, their
+/// scopes ride along as a third argument, outermost first —
+/// `[$mw$root.scoped, $mw$admin.scoped]` — and [Exported.bind] composes them
+/// around each handler. A route under no middleware directory keeps the plain
+/// two-argument form, so an ordinary manifest neither churns nor grows.
+String registrationFor(RouteFile file) {
+  final call =
+      '${file.prefix}.$exportedDeclaration'
+      '.bind(app, ${_templateLiteral(file.template)}';
+  if (file.middleware.isEmpty) return '$call);';
+  final scopes = [
+    for (final m in file.middleware) '${m.prefix}.$scopedDeclaration',
+  ];
+  return '$call, [${scopes.join(', ')}]);';
+}
 
 String _templateLiteral(List<String> template) => template.isEmpty
     ? 'const <String>[]'
     : "const [${template.map(_dartStringLiteral).join(', ')}]";
 
 String _importFor(RouteFile file) =>
-    'import ${_dartStringLiteral(file.importPath)} as ${file.prefix};';
+    _importLine(file.importPath, file.prefix);
+
+String _importLine(String importPath, String prefix) =>
+    'import ${_dartStringLiteral(importPath)} as $prefix;';
+
+/// The middleware files [files] point at, deduplicated by import path and sorted,
+/// so the imports region is a function of the tree alone. Only the scopes a route
+/// actually falls under are imported: a `_middleware.dart` that guards nothing is
+/// left out, since importing an alias nothing references is an unused-import
+/// warning waiting to happen — the `orphanMiddleware` check names it instead.
+List<MiddlewareFile> _referencedMiddleware(List<RouteFile> files) {
+  final byPath = <String, MiddlewareFile>{};
+  for (final f in files) {
+    for (final m in f.middleware) {
+      byPath[m.importPath] = m;
+    }
+  }
+  return byPath.values.toList()
+    ..sort((a, b) => a.importPath.compareTo(b.importPath));
+}
 
 /// Escapes [value] for embedding in a single-quoted Dart string literal — the
 /// one emitter this generator's string literals go through, per the "escaping
@@ -93,9 +125,15 @@ String _dartStringLiteral(String value) {
 /// Each region is fenced with `// dart format off`/`on`, so what is written
 /// here is what stays: see [_formatOff].
 String syncManifest(String source, List<RouteFile> files) {
+  // The imports region carries the route files and the middleware files they
+  // fall under. Both are derived from `files` — a route file names its own
+  // scopes — so `syncManifest` stays a pure function of the route list, and
+  // remains idempotent: the same tree writes the same imports in the same order.
   var lines = source.split('\n');
   lines = _replaceRegion(lines, _importsMarker, [
     for (final f in files) _importFor(f),
+    for (final m in _referencedMiddleware(files))
+      _importLine(m.importPath, m.prefix),
   ]);
   lines = _replaceRegion(lines, _routesMarker, [
     for (final f in files) registrationFor(f),
