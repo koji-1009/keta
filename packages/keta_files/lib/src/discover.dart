@@ -97,10 +97,24 @@ List<String> _templateOf(String rel) {
   final stem = rel.substring(0, rel.length - '.dart'.length);
   final parts = stem.split('/');
   if (parts.last == 'index') parts.removeLast();
-  return [
-    for (final part in parts)
-      if (part.startsWith('_')) ':${part.substring(1)}' else part,
-  ];
+  return [for (final part in parts) _captureOrLiteral(part, rel)];
+}
+
+/// A capture (`_id` → `:id`) or a literal path segment. A bare `_` — a file or
+/// directory named just an underscore — captures nothing: there is no name
+/// left after stripping the leading `_`. Silently emitting an empty capture
+/// name would be the one place this package generates a broken URL instead of
+/// failing loud, so it is rejected here the same way two files claiming one
+/// URL are.
+String _captureOrLiteral(String part, String rel) {
+  if (part == '_') {
+    throw FormatException(
+      '"$rel" has a segment that is just "_" with no name after it; '
+      'a capture needs a name (e.g. "_id"), so name it or drop the '
+      'underscore',
+    );
+  }
+  return part.startsWith('_') ? ':${part.substring(1)}' : part;
 }
 
 /// A readable import alias: the URL's own words, in a namespace no hand-written

@@ -77,6 +77,36 @@ void main() {
     test('a missing tree is empty, not an error', () {
       expect(discoverRouteFiles('/nowhere/at/all'), isEmpty);
     });
+
+    test('a file named "_" captures nothing and is refused', () {
+      // `_.dart` strips to an empty capture name — silently emitting `:` would
+      // be a URL nobody asked for, so it fails loud instead, naming the file.
+      final dir = tree({'_.dart': _any});
+      expect(
+        () => discoverRouteFiles(dir.path),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('_.dart'),
+          ),
+        ),
+      );
+    });
+
+    test('a directory named "_" is refused the same way', () {
+      final dir = tree({'_/users.dart': _any});
+      expect(
+        () => discoverRouteFiles(dir.path),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('_/users.dart'),
+          ),
+        ),
+      );
+    });
   });
 
   group('generated aliases cannot collide with the app', () {

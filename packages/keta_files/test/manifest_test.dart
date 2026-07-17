@@ -47,6 +47,29 @@ void main() {
       expect(out, contains(r'$index.exported.bind(app, const <String>[]);'));
     });
 
+    test('a segment with a quote, dollar, or backslash escapes cleanly', () {
+      // Reachable in principle: a route file's path segment is a filename,
+      // and the filesystem does not reject these characters (only `/` and
+      // NUL are forbidden) even though a real route tree would not use them.
+      final out = syncManifest(_imports, [
+        file(
+          importPath: r"routes/it's/$weird/back\slash.dart",
+          prefix: r'$weird',
+          template: [r"it's", r'$weird', r'back\slash'],
+        ),
+      ]);
+      expect(
+        out,
+        contains(r"import 'routes/it\'s/\$weird/back\\slash.dart' as $weird;"),
+      );
+      expect(
+        out,
+        contains(
+          r"$weird.exported.bind(app, const ['it\'s', '\$weird', 'back\\slash']);",
+        ),
+      );
+    });
+
     test('every region is fenced from the formatter', () {
       // Without the fence the manifest never settles: a binding wider than 80
       // columns is reflowed by `dart format`, the next sync writes it back, and

@@ -36,10 +36,26 @@ String registrationFor(RouteFile file) =>
 
 String _templateLiteral(List<String> template) => template.isEmpty
     ? 'const <String>[]'
-    : "const [${template.map((p) => "'$p'").join(', ')}]";
+    : "const [${template.map(_dartStringLiteral).join(', ')}]";
 
 String _importFor(RouteFile file) =>
-    "import '${file.importPath}' as ${file.prefix};";
+    'import ${_dartStringLiteral(file.importPath)} as ${file.prefix};';
+
+/// Escapes [value] for embedding in a single-quoted Dart string literal — the
+/// one emitter this generator's string literals go through, per the "escaping
+/// centralized in one place" generator norm. A path segment is a filename, not
+/// a guaranteed-safe identifier: a backslash, a single quote, or a `$` in one
+/// would otherwise be written straight into the generated source and either
+/// break the string literal or trigger string interpolation. The backslash is
+/// escaped first so it cannot double-escape the quote/dollar this function
+/// introduces.
+String _dartStringLiteral(String value) {
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll("'", r"\'")
+      .replaceAll(r'$', r'\$');
+  return "'$escaped'";
+}
 
 /// Rewrites the two marked regions of [source] to import every route file and
 /// bind every verb it serves at the URL its location denotes. Only text between
