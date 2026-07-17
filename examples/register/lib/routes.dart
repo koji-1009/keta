@@ -145,13 +145,12 @@ void register(App<Env> app, UserEvents events) {
     ),
   );
 
-  // The WebSocket companion to this SSE feed lives in examples/websocket, not
-  // here, for a concrete reason: this app mounts `cors()` app-wide, and cors
-  // rebuilds every response to merge its headers — a rebuild that does not carry
-  // the `Upgrade` value, so a handshake behind cors is answered 101 without ever
-  // switching. SSE survives (its stream body is preserved through the rebuild);
-  // an upgrade does not. The dedicated example demonstrates the working
-  // handshake (and the same 401-before-upgrade gate) with no cors in front.
+  // The WebSocket companion to this SSE feed lives in its own small example,
+  // examples/websocket, to keep the upgrade-and-gate idea on a minimal stack. It
+  // is a focus choice, not a workaround: keta's response-rebuilding middleware
+  // (cors, etag, gzip) rebuild through `Response.copyWith`, which carries an
+  // upgrade's `Upgrade` field through untouched, so a handshake composes behind
+  // this app's app-wide cors just fine.
 
   app.get(
     '/users/:id',

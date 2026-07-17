@@ -45,14 +45,15 @@ SecurityPolicy<Env> securityPolicy() => SecurityPolicy<Env>(
   },
 );
 
-/// Builds the app. There is deliberately no `cors()` here, and that absence is
-/// the whole reason this example exists rather than folding into
-/// examples/register: cors() rebuilds every response to merge its headers, and
-/// that rebuild does not carry the `Upgrade` value a handshake returns — so a
-/// WebSocket behind cors is answered 101 and never actually switches. The
-/// security gate, by contrast, composes cleanly in front of an upgrade: because
-/// the intent to upgrade is a *returned value*, `enforceSecurity` throws
-/// Unauthorized/401 before the `Upgrade` is even built.
+/// Builds the app on a deliberately minimal stack — log, recover, security, and
+/// no `cors()`. That is a focus choice, not a workaround: keta's
+/// response-rebuilding middleware (cors, etag, gzip) rebuild through
+/// `Response.copyWith`, which carries an upgrade's semantic `Upgrade` field
+/// through untouched, so a handshake composes behind cors just as well. This
+/// example stays small so the one idea it exists to show stands alone — the
+/// security gate composing in front of an upgrade: because the intent to upgrade
+/// is a *returned value*, `enforceSecurity` throws Unauthorized/401 before the
+/// `Upgrade` is even built.
 App<Env> buildApp() {
   final app = App<Env>()
     ..use(accessLog())

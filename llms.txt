@@ -46,7 +46,8 @@ over capture. `app.group('/prefix')..use(m)` scopes middleware to a subtree.
 
 Scope: primitives (String/int/double/bool), `T?` (optional, omitted from
 `required` and from `toJson` when null), `List<T>`, nested DTOs (`$ref` + deps),
-enums (values are `name` strings), and sealed types (oneOf + discriminator).
+enums (plain form: values are `name` strings; the enhanced wire form below when a
+wire value isn't a plain identifier), and sealed types (oneOf + discriminator).
 Generics are out of scope.
 
 The complete DTO shape — hand-written, agent-written, and lint-materialized code
@@ -115,6 +116,34 @@ sealed class Event {
 }
 ```
 
+Enhanced enum — when a wire value is not a plain Dart identifier (a hyphen, a
+leading digit) or is a reserved word, the enum carries the wire string. The Dart
+name is derived deterministically (already-valid → verbatim; else split on
+non-alphanumerics and camel-join, `super-user`→`superUser`; leading digit → `$2fa`;
+reserved word → `default_`). The Schema lists the WIRE strings, never the Dart
+names. A plain enum (all wire values already identifiers) stays `enum Role { admin,
+member }` with `Role.values.byName(...)`/`.name`:
+
+```dart
+enum Role {
+  admin('admin'),
+  superUser('super-user');
+  const Role(this.wire);
+  final String wire;
+  static Role fromWire(String wire) => values.firstWhere(
+        (v) => v.wire == wire,
+        orElse: () => throw BadRequest('unknown Role wire value: $wire'),
+      );
+}
+
+const roleSchema = Schema('Role', {'type': 'string', 'enum': ['admin', 'super-user']});
+```
+
+Field mappers use `Role.fromWire(json['role'] as String)` / `role.wire` (scalar) and
+`(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()` /
+`roles.map((e) => e.wire).toList()` (list). `fromWire` throws `BadRequest`, so a file
+with an enhanced enum imports `package:keta/keta.dart`.
+
 A single `Schema` constant is one source of truth: OpenAPI output,
 `schema.validate(value)` (list of violations) and `schema.require(value)`
 (throws `BadRequest` with the violation list as `detail` on any violation),
@@ -125,7 +154,9 @@ Usage: `final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));`
 
 ## OpenAPI
 
-Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., failureResponses: {code: schema}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe). `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag.
+Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., description: ..., tags: ['users'], operationId: 'getUser', failureResponses: {code: schema_or_Failure}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe; a schema on a 204/304 is an emit-time error). `description` (prose) and `tags` (grouping, aggregated sorted+deduped into the document's top-level `tags`) are optional; `operationId` is optional but **document-wide-unique** — two routes with the same id is a hard error at emit, naming both. `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route); each value is a bare `Schema` (defaults to `application/json`) or a `Failure(schema, {contentType: 'application/json'})` for a non-JSON error body (`text/plain`, `application/problem+json`). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag. A WebSocket route documents its 101 with `doc: RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` instead of a `success` (see the SSE & WebSocket section).
+
+Validation has two postures and never a third: a malformed *schema* fragment (an `items` that isn't an object, a `$ref` missing from `deps`, a misspelled `type`) is the schema author's defect — a `StateError` that becomes a **500**, never a client violation; only invalid *instance* data (a missing required property, a wrong type, an out-of-set enum value) is a **400**. (`schema.validate` returns the violations; `schema.require`/`requireMap` throw the 400.)
 
 Security is declared, never inferred from middleware. `RouteDoc.security: [bearer]` (an OR-list of schemes; provided constants `bearer`, `apiKey`) overrides the global default passed to `OpenApi.fromRoutes(security: [...])`; `null` follows that default, `[]` declares the route explicitly public. A route with declared security gains an automatic `401` response unless you documented one yourself. The runtime counterpart is opt-in: build one `SecurityPolicy(defaults: [...], verifiers: {schemeName: (c) => bool_or_Future<bool>})` and wire it once, upstream, with `app.use(enforceSecurity(policy))`. It reads the matched route's security off `c.routeDoc` (falling back to `policy.defaults` when the route declares none), OR-combines the required schemes' verifiers, and throws `Unauthorized` when none pass; an empty list (explicitly public) skips the check. A verifier may `c.set` a principal `Key` as a side effect on success — authorization (roles) stays ordinary middleware, not the gate's job.
 
@@ -136,13 +167,19 @@ final spec = OpenApi.fromRoutes(app.routes, title: 'API', version: '0.1.0');
 stdout.write(spec.toYaml()); // or spec.toJson()
 ```
 
+## SSE & WebSocket
+
+SSE: `SseEvent(data, {String? event, String? id, Duration? retry})` is a value type — `data` is the only required field and MAY contain newlines (rendered as one `data:` line per segment; CR/CRLF normalize to LF). The other fields are single-line by construction, so the constructor throws `ArgumentError` on a CR or LF in `event`/`id`, a NUL (U+0000) in `id`, or a negative `retry` (each would forge a second event or silently void the field). `c.sse(Stream<SseEvent> events, {Duration? keepAlive, Map<String, List<String>>? headers})` returns a `200` `Response` with a `Stream<List<int>>` body; it sets `content-type: text/event-stream; charset=utf-8` and `cache-control: no-cache` (your `headers` merge over and may override). `keepAlive` is opt-in — null means no timer is ever created; when set, a `: keep-alive` comment is emitted after that idle interval and re-armed on each event. The subscription and timer tear down on stream completion/error, client disconnect, or `c.aborted` (timeout/disconnect) — whichever first. No new transport: the H1 transport frames the stream as chunked, and `gzip()`/`etag()` pass stream bodies through untouched, so SSE composes unchanged. `SseEvent.toWire()` / `.encode()` give the wire text / UTF-8 bytes if you assemble a body yourself.
+
+WebSocket (over HTTP/1.1): a handshake is a GET — no new verb — so an ordinary `app.get(path, (c) => Response.upgrade(onConnected, {String? subprotocol}))` declares it. `Response.upgrade` carries an `Upgrade` value that fixes status 101 and no body; because the intent to upgrade is a *returned value*, every declaration-driven middleware runs in front of it — a security verifier throws `Unauthorized`/401 and the `Upgrade` is never even constructed. `onConnected(UpgradedChannel channel)` is invoked once by a transport that can switch protocols (inert data otherwise). `UpgradedChannel`: `Stream<Object> get messages` (each a `String` text or `List<int>` binary frame), `void send(Object message)` (String → text, List<int> → binary; a send after close is a state error), `Future<void> close([int? code, String? reason])` (idempotent), `Future<void> get done`. A `subprotocol`, when set, must have been offered by the client or the handshake fails. A non-upgrade request to an upgrade route gets `426 Upgrade Required`; graceful shutdown closes open sockets with 1001. OpenAPI shadow: `RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` documents the 101 — a `SwitchingProtocols` sits parallel to `Success` and is mutually exclusive with it (its 101 carries no body). Socket-free test: `await TestClient(app, env).connect(path, {headers})` returns a `TestUpgrade` — `.upgraded`/`.socket` (a `TestSocket` with `messages`, `send`, `close`, `done`) when it upgraded, else `.rejection` (the `TestResponse` the pipeline produced instead, e.g. a 401 from the gate).
+
 ## Database
 
 `c.env.db.reader` / `.writer` expose `query(sql, [params])` (rows as column-name maps) and `execute(sql, [params])` (affected rows) — both engines take the same `?` positional placeholder (keta_sqlite hands it straight to sqlite3; keta_rds's driver desugars it to PostgreSQL's `$1` form), so one SQL string runs unchanged on either. Type contract: integers `int`, floats `double`, booleans `bool`, timestamps ISO 8601 strings, numeric/decimal as `String`.
 
 Wrap writes in a transaction with the `tx()` middleware and read the connection via `c.get(txConn)`; a thrown error rolls back. `tx()` must be registered *after* (inside of) `recover()` — `app..use(recover())..use(tx())` — never outside it: registered outside, a thrown error is converted to an ordinary `Response` by `recover()` before it ever reaches `tx()`, so the transaction sees a clean return and commits the writes of a request that actually failed; the `keta_tx_outside_recover` lint catches the reversed order.
 
-`keta_rds` is the PostgreSQL adapter: it delegates the wire protocol to `package:postgres`, owns a bounded connection pool (`Unavailable`/503 on exhaustion instead of an unbounded wait), translates a unique-violation (SQLSTATE 23505) into `Conflict`/409 — the floor every `DbConn` adapter honours; an adapter may translate more, never less — and, like keta_sqlite, keeps `numeric`/`decimal` as `String` so a decimal's exact precision survives. Connect with `RdsDb.url('postgres://...')` (or `RdsDb(Endpoint(...))`); `dart run keta_rds:migrate` applies `migrations/*.sql` in order (single-applier — coordinate externally in a multi-node deploy), and `db.verifyMigrations(dir)` is the read-only, safe-to-run-repeatedly check each node makes at boot.
+`keta_rds` is the PostgreSQL adapter: it delegates the wire protocol to `package:postgres`, owns a bounded connection pool (`Unavailable`/503 on exhaustion instead of an unbounded wait), translates a unique-violation (SQLSTATE 23505) into `Conflict`/409 — the floor every `DbConn` adapter honours; an adapter may translate more, never less — and, like keta_sqlite, keeps `numeric`/`decimal` as `String` so a decimal's exact precision survives. Temporal values are mapped to say only what the column type carries: `timestamptz` → UTC with a `Z`, `timestamp` (without time zone) → the ISO string with no offset designator (keta invents no `Z`/`+00:00` the column never held — use `timestamptz` if you want one), `date` → `yyyy-MM-dd`. Connect with `RdsDb.url('postgres://...')` (or `RdsDb(Endpoint(...))`); `dart run keta_rds:migrate` applies `migrations/*.sql` in order (single-applier — coordinate externally in a multi-node deploy), and `db.verifyMigrations(dir)` is the read-only, safe-to-run-repeatedly check each node makes at boot.
 
 ## Testing
 
