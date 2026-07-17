@@ -214,6 +214,35 @@ void main() {
     );
   });
 
+  test('capture-name-only duplicates (same shape, different capture names) '
+      'fail fast, matching App.compile\'s conflictKey', () {
+    // `/users/:id` and `/users/:userId` emit distinct paths ({id} vs
+    // {userId}) and so would never collide under a `path`-keyed guard, yet
+    // App.compile treats them as one conflict — the collapsed shape is the
+    // same route. OpenApi.fromRoutes runs standalone and must catch the
+    // same conflict independently.
+    final app = App<Ignored>()
+      ..get('/users/:id', (c) => c.text('a'))
+      ..get('/users/:userId', (c) => c.text('b'));
+    expect(
+      () => OpenApi.fromRoutes(app.routes),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('GET'), contains('conflict')),
+        ),
+      ),
+    );
+  });
+
+  test('distinct paths that merely share a prefix do not conflict', () {
+    final app = App<Ignored>()
+      ..get('/users/:id', (c) => c.text('a'))
+      ..get('/users/:id/orders', (c) => c.text('b'));
+    expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+  });
+
   group('schema-name collision', () {
     test('two different Schema instances sharing a name fail fast', () {
       const good = Schema('Dup', {'type': 'string'});
@@ -263,6 +292,67 @@ void main() {
           doc: RouteDoc(success: Success(schema: same())),
         );
       expect(() => OpenApi.fromRoutes(app.routes), returnsNormally);
+    });
+
+    test('a wrapper that dedupes at its own level still recurses into deps, '
+        'catching a mismatch one level down', () {
+      // Two wrappers named 'X' with identical own json but a dep named 'A'
+      // that carries two different definitions (string vs integer).
+      // `_sameSchema` compares deps by name only, so the wrappers alone
+      // read as "the same" — the collision must still surface when the
+      // walk descends into each wrapper's own `deps`, not get swallowed by
+      // the wrapper-level dedupe. Non-const on purpose: a `const` call site
+      // would canonicalize identical wrappers to one instance and never
+      // build two distinct 'X' objects to compare.
+      // ignore: prefer_const_constructors
+      Schema wrapper(Schema aVariant) =>
+          Schema('X', {'type': 'object'}, deps: [aVariant]);
+      const aString = Schema('A', {'type': 'string'});
+      const aInt = Schema('A', {'type': 'integer'});
+      final app = App<Ignored>()
+        ..get(
+          '/a',
+          (c) => c.text('x'),
+          doc: RouteDoc(success: Success(schema: wrapper(aString))),
+        )
+        ..get(
+          '/b',
+          (c) => c.text('x'),
+          doc: RouteDoc(success: Success(schema: wrapper(aInt))),
+        );
+      expect(
+        () => OpenApi.fromRoutes(app.routes),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('"A"'),
+          ),
+        ),
+      );
+    });
+
+    test('two different wrapper schemas sharing one identical const dep '
+        '(diamond) is not a collision', () {
+      const shared = Schema('Shared', {'type': 'string'});
+      const wrapperA = Schema('WrapperA', {'type': 'object'}, deps: [shared]);
+      const wrapperB = Schema('WrapperB', {'type': 'object'}, deps: [shared]);
+      final app = App<Ignored>()
+        ..get(
+          '/a',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(schema: wrapperA)),
+        )
+        ..get(
+          '/b',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(schema: wrapperB)),
+        );
+      final schemas =
+          (OpenApi.fromRoutes(app.routes).toJson()['components']
+                  as Map)['schemas']
+              as Map;
+      expect(schemas.keys, unorderedEquals(['WrapperA', 'WrapperB', 'Shared']));
     });
   });
 

@@ -29,7 +29,9 @@ class OpenApi {
     final schemas = <String, Map<String, Object?>>{};
     final schemasSeen = <String, Schema>{};
     final schemaFirstRoute = <String, String>{};
+    final schemasVisited = <Schema>{};
     final securitySchemes = <String, Map<String, Object?>>{};
+    final routeConflicts = <String>{};
 
     for (final route in routes) {
       final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
@@ -44,14 +46,30 @@ class OpenApi {
       // would then depend on registration order despite the determinism
       // contract above. `App.compile` catches this too, but this walk can run
       // standalone (a tool/openapi.dart that never serves), so it must catch
-      // it independently.
-      if (pathItem.containsKey(method)) {
+      // it independently — and it must catch the same *shape* of conflict.
+      // `path` embeds capture names (`{id}` vs `{userId}`), so two routes
+      // differing only in capture name would land in two different `paths`
+      // entries here and slip past a `path`-keyed guard, yet `App.compile`
+      // deliberately treats them as one conflict (its `conflictKey` collapses
+      // every capture to `*` — packages/keta/lib/src/routing.dart, not
+      // exported from keta's public API, so mirrored below as
+      // `_conflictKey`). The guard therefore keys off that same collapsed
+      // shape, not off `path`.
+      final conflict = _conflictKey(route.method, route.segments);
+      if (!routeConflicts.add(conflict)) {
         throw StateError('route conflict: $routeLabel registered twice');
       }
       pathItem[method] = _operation(route, doc, effective);
       if (doc != null) {
         for (final schema in doc.schemas) {
-          _collect(schema, schemas, schemasSeen, schemaFirstRoute, routeLabel);
+          _collect(
+            schema,
+            schemas,
+            schemasSeen,
+            schemaFirstRoute,
+            routeLabel,
+            schemasVisited,
+          );
         }
       }
       for (final scheme in effective) {
@@ -232,6 +250,21 @@ Iterable<(String, Map<String, Object?>)> _pathParameters(
   }
 }
 
+/// The route-conflict key: literals verbatim, every capture collapsed to `*`
+/// so two routes that differ only in capture name still collide. Mirrors
+/// `conflictKey` in packages/keta/lib/src/routing.dart, which `App.compile`
+/// uses for exactly this check but which is not part of keta's public API
+/// (`package:keta/keta.dart` does not export it), hence the copy here rather
+/// than an import of keta's `src/`.
+String _conflictKey(String method, List<Segment> segments) {
+  final buffer = StringBuffer(method);
+  for (final segment in segments) {
+    buffer.write('/');
+    buffer.write(segment is LiteralSegment ? segment.value : '*');
+  }
+  return buffer.toString();
+}
+
 String _openApiPath(List<Segment> segments) {
   if (segments.isEmpty) return '/';
   final buffer = StringBuffer();
@@ -256,16 +289,32 @@ String _openApiPath(List<Segment> segments) {
 /// first-win silently and corrupt every `$ref` pointed at that name; that is
 /// caught here instead, naming the schema and (when known) the routes on both
 /// sides of the collision.
+///
+/// **Invariant**: this always recurses into `schema.deps`, even when
+/// `schema` itself just deduped against something already `seen` under its
+/// name. `_sameSchema` only compares deps by *name*, not by definition (see
+/// its doc), so a wrapper that reads as "the same" at this level can still
+/// carry a genuinely different dependency one level down — that must not go
+/// unchecked. The one thing this skips is re-walking a dep *instance*
+/// (`visited` is an identity set — `Schema` has no custom `==`/`hashCode`)
+/// this call tree has already fully expanded: the legitimate case of many
+/// routes sharing one `const` dep. Recursion always terminates because a
+/// `const Schema` graph is acyclic — const construction cannot reference an
+/// enclosing, not-yet-built const value, so there is no cycle to loop on.
 void _collect(
   Schema schema,
   Map<String, Map<String, Object?>> into,
   Map<String, Schema> seen,
   Map<String, String> firstRoute,
   String? routeLabel,
+  Set<Schema> visited,
 ) {
   final existing = seen[schema.name];
-  if (existing != null) {
-    if (_sameSchema(existing, schema)) return;
+  if (existing == null) {
+    seen[schema.name] = schema;
+    if (routeLabel != null) firstRoute[schema.name] = routeLabel;
+    into[schema.name] = schema.json;
+  } else if (!_sameSchema(existing, schema)) {
     final firstLabel = firstRoute[schema.name];
     final seenAt = firstLabel != null && routeLabel != null
         ? ' — first collected at $firstLabel, again at $routeLabel'
@@ -275,17 +324,23 @@ void _collect(
       'definitions$seenAt; a \$ref target must be unambiguous',
     );
   }
-  seen[schema.name] = schema;
-  if (routeLabel != null) firstRoute[schema.name] = routeLabel;
-  into[schema.name] = schema.json;
+  if (!visited.add(schema)) return;
   for (final dep in schema.deps) {
-    _collect(dep, into, seen, firstRoute, routeLabel);
+    _collect(dep, into, seen, firstRoute, routeLabel, visited);
   }
 }
 
 /// Whether [a] and [b] are the same schema for collision purposes: the same
 /// instance (the common case — one `const Schema` referenced from many
 /// routes), or, failing that, equal content (json and the set of dep names).
+///
+/// Comparing deps by name only — not by their full definition — is
+/// deliberate and only safe because `_collect` (see its invariant) always
+/// recurses into `schema.deps` regardless of this function's verdict: a dep
+/// that shares a name but differs in substance gets its own full check one
+/// call deeper, where it is named directly. This function decides only
+/// whether [schema] itself is worth registering under its name; it is never
+/// the last word on the subtree beneath it.
 bool _sameSchema(Schema a, Schema b) {
   if (identical(a, b)) return true;
   if (!_deepEquals(a.json, b.json)) return false;
