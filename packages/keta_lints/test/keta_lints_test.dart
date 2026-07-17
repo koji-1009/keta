@@ -923,7 +923,10 @@ class Dto {
       expect(canonicalDiagnostics(fixed), isEmpty);
     });
 
-    test('a schema-only drift regenerates the Schema constant', () {
+    test('a schema-only drift is flagged by check and regenerates the Schema '
+        'constant (regression: check used to be green here while fix would '
+        'rewrite the Schema — CI shipped a stale OpenAPI document; check now '
+        'reports keta_schema_drift for exactly what fix reconciles)', () {
       const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
 class Dto {
@@ -936,9 +939,17 @@ class Dto {
 }
 const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
 ''';
-      expect(canonicalDiagnostics(source), isEmpty);
+      // The mappers round-trip correctly, so no mapper drift — but the Schema
+      // is missing `email`, so check must report the schema drift the fix will
+      // reconcile (previously this asserted `isEmpty`, enshrining the gap).
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_schema_drift');
+      expect(d.single.message, contains('fields not in schema: email'));
       final fixed = applyCanonicalFix(source);
       expect(fixed, contains("'email': {'type': 'string'}"));
+      // After the fix, check is clean and the fix is idempotent.
+      expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });
 
@@ -1417,6 +1428,251 @@ class Dto {
       parseString(content: fixed, throwIfDiagnostics: true); // compiles
       expect(canonicalDiagnostics(fixed), isEmpty); // re-lints clean
       expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+
+    // --- item 1: check/fix schema-drift symmetry ---------------------------
+
+    test('check flags an EXTRA schema property fix would remove (schema drift '
+        'in the other direction)', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'stale': {'type': 'string'}}});
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_schema_drift');
+      expect(d.single.message, contains('schema properties not fields: stale'));
+      // And the fix removes exactly that property, converging to a clean check.
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(contains("'stale'")));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+
+    test('a Schema whose properties match the fields is clean (negative: no '
+        'false schema drift)', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id, 'name': name};
+}
+const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], 'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}}});
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+    });
+
+    // --- item 2: don't recommend a fix that would silently no-op -----------
+
+    test('a positional-ctor DTO missing a mapper is told to materialize by '
+        'hand, not to run a fix that refuses positional ctors (regression: the '
+        'keta_canonical_missing message unconditionally recommended '
+        'keta_lints:fix, which does nothing here)', () {
+      const source = '''
+class P {
+  final String a;
+  final String b;
+  P(this.a, this.b);
+  Map<String, Object?> toJson() => {'a': a, 'b': b};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('materialize it by hand'));
+      expect(d.single.message, contains('positional constructor'));
+      // It must not recommend running the fix, because the fix would refuse it.
+      expect(d.single.message, isNot(contains('run keta_lints:fix')));
+      expect(applyCanonicalFix(source), source); // proof the fix is a no-op
+    });
+
+    test('a DTO missing a mapper with an unresolvable field type is told to '
+        'materialize by hand, naming the unsupported type', () {
+      const source = '''
+class D {
+  final DateTime when;
+  final String id;
+  D({required this.when, required this.id});
+  Map<String, Object?> toJson() => {'when': when.toIso8601String(), 'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('materialize it by hand'));
+      expect(
+        d.single.message,
+        contains('field type outside the canonical subset'),
+      );
+      expect(d.single.message, isNot(contains('run keta_lints:fix')));
+      expect(applyCanonicalFix(source), source); // proof the fix is a no-op
+    });
+
+    test('a fixable DTO missing a mapper still recommends keta_lints:fix '
+        '(negative: the gate did not over-suppress the recommendation)', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class Ok {
+  final String id;
+  Ok({required this.id});
+}
+const okSchema = Schema('Ok', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('run keta_lints:fix'));
+      // And the fix genuinely materializes the mapper (not a no-op).
+      expect(applyCanonicalFix(source), isNot(source));
+    });
+
+    test('a positional-ctor DTO with drift still fires keta_canonical_drift '
+        'but is told to reconcile by hand, not to run a fix that refuses it '
+        '(the missing-message gating now covers the drift message too)', () {
+      const source = '''
+class P {
+  final String a;
+  final String b;
+  P(this.a, this.b);
+  factory P.fromJson(Map<String, Object?> json) => P(json['a'] as String, json['b'] as String);
+  Map<String, Object?> toJson() => {'a': a};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_drift');
+      // The finding still fires — a broken round-trip must be seen regardless
+      // of whether the auto-fixer can repair it.
+      expect(d.single.message, contains('has drifted'));
+      expect(d.single.message, contains('fields not in toJson: b'));
+      // But the recommendation flips to by-hand and names the blocker.
+      expect(d.single.message, contains('reconcile it by hand'));
+      expect(d.single.message, contains('positional constructor'));
+      expect(d.single.message, isNot(contains('run keta_lints:fix')));
+      expect(applyCanonicalFix(source), source); // proof the fix is a no-op
+    });
+
+    test('a fixable DTO with drift still recommends keta_lints:fix (negative: '
+        'the drift-recommendation gate did not over-suppress the fix hint)', () {
+      const source = '''
+class Bad {
+  final String id;
+  final String name;
+  Bad({required this.id, required this.name});
+  factory Bad.fromJson(Map<String, Object?> j) =>
+      Bad(id: j['id'] as String, name: j['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_drift');
+      expect(d.single.message, contains('run keta_lints:fix'));
+      // And the fix genuinely reconciles the mapper (not a no-op).
+      expect(applyCanonicalFix(source), isNot(source));
+    });
+
+    // --- item 3: inheritance is a safe refusal, never destructive ----------
+
+    test('a DTO subclass with an inherited key in toJson is neither flagged '
+        'nor rewritten (regression: extends was ignored, so the inherited key '
+        'was a false drift and the fix regenerated toJson dropping it)', () {
+      const source = '''
+class Base {
+  final String id;
+  Base({required this.id});
+  factory Base.fromJson(Map<String, Object?> json) => Base(id: json['id'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+class Child extends Base {
+  final String name;
+  Child({required super.id, required this.name});
+  factory Child.fromJson(Map<String, Object?> json) =>
+      Child(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id, 'name': name};
+}
+''';
+      // Child declares only `name`, but its toJson carries the inherited `id`;
+      // without skipping subclasses that reads as `toJson keys not fields: id`.
+      expect(canonicalDiagnostics(source), isEmpty);
+      // The fix must not regenerate Child.toJson (which would drop 'id').
+      expect(applyCanonicalFix(source), source);
+    });
+
+    // --- item 4: spread / for / computed-key literals are hand-authored ----
+
+    test('a toJson with a spread element is treated as hand-modified: no false '
+        'drift and the fixer does not flatten it (regression: the spread was '
+        'read as an incomplete key set)', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id, ...extra()};
+  Map<String, Object?> extra() => {'name': name};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a toJson with a collection-for element is treated as hand-modified', () {
+      const source = '''
+class Dto {
+  final String id;
+  final List<String> keys;
+  Dto({required this.id, required this.keys});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, keys: const []);
+  Map<String, Object?> toJson() => {'id': id, for (final k in keys) k: 1};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a toJson with a computed (non-literal) key is treated as '
+        'hand-modified', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
+  Map<String, Object?> toJson() => {(id.isEmpty ? 'a' : 'b'): id};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a plain map literal with a genuine drift is still reported (negative: '
+        'the spread guard did not blanket-suppress drift)', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_drift');
+      expect(d.single.message, contains('fields not in toJson: name'));
     });
   });
 

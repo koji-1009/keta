@@ -2,131 +2,115 @@ library;
 
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/visitor.dart';
 
+import 'canonical_shape.dart';
 import 'diagnostic.dart';
 
 /// Reports canonical-form problems on DTO-shaped classes in [source]:
 ///
 /// - `keta_canonical_missing`: a DTO that lacks a `fromJson` factory or a
 ///   `toJson` method.
-/// - `keta_canonical_drift`: a DTO whose `toJson` map keys do not match its
-///   final field names.
+/// - `keta_canonical_drift`: a DTO whose `toJson`/`fromJson` keys do not match
+///   its final field names.
+/// - `keta_schema_drift`: a DTO whose `Schema` constant's `properties` do not
+///   match its final field names, so the emitted OpenAPI would be wrong.
 ///
 /// A class is a DTO by signal — it has a `Schema` constant, a `fromJson`, or a
 /// `toJson` — never by the shape of its fields, so plain service/value classes
 /// are never flagged. Purely syntactic; no resolution needed.
+///
+/// Every decision here — what counts as a DTO, whether a mapper is
+/// hand-modified, and whether the fixer could actually act — is delegated to
+/// [CanonicalClass] (canonical_shape.dart), the *same* recognizer the fixer
+/// uses. That is deliberate: `check` must flag exactly what `fix` would change
+/// and must never recommend a `fix` that would silently refuse the class.
 List<Diagnostic> canonicalDiagnostics(
   String source, {
   String file = '<memory>',
 }) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
-  final schemaNames = _schemaNames(unit);
+  final context = CanonicalUnit.of(unit);
   final diagnostics = <Diagnostic>[];
   for (final declaration in unit.declarations) {
     if (declaration is ClassDeclaration) {
-      _checkClass(declaration, schemaNames, file, diagnostics);
+      _checkClass(declaration, context, file, diagnostics);
     }
   }
   return diagnostics;
 }
 
-Set<String> _schemaNames(CompilationUnit unit) {
-  final names = <String>{};
-  for (final declaration in unit.declarations) {
-    if (declaration is! TopLevelVariableDeclaration) continue;
-    for (final variable in declaration.variables.variables) {
-      final init = variable.initializer;
-      final (name, isSchema) = switch (init) {
-        InstanceCreationExpression(
-          :final constructorName,
-          :final argumentList,
-        ) =>
-          (
-            _firstStringArg(argumentList),
-            constructorName.type.name.lexeme == 'Schema',
-          ),
-        MethodInvocation(:final methodName, :final argumentList) => (
-          _firstStringArg(argumentList),
-          methodName.name == 'Schema',
-        ),
-        _ => (null, false),
-      };
-      if (isSchema && name != null) names.add(name);
-    }
-  }
-  return names;
-}
-
-String? _firstStringArg(ArgumentList args) {
-  final first = args.arguments.isEmpty ? null : args.arguments.first;
-  return first is SimpleStringLiteral ? first.value : null;
-}
-
 void _checkClass(
   ClassDeclaration node,
-  Set<String> schemaNames,
+  CanonicalUnit context,
   String file,
   List<Diagnostic> diagnostics,
 ) {
-  final finalFields = <String>[];
-  ConstructorDeclaration? fromJson;
-  MethodDeclaration? toJson;
+  // Not a canonical DTO at all — no signal, abstract/sealed, or a subclass
+  // (whose inherited fields aren't derivable syntactically). The fixer ignores
+  // these identically, so the check stays silent.
+  final dto = CanonicalClass.of(node, context);
+  if (dto == null) return;
 
-  for (final member in node.body.members) {
-    if (member is FieldDeclaration && !member.isStatic) {
-      if (member.fields.isFinal) {
-        for (final v in member.fields.variables) {
-          if (v.initializer == null) finalFields.add(v.name.lexeme);
-        }
-      }
-    } else if (member is ConstructorDeclaration) {
-      if (member.factoryKeyword != null && member.name?.lexeme == 'fromJson') {
-        fromJson = member;
-      }
-    } else if (member is MethodDeclaration && member.name.lexeme == 'toJson') {
-      toJson = member;
-    }
+  final className = dto.className;
+  final nameToken = dto.nameToken;
+
+  Diagnostic make(String rule, String message) => Diagnostic(
+    rule: rule,
+    message: message,
+    file: file,
+    scope: className,
+    offset: nameToken.offset,
+    length: nameToken.length,
+  );
+
+  // The recommendation clause every message ends with. It fires the same
+  // finding regardless of fixability (a broken round-trip must be seen), but
+  // only points at `dart run keta_lints:fix` when the fixer would actually act.
+  // When [CanonicalClass.refusalReason] is non-null — a positional ctor, a
+  // field type outside the canonical subset, a hand-modified sibling mapper —
+  // recommending the fix would send the user to a command that refuses and
+  // no-ops, so the clause names the blocker and tells them to do it by hand.
+  // [fixVerb]/[handVerb] read naturally per subject ('materialize the mapper'
+  // vs 'reconcile it by hand').
+  String advise(String fixVerb, String handVerb) {
+    final reason = dto.refusalReason;
+    return reason == null
+        ? 'run keta_lints:fix to $fixVerb'
+        : '$handVerb by hand ($reason keeps keta_lints:fix from doing it)';
   }
 
-  final nameToken = node.namePart.typeName;
-  final className = nameToken.lexeme;
-  // A DTO by signal only; abstract/sealed carriers are never canonical DTOs.
-  final isDto =
-      schemaNames.contains(className) || fromJson != null || toJson != null;
-  if (!isDto || node.abstractKeyword != null || node.sealedKeyword != null) {
-    return;
-  }
-
-  if (fromJson == null || toJson == null) {
+  // --- missing mapper ------------------------------------------------------
+  if (dto.fromJson == null || dto.toJson == null) {
+    final side = dto.fromJson == null ? 'fromJson factory' : 'toJson method';
     diagnostics.add(
-      Diagnostic(
-        rule: 'keta_canonical_missing',
-        message:
-            'class $className has final fields but no '
-            '${fromJson == null ? 'fromJson factory' : 'toJson method'}; '
-            'run keta_lints:fix to materialize the canonical mapper',
-        file: file,
-        scope: className,
-        offset: nameToken.offset,
-        length: nameToken.length,
+      make(
+        'keta_canonical_missing',
+        'class $className has final fields but no $side; '
+            '${advise('materialize the canonical mapper', 'materialize it')}',
       ),
     );
     return;
   }
 
-  final jsonKeys = _toJsonKeys(toJson);
-  if (jsonKeys == null) return; // hand-modified shape; not verified.
-  if (!_isCanonicalFromJson(fromJson, className)) {
-    return; // hand-modified shape; not verified — mirrors the toJson gate
-    // above, so `keta_lints:fix` (which shares this same recognizer, see
-    // fix.dart) is never recommended for a fromJson it will refuse to touch.
-  }
-  final fields = finalFields.toSet();
+  // --- both mappers present ------------------------------------------------
+  // A mapper the fixer can't recognize is hand-modified: its key set can't be
+  // trusted, so it is neither verified nor reported — the same silence the
+  // fixer honors by leaving it untouched. This is also where a spread /
+  // collection-for / computed-key toJson lands (toJsonKeys returns null), so a
+  // hand-authored literal is never misread as an incomplete key set.
+  final jsonKeys = toJsonKeys(dto.toJson!);
+  if (jsonKeys == null) return;
+  if (!isCanonicalFromJson(dto.fromJson!, className)) return;
+
+  // Drift is reported against the FULL final-field set (not the fixer's
+  // resolvable subset): a broken round-trip is a real bug the user must see
+  // even when a positional ctor or an exotic field type means the auto-fixer
+  // will decline it — the same posture the mapper-drift check has always had.
+  final fields = dto.allFinalFieldNames;
+  final fromKeys = fromJsonKeys(dto.fromJson!);
   // Verify BOTH directions of the round-trip: toJson writes exactly the fields,
   // and fromJson reads exactly the fields. A half-done rename (fromJson still
   // reading the old key) round-trips broken but a toJson-only check misses it.
-  final fromKeys = _fromJsonKeys(fromJson);
   final parts = [
     if (fields.difference(jsonKeys).isNotEmpty)
       'fields not in toJson: ${fields.difference(jsonKeys).join(', ')}',
@@ -139,98 +123,39 @@ void _checkClass(
   ];
   if (parts.isNotEmpty) {
     diagnostics.add(
-      Diagnostic(
-        rule: 'keta_canonical_drift',
-        message:
-            'class $className has drifted (${parts.join('; ')}); '
-            'run keta_lints:fix to reconcile the mapper',
-        file: file,
-        scope: className,
-        offset: nameToken.offset,
-        length: nameToken.length,
+      make(
+        'keta_canonical_drift',
+        'class $className has drifted (${parts.join('; ')}); '
+            '${advise('reconcile the mapper', 'reconcile it')}',
       ),
     );
   }
-}
 
-/// Whether [fromJson]'s body is a recognizable canonical shape: a single
-/// expression that is a direct call to the class's own default constructor
-/// (`ClassName(...)`) — the shape `keta_lints:fix` itself generates. Mirrors
-/// [_toJsonKeys] returning null for a non-canonical toJson at the same
-/// granularity — it recognizes the outer shape (an expression-bodied factory
-/// that instantiates the class directly) without verifying each argument's
-/// inner expression, exactly as `_toJsonKeys`/[_isCanonicalMap]-in-fix.dart
-/// recognize a map literal without verifying each entry's value.
-///
-/// A block body with local variables, or a fallback lookup spread across
-/// statements (`final id = json['id'] ?? json['legacy_id']; return
-/// Dto(id: id);`), does not match and is treated as hand-modified — the
-/// fromJson key set below is only trustworthy, and only worth reporting drift
-/// on, once this recognizes the shape. That keeps this diagnostic in
-/// lockstep with what the fix (see fix.dart, which shares this exact
-/// recognizer) can and cannot touch.
-bool _isCanonicalFromJson(ConstructorDeclaration fromJson, String className) {
-  final body = fromJson.body;
-  if (body is! ExpressionFunctionBody) return false;
-  return switch (body.expression) {
-    InstanceCreationExpression(:final constructorName)
-        when constructorName.type.name.lexeme == className &&
-            constructorName.name == null =>
-      true,
-    MethodInvocation(:final methodName) when methodName.name == className =>
-      true,
-    _ => false,
-  };
-}
-
-/// The string keys read via `…['key']` inside the fromJson factory (regardless
-/// of the map parameter's name), i.e. the wire keys fromJson consumes.
-Set<String> _fromJsonKeys(ConstructorDeclaration fromJson) {
-  final keys = <String>{};
-  fromJson.visitChildren(_IndexKeyVisitor(keys));
-  return keys;
-}
-
-class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
-  _IndexKeyVisitor(this.keys);
-  final Set<String> keys;
-  @override
-  void visitIndexExpression(IndexExpression node) {
-    final index = node.index;
-    if (index is SimpleStringLiteral) keys.add(index.value);
-    super.visitIndexExpression(node);
-  }
-}
-
-/// The string keys of the map [toJson] returns, or null if the body is not a
-/// recognizable map literal (a hand-modified shape).
-Set<String>? _toJsonKeys(MethodDeclaration toJson) {
-  final body = toJson.body;
-  Expression? returned;
-  if (body is ExpressionFunctionBody) {
-    returned = body.expression;
-  } else if (body is BlockFunctionBody) {
-    for (final statement in body.block.statements) {
-      if (statement is ReturnStatement) returned = statement.expression;
+  // --- schema drift --------------------------------------------------------
+  // The Schema constant is the source of the emitted OpenAPI document. If its
+  // `properties` no longer match the fields, `check` was previously green while
+  // `fix` would rewrite the Schema — CI shipped a wrong contract. Report it so
+  // check flags exactly what fix reconciles. A distinct rule id (not
+  // keta_canonical_drift) keeps the mapper and schema findings — and their
+  // stable ids — separate when a class has drifted on both.
+  final schema = context.schemas[className];
+  if (schema != null) {
+    final props = schemaPropertyNames(schema);
+    if (!setEquals(props, fields)) {
+      final schemaParts = [
+        if (fields.difference(props).isNotEmpty)
+          'fields not in schema: ${fields.difference(props).join(', ')}',
+        if (props.difference(fields).isNotEmpty)
+          'schema properties not fields: ${props.difference(fields).join(', ')}',
+      ];
+      diagnostics.add(
+        make(
+          'keta_schema_drift',
+          'class $className Schema constant has drifted '
+              '(${schemaParts.join('; ')}); '
+              '${advise('reconcile the Schema', 'reconcile the Schema')}',
+        ),
+      );
     }
   }
-  if (returned is! SetOrMapLiteral) return null;
-
-  final keys = <String>{};
-  void collect(Iterable<CollectionElement> elements) {
-    for (final element in elements) {
-      switch (element) {
-        case MapLiteralEntry(:final key) when key is SimpleStringLiteral:
-          keys.add(key.value);
-        case IfElement():
-          collect([element.thenElement]);
-          if (element.elseElement != null) collect([element.elseElement!]);
-        default:
-          break;
-      }
-    }
-  }
-
-  collect(returned.elements);
-  return keys;
 }

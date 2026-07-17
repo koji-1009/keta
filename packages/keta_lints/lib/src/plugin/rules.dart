@@ -65,6 +65,11 @@ const _canonicalDrift = LintCode(
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
+const _schemaDrift = LintCode(
+  'keta_schema_drift',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
 const _txOutsideRecover = LintCode(
   'keta_tx_outside_recover',
   '{0}',
@@ -166,15 +171,16 @@ class KetaQueryRule extends _KetaRule {
   };
 }
 
-/// `keta_canonical_missing` + `keta_canonical_drift` — a DTO's mapper is absent
-/// or has drifted from its field set.
+/// `keta_canonical_missing` + `keta_canonical_drift` + `keta_schema_drift` — a
+/// DTO's mapper is absent, its mapper has drifted from its field set, or its
+/// `Schema` constant has drifted from its field set (a wrong OpenAPI document).
 class KetaCanonicalRule extends _KetaRule {
   KetaCanonicalRule()
     : super(
         name: 'keta_canonical',
         description:
-            'A DTO must carry fromJson/toJson whose keys match its final '
-            'fields.',
+            'A DTO must carry fromJson/toJson and a Schema whose keys match its '
+            'final fields.',
       );
 
   @override
@@ -184,6 +190,7 @@ class KetaCanonicalRule extends _KetaRule {
   Map<String, LintCode> get _codes => const {
     'keta_canonical_missing': _canonicalMissing,
     'keta_canonical_drift': _canonicalDrift,
+    'keta_schema_drift': _schemaDrift,
   };
 }
 
