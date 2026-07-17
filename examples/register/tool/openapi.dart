@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:keta_example/app.dart';
+import 'package:keta_register_example/app.dart';
 
 /// Emits the OpenAPI document — the code's shadow — to stdout:
 ///   dart run tool/openapi.dart > openapi.yaml

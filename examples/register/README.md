@@ -1,9 +1,9 @@
-# keta_example
+# keta_register_example
 
 A runnable keta app: a small user API over SQLite, in both routing syntaxes,
 with OpenAPI output. It doubles as the reference the file-convention example
-(`../example_files`) is checked against. For authentication, see
-`../example_auth`.
+(`../files`) is checked against. For authentication, see
+`../auth`.
 
 ## Run
 

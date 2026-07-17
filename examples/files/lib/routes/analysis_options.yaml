@@ -1,6 +1,6 @@
 # Applies to the route tree only. The analyzer takes the nearest options file to
 # each source, so everything outside lib/routes/ keeps the repo's rules.
-include: ../../../analysis_options.yaml
+include: ../../../../analysis_options.yaml
 
 linter:
   rules:

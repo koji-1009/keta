@@ -1,4 +1,4 @@
-name: keta_example
+name: keta_register_example
 description: A runnable keta app — routes in both syntaxes, SQLite, OpenAPI.
 publish_to: none
 

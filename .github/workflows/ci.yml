@@ -36,7 +36,7 @@ jobs:
       - run: dart analyze --fatal-infos
       - name: Test every package and example
         run: |
-          for d in packages/*/ example example_auth example_files; do
+          for d in packages/*/ examples/*/; do
             if [ -d "$d/test" ]; then
               echo "=== $d"
               (cd "$d" && dart test)

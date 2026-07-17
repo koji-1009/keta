@@ -22,6 +22,6 @@ workspace:
   - packages/keta_otel
   - packages/keta_multipart
   - packages/keta_rds
-  - example
-  - example_files
-  - example_auth
+  - examples/register
+  - examples/files
+  - examples/auth

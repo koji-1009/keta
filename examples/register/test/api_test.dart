@@ -1,9 +1,9 @@
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_db/keta_db.dart';
-import 'package:keta_example/app.dart';
-import 'package:keta_example/env.dart';
 import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta_register_example/app.dart';
+import 'package:keta_register_example/env.dart';
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 

@@ -18,7 +18,7 @@ One line per route drives three things from a single source:
 resolves a token to a role (swap the stand-in table for a JWT or session
 unchanged) and the role guard.
 
-`SecurityPolicy(defaults: [bearer])`: a route that declares no security fails closed (401), matching `../example` and `../example_files`. `/public` is public only because it says so explicitly (`RouteDoc(security: const [])`) — forgetting that declaration would 401 it, not leave it open.
+`SecurityPolicy(defaults: [bearer])`: a route that declares no security fails closed (401), matching `../register` and `../files`. `/public` is public only because it says so explicitly (`RouteDoc(security: const [])`) — forgetting that declaration would 401 it, not leave it open.
 
 ## Run
 

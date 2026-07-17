@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:keta_db/keta_db.dart';
-import 'package:keta_example/app.dart';
-import 'package:keta_example/env.dart';
+import 'package:keta_register_example/app.dart';
+import 'package:keta_register_example/env.dart';
 import 'package:keta_sqlite/keta_sqlite.dart';
 
 Future<void> main() async {
@@ -26,7 +26,7 @@ Future<void> main() async {
   // serve boots one env per isolate; Env.boot is a static tear-off, so the same
   // call scales horizontally by raising `isolates`.
   final server = await buildApp().serve(Env.boot, port: port, isolates: 1);
-  stdout.writeln('keta_example listening on :$port');
+  stdout.writeln('keta_register_example listening on :$port');
   await ProcessSignal.sigterm.watch().first;
   await server.shutdown();
 }
