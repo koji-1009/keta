@@ -21,13 +21,24 @@ import 'package:sqlite3/sqlite3.dart';
 /// request it is handling, DB-bound or not, stalls until the call returns.
 /// This is a property of embedding SQLite in-process, not a bug; the
 /// mitigations are `serve(isolates: n)` (so one slow query does not stall the
-/// whole process) and keeping queries indexed and small.
+/// whole process) and keeping queries indexed and small. [SqliteDb.open]'s
+/// [lockTimeout] doc states this constraint's sharpest edge: the
+/// `busy_timeout` PRAGMA's own retry is one such "slow query".
 class SqliteDb implements Db {
   SqliteDb._(this._db, this._lockTimeout);
 
   /// Opens (creating if absent) the database at [path]. [lockTimeout] bounds how
   /// long a statement waits to acquire the single-writer lock (default 30s), and
   /// is also used as this connection's `busy_timeout` PRAGMA (see [_open]).
+  ///
+  /// **Stated trade-off**: `busy_timeout`'s retry loop spins inside sqlite3's
+  /// synchronous FFI call (see the class-level constraint above), so a
+  /// cross-process writer contending for the file lock blocks this connection's
+  /// entire isolate — every request it serves, not only the one waiting on the
+  /// lock — for up to [lockTimeout], not just the one call. Measured: a 500ms
+  /// contention window fired zero event-loop timers on the blocked isolate.
+  /// Deployments expecting cross-process writers should keep [lockTimeout]
+  /// modest rather than relying on its 30s default.
   factory SqliteDb.open(
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),

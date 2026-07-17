@@ -39,10 +39,14 @@ class MigrationResult {
 /// The division of labour is: apply is externally serialized (this
 /// function, run once); [VerifyMigrations.verifyMigrations] is what each
 /// node/isolate runs at boot, and it only reads. If the single-applier
-/// assumption is broken anyway, the ledger's per-version primary key plus
-/// transactional DDL (on engines that have it) turns the race into a loud
-/// failure — a duplicate-key violation surfacing as this function's
-/// [StateError] — rather than silent corruption.
+/// assumption is broken anyway, the race still fails loudly rather than
+/// corrupting the schema silently — but not as a ledger primary-key
+/// violation. Measured on SQLite: `BEGIN` takes the file lock, so the loser
+/// serializes there and fails with `SQLITE_BUSY`/lock-timeout, or with the
+/// migration body's own conflict (e.g. "table already exists") if it gets
+/// that far — the ledger's per-version primary key is only the last line of
+/// defense, reached only on an engine with transactional DDL that lets both
+/// racers complete the migration body and reach the ledger insert.
 Future<MigrationResult> applyMigrations(
   Db db, {
   String directory = 'migrations',
