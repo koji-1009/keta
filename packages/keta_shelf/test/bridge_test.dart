@@ -334,6 +334,74 @@ void main() {
       final res = await TestClient(app, Env()).get('/q');
       expect(res.text(), 'http://localhost/q');
     });
+
+    // A bare `?` (no key=value pairs) is a distinct request from no `?` at
+    // all — Uri.hasQuery tells them apart even though uri.query is '' for
+    // both. Losing the `?` on round-trip would silently rewrite the request
+    // a shelf handler observes.
+    test('preserves a bare query separator', () async {
+      final app = App<Env>();
+      app.get(
+        '/q',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(app, Env()).get('/q?');
+      expect(res.text(), 'http://localhost/q?');
+    });
+
+    // The `Host` header comes straight off the wire, unvalidated, so it can be
+    // anything an attacker sends. A malformed value must fail the request
+    // (400), not the process handling it (500).
+    test(
+      'rejects a malformed Host header as 400 (unterminated IPv6 bracket)',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/token',
+          shelfToKeta(
+            (request) => shelf.Response.ok(request.requestedUri.toString()),
+          ),
+        );
+        final res = await TestClient(
+          app,
+          Env(),
+        ).get('/token', headers: {'host': '[::1'});
+        expect(res.status, 400);
+      },
+    );
+
+    test('rejects a malformed Host header as 400 (invalid port)', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'host:abc'});
+      expect(res.status, 400);
+    });
+
+    test('passes a valid IPv6 Host header through unchanged', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': '[::1]:8080'});
+      expect(res.status, 200);
+      expect(res.text(), 'http://[::1]:8080/token');
+    });
   });
 
   group('_ShelfRequest.remoteAddress', () {

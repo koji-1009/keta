@@ -13,6 +13,15 @@ import 'package:shelf/shelf.dart' as shelf;
 /// A route that answers with `Response.upgrade` (WebSocket) cannot be served
 /// this way — shelf hands no socket across this bridge — so such a response is
 /// rejected with a `StateError` rather than mis-framed onto the wire.
+///
+/// Client disconnect is invisible through this bridge: shelf exposes no
+/// connection-close signal (see `_ShelfRequest.closed`), so `c.aborted`,
+/// `timeout()`'s cooperative-cancellation abort, and any SSE/WebSocket-style
+/// cleanup that watches for the client leaving never fire — a keta route doing
+/// long-poll or SSE work runs to completion (or its own timeout) even after the
+/// peer is long gone. The bundled H1 transport, by contrast, can observe a drop
+/// mid-request. A keta app relying on disconnect detection should be served on
+/// its own transport, not mounted here.
 shelf.Handler ketaToShelf<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
   final router = app.compile(env, maxBodyBytes: maxBodyBytes);
   return (shelf.Request request) async {
@@ -53,6 +62,11 @@ shelf.Handler ketaToShelf<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
 /// [maxBodyBytes] as a [PayloadTooLarge] stream error (set it to the app's
 /// `maxBodyBytes`). Websocket hijack is not supported — keta's [Transport]
 /// exposes no socket — and a `request.hijack()` surfaces as a `StateError`.
+///
+/// The synthesized `shelf.Request` carries no `context` map: keta has nothing
+/// to put there (no `shelf.io.connection_info` and friends), so shelf
+/// middleware that reads `shelf_io`-specific context keys degrades to its
+/// fallback behavior instead of throwing.
 Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
   return (Context<E> c) async {
     final request = shelf.Request(
@@ -83,12 +97,25 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
 /// shelf requires an absolute URL; keta routing only uses the path and query.
 /// The real `Host` header is reflected into the authority when present (falling
 /// back to localhost), so a shelf handler reading `requestedUri` sees it.
+///
+/// The `Host` header is attacker-controlled and unvalidated by the time it
+/// reaches here, so `Uri.parse` on it can throw `FormatException` (a stray
+/// space, an unterminated IPv6 bracket, …). Left uncaught that would surface as
+/// a 500 for a malformed request that is properly the client's fault; it is
+/// reported as a [BadRequest] (400) instead. `uri.hasQuery` (rather than
+/// `uri.query.isEmpty`) decides whether to carry a query component, so a
+/// bare-`?` request keeps its empty-but-present query instead of losing the
+/// `?` entirely.
 Uri _absolute(Uri uri, String? host) {
   if (uri.hasScheme) return uri;
   final authority = (host == null || host.isEmpty) ? 'localhost' : host;
-  return Uri.parse(
-    'http://$authority',
-  ).replace(path: uri.path, query: uri.query.isEmpty ? null : uri.query);
+  final Uri base;
+  try {
+    base = Uri.parse('http://$authority');
+  } on FormatException {
+    throw BadRequest('malformed Host header: $host');
+  }
+  return base.replace(path: uri.path, query: uri.hasQuery ? uri.query : null);
 }
 
 /// Passes [source] through while counting bytes, failing with a [PayloadTooLarge]
