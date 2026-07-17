@@ -141,7 +141,16 @@ Discovery discover(String routesDir, {String importBase = 'routes'}) {
 
   final rels =
       dir
-          .listSync(recursive: true)
+          // A route tree is authored files: every entry under routes/ is
+          // either a route or a `_middleware.dart` scope, both meant to be
+          // read as filesystem paths in their own right. A symlink into (or
+          // within) that tree is at best an alias for truth that lives
+          // elsewhere, and at worst a cycle — `listSync`'s default of
+          // following links would walk it forever, or throw once the OS's
+          // own link-depth limit gives out. Not following links makes a
+          // symlink a file discovery skips (it fails `whereType<File>`, same
+          // as a directory), rather than a trap discovery can fall into.
+          .listSync(recursive: true, followLinks: false)
           .whereType<File>()
           .where((f) => f.path.endsWith('.dart'))
           .map(

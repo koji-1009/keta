@@ -280,4 +280,29 @@ void main() {
       expect(missing.map((f) => f.url), ['/admin/ping']);
     });
   });
+
+  group('a symlink into the tree is not walked', () {
+    test('a cycle is not followed, not looped, not thrown', () {
+      // A route tree is authored files; a symlink into it is at best an
+      // alias for truth that lives elsewhere. Point one at its own ancestor
+      // and the cycle is real: `listSync`'s default of following links would
+      // walk it forever (or until the OS's own link-depth limit throws).
+      // `followLinks: false` makes the link itself the listing entry instead
+      // of something to descend into, so it is dropped by `whereType<File>`
+      // the same as a plain directory is.
+      final dir = tree({'admin/ping.dart': _any});
+      final loop = Link('${dir.path}/loop');
+      try {
+        loop.createSync(dir.path);
+      } on FileSystemException {
+        // Some sandboxes and filesystems refuse to create a symlink at all
+        // (no privilege, or no support for them). The behavior under test is
+        // how discovery walks a link that exists, not whether one can be
+        // made to exist here, so skip rather than fail.
+        markTestSkipped('filesystem refused to create a symlink');
+        return;
+      }
+      expect(discoverRouteFiles(dir.path).map((f) => f.url), ['/admin/ping']);
+    });
+  });
 }

@@ -41,6 +41,31 @@ void main() {
       );
     });
 
+    test('a generated import line silences the infos it inherently trips', () {
+      // Every generated alias is `$`-led (see `_aliasFor`/`_middlewareAliasFor`
+      // in discover.dart) and the region is sorted by URL, not interleaved
+      // alphabetically with the file's own imports — both `library_prefixes`
+      // and `directives_ordering` are the analyzer noticing exactly that,
+      // inherent to this generator's own convention rather than a mistake in
+      // any one tree. The generator owns the suppression on the line it
+      // writes, so a consuming project never carries a matching
+      // `ignore_for_file` the generator did not ask for.
+      final out = syncManifest(_imports, [
+        file(
+          importPath: 'routes/users/_id.dart',
+          prefix: r'$users_id',
+          template: ['users', ':id'],
+        ),
+      ]);
+      expect(
+        out,
+        contains(
+          "import 'routes/users/_id.dart' as \$users_id; "
+          '// ignore: directives_ordering, library_prefixes',
+        ),
+      );
+    });
+
     test('the root is an empty template, not an empty string', () {
       final out = syncManifest(_imports, [
         file(importPath: 'routes/index.dart', prefix: r'$index', template: []),
@@ -179,6 +204,29 @@ void main() {
       );
     });
 
+    test('a middleware import line silences the same two infos', () {
+      // The double-`$` middleware alias is the one `library_prefixes`
+      // actually flags (a single leading `$` alone passes its check); the
+      // generator does not special-case that away, since routing on which
+      // diagnostic a given alias shape happens to trigger today is exactly
+      // the kind of fragile knowledge this suppression exists to not need.
+      final out = syncManifest(_imports, const [
+        RouteFile(
+          importPath: 'routes/admin/ping.dart',
+          prefix: r'$admin_ping',
+          template: ['admin', 'ping'],
+          middleware: [root, admin],
+        ),
+      ]);
+      expect(
+        out,
+        contains(
+          "import 'routes/admin/_middleware.dart' as \$mw\$admin; "
+          '// ignore: directives_ordering, library_prefixes',
+        ),
+      );
+    });
+
     test('a scope shared by two routes is imported once', () {
       final out = syncManifest(_imports, const [
         RouteFile(
@@ -276,6 +324,40 @@ void main() {
         () => syncManifest('void register(App app) {}', const []),
         throwsA(isA<FormatException>()),
       );
+    });
+  });
+
+  group('a CRLF manifest keeps its own convention, not a mix', () {
+    // The fixtures above are LF; this mirrors them character-for-character
+    // but with '\r\n' line endings, the way a Windows checkout or a
+    // Windows-authored file would actually look on disk.
+    final importsCrlf = _imports.replaceAll('\n', '\r\n');
+    final f = file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']);
+
+    test('sync of a CRLF manifest emits uniform CRLF', () {
+      final out = syncManifest(importsCrlf, [f]);
+      expect(out, contains('\r\n'));
+      // Stripping every '\r\n' pair must remove every newline in the
+      // result. A bare '\n' surviving that means some line — preserved or
+      // generated — did not get the '\r', i.e. exactly the mixed-EOL bug
+      // this guards against.
+      expect(out.replaceAll('\r\n', ''), isNot(contains('\n')));
+    });
+
+    test('sync of a CRLF manifest is idempotent', () {
+      final synced = syncManifest(importsCrlf, [f]);
+      expect(syncManifest(synced, [f]), synced, reason: 'settled');
+    });
+
+    test('marker detection still works on a CRLF manifest', () {
+      final synced = syncManifest(importsCrlf, [f]);
+      expect(unregistered(synced, [f]), isEmpty);
+      expect(unregistered(importsCrlf, [f]), [f]);
+    });
+
+    test('a plain LF manifest is untouched by the CRLF handling', () {
+      final out = syncManifest(_imports, [f]);
+      expect(out, isNot(contains('\r')));
     });
   });
 

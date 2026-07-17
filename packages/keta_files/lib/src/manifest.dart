@@ -54,8 +54,21 @@ String _templateLiteral(List<String> template) => template.isEmpty
 String _importFor(RouteFile file) =>
     _importLine(file.importPath, file.prefix);
 
+/// A generated import line trips two analyzer infos in the consuming project,
+/// both inherent to the shape this generator emits and neither fixable by
+/// writing the line differently: `directives_ordering`, because the region is
+/// sorted by URL/import path rather than alphabetically interleaved with the
+/// file's hand-written imports, and `library_prefixes`, because every alias
+/// is `$`-led on purpose (see [_aliasFor]) and so can never be
+/// `lower_underscore_case`. Suppressing both here — on the line that triggers
+/// them, naming exactly those two diagnostics — means the generator owns the
+/// noise its own convention creates, instead of every consuming project
+/// carrying a matching `ignore_for_file` the generator did not ask for and the
+/// user did not choose.
+const _importIgnore = '// ignore: directives_ordering, library_prefixes';
+
 String _importLine(String importPath, String prefix) =>
-    'import ${_dartStringLiteral(importPath)} as $prefix;';
+    'import ${_dartStringLiteral(importPath)} as $prefix; $_importIgnore';
 
 /// The middleware files [files] point at, deduplicated by import path and sorted,
 /// so the imports region is a function of the tree alone. Only the scopes a route
@@ -124,12 +137,25 @@ String _dartStringLiteral(String value) {
 ///
 /// Each region is fenced with `// dart format off`/`on`, so what is written
 /// here is what stays: see [_formatOff].
+///
+/// [source] keeps whatever end-of-line convention it already has. A CRLF
+/// manifest — Windows-checked-out or Windows-authored — would otherwise get a
+/// mixed file back: the preserved lines carry their own `\r\n`, but content
+/// generated here is built on plain `\n`, so a naive `split('\n')` /
+/// `join('\n')` round-trip leaves a stray `\r` on every preserved line and
+/// none on the generated ones. Normalizing to `\n` for the whole rewrite and
+/// converting back only if the source was CRLF to begin with keeps every
+/// line — preserved or generated — in one convention, which is also what
+/// idempotence needs: a second sync must reproduce the same bytes, not just
+/// the same characters.
 String syncManifest(String source, List<RouteFile> files) {
+  final crlf = source.contains('\r\n');
+  final normalized = crlf ? source.replaceAll('\r\n', '\n') : source;
   // The imports region carries the route files and the middleware files they
   // fall under. Both are derived from `files` — a route file names its own
   // scopes — so `syncManifest` stays a pure function of the route list, and
   // remains idempotent: the same tree writes the same imports in the same order.
-  var lines = source.split('\n');
+  var lines = normalized.split('\n');
   lines = _replaceRegion(lines, _importsMarker, [
     for (final f in files) _importFor(f),
     for (final m in _referencedMiddleware(files))
@@ -138,7 +164,8 @@ String syncManifest(String source, List<RouteFile> files) {
   lines = _replaceRegion(lines, _routesMarker, [
     for (final f in files) registrationFor(f),
   ]);
-  return lines.join('\n');
+  final joined = lines.join('\n');
+  return crlf ? joined.replaceAll('\n', '\r\n') : joined;
 }
 
 /// The route files whose bindings are absent from [source]'s managed regions —
