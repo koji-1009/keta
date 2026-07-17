@@ -1,6 +1,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io' as io show gzip;
 
 import 'app.dart';
 import 'chain.dart';
@@ -177,6 +179,194 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
   );
   return completer.future;
 };
+
+/// Adds a strong `ETag` over a buffered response body and answers a matching
+/// conditional `GET`/`HEAD` with `304 Not Modified`.
+///
+/// The tag is `"<hash>"`, hashed with FNV-1a (64-bit) over the body bytes. FNV
+/// rather than SHA because Ring 0 has no crypto dependency (dart:io ships no
+/// SHA) and a cache validator needs only a fast, well-distributed content
+/// fingerprint, not collision resistance against an adversary — a caller who
+/// controls the body already controls the response. Only 200 responses with a
+/// buffered body (`String`/`List<int>`) are tagged; a `Stream` body passes
+/// through untouched (its length and bytes are not known up front). An
+/// `ETag` the handler already set is respected, not overwritten.
+///
+/// On a `GET`/`HEAD` whose `If-None-Match` matches (weak comparison per RFC 9110
+/// §8.8.3.2 — a `W/`-prefix is ignored on both sides — plus `*` and
+/// comma-separated lists), the response becomes a bodyless `304` carrying the
+/// `ETag` and the non-content headers, with the content headers dropped per
+/// RFC 9110 §15.4.5.
+///
+/// Ordering with [gzip]: register `gzip()` **before** `etag()` (gzip outer,
+/// etag inner). The etag is then computed over the un-encoded (identity) body
+/// and gzip encodes it afterwards, so the validator depends only on the
+/// handler's own bytes — deterministic regardless of the compressor — which RFC
+/// 9110 §8.8.3 permits ("computed pre-encoding"). Putting gzip inside etag
+/// instead would make the tag depend on byte-exact compressor reproducibility.
+Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
+  return chain(next(c), (Response r) {
+    final body = r.body;
+    // A stream's bytes are not buffered; leave it and any non-200 untouched.
+    if (body is! String && body is! List<int>) return r;
+    if (r.status != 200) return r;
+
+    final bytes = body is String ? utf8.encode(body) : body as List<int>;
+    // Respect a handler-supplied validator: use it for the comparison and do
+    // not overwrite it.
+    final existing = r.headers['etag']?.first;
+    final tag = existing ?? '"${_fnv1a64Hex(bytes)}"';
+
+    final method = c.method;
+    if ((method == 'GET' || method == 'HEAD') &&
+        _ifNoneMatch(c.header('if-none-match'), tag)) {
+      final headers = <String, List<String>>{};
+      r.headers.forEach((name, values) {
+        // A 304 carries validators and metadata but not content headers
+        // (RFC 9110 §15.4.5) — the client keeps its cached representation.
+        if (name == 'content-type' ||
+            name == 'content-length' ||
+            name == 'content-encoding') {
+          return;
+        }
+        headers[name] = values;
+      });
+      headers['etag'] = [tag];
+      return Response(304, headers: headers, body: '');
+    }
+
+    if (existing != null) return r;
+    return Response(
+      r.status,
+      headers: {
+        ...r.headers,
+        'etag': [tag],
+      },
+      body: r.body,
+    );
+  });
+};
+
+/// True when [ifNoneMatch] (a request header value) matches [tag] under RFC 9110
+/// §8.8.3.2 weak comparison: `*` matches any current representation, otherwise
+/// any comma-separated entity-tag whose opaque form equals [tag]'s, ignoring a
+/// `W/` weakness prefix on either side.
+bool _ifNoneMatch(String? ifNoneMatch, String tag) {
+  if (ifNoneMatch == null) return false;
+  final want = _weakStrip(tag);
+  for (final raw in ifNoneMatch.split(',')) {
+    final candidate = raw.trim();
+    if (candidate == '*') return true;
+    if (_weakStrip(candidate) == want) return true;
+  }
+  return false;
+}
+
+String _weakStrip(String tag) => tag.startsWith('W/') ? tag.substring(2) : tag;
+
+String _fnv1a64Hex(List<int> bytes) {
+  // Dart's int is 64-bit two's complement on the native VM (keta's only target;
+  // Ring 0 does not target the web), so the multiply wraps mod 2^64 exactly as
+  // FNV-1a requires.
+  var hash = 0xcbf29ce484222325;
+  for (final b in bytes) {
+    hash ^= b;
+    hash *= 0x100000001b3;
+  }
+  // Format as two unsigned 32-bit halves so a wrapped (negative) int still
+  // renders as a stable 16-hex string.
+  final hi = (hash >> 32) & 0xffffffff;
+  final lo = hash & 0xffffffff;
+  return hi.toRadixString(16).padLeft(8, '0') +
+      lo.toRadixString(16).padLeft(8, '0');
+}
+
+/// Compresses a buffered response body with gzip when the request advertises it
+/// in `Accept-Encoding`, using dart:io's ZLib gzip codec (SDK only — Ring 0
+/// stays zero-dependency).
+///
+/// A non-stream response gains `Vary: Accept-Encoding` (unioned with any
+/// existing `Vary`, the same discipline as [cors]) because its representation is
+/// negotiated on that header. Compression itself is skipped — the body passes
+/// through unchanged — when the request does not accept gzip (including an
+/// explicit `gzip;q=0`), the response is already `Content-Encoding`d, the status
+/// is 204/304, or the body is smaller than [threshold] bytes (compressing a
+/// tiny body spends more bytes than it saves). A `Stream` body passes through
+/// entirely untouched (no `Vary`), since it is not buffered.
+///
+/// The compressed body is a `List<int>`, so the transport frames it with the
+/// correct post-compression `Content-Length` — gzip runs before framing.
+///
+/// Ordering with [etag]: register `gzip()` **before** `etag()` (see [etag]).
+Middleware<E> gzip<E>({int threshold = 1024}) =>
+    (Context<E> c, Handler<E> next) {
+      return chain(next(c), (Response r) {
+        final body = r.body;
+        // A stream is not buffered; pass it through with nothing added.
+        if (body is! String && body is! List<int>) return r;
+
+        final headers = _varyAcceptEncoding(r.headers);
+
+        final alreadyEncoded = r.headers.containsKey('content-encoding');
+        final compressible =
+            !alreadyEncoded &&
+            r.status != 204 &&
+            r.status != 304 &&
+            _acceptsGzip(c.header('accept-encoding'));
+        if (!compressible) {
+          return Response(r.status, headers: headers, body: body);
+        }
+
+        final bytes = body is String ? utf8.encode(body) : body as List<int>;
+        // Compressing a body below the threshold adds header overhead for no
+        // real saving, so it is left as-is (but still Vary-tagged above).
+        if (bytes.length < threshold) {
+          return Response(r.status, headers: headers, body: body);
+        }
+
+        headers['content-encoding'] = const ['gzip'];
+        return Response(
+          r.status,
+          headers: headers,
+          body: io.gzip.encode(bytes),
+        );
+      });
+    };
+
+/// True when [acceptEncoding] advertises gzip with a non-zero q-value — an
+/// explicit `gzip` token, or `*`, in either case not overridden by `;q=0`.
+bool _acceptsGzip(String? acceptEncoding) {
+  if (acceptEncoding == null) return false;
+  for (final raw in acceptEncoding.split(',')) {
+    final parts = raw.split(';');
+    final coding = parts.first.trim().toLowerCase();
+    if (coding != 'gzip' && coding != '*') continue;
+    var q = 1.0;
+    for (final param in parts.skip(1)) {
+      final p = param.trim();
+      if (p.startsWith('q=')) {
+        q = double.tryParse(p.substring(2)) ?? 1.0;
+      }
+    }
+    if (q > 0) return true;
+  }
+  return false;
+}
+
+/// Returns a mutable copy of [headers] with `Accept-Encoding` unioned into
+/// `Vary`, preserving any value a downstream middleware already set.
+Map<String, List<String>> _varyAcceptEncoding(
+  Map<String, List<String>> headers,
+) {
+  final merged = {...headers};
+  final vary = merged['vary'];
+  if (vary == null) {
+    merged['vary'] = const ['Accept-Encoding'];
+  } else if (!vary.any((v) => v.toLowerCase() == 'accept-encoding')) {
+    merged['vary'] = [...vary, 'Accept-Encoding'];
+  }
+  return merged;
+}
 
 /// A parsed W3C `traceparent` header.
 class TraceContext {

@@ -67,6 +67,7 @@ class RequestCtx<E> {
   bool _streamTaken = false;
   Object? _bodyError;
   StackTrace? _bodyStack;
+  Map<String, String>? _cookies;
 
   /// The matched route's composed handler, or null when nothing matched — set
   /// by dispatch so app-level middleware can wrap the 404/405 synthesis too.
@@ -148,6 +149,35 @@ class RequestCtx<E> {
   T? tryGet<T>(Key<T> key) => _store[key] as T?;
 
   void set<T>(Key<T> key, T value) => _store[key] = value;
+
+  String? cookie(String name) => cookies[name];
+
+  /// Parses the `Cookie` header into name→value pairs, once per request.
+  ///
+  /// RFC 6265 §4.2.1 pair syntax: pairs are `;`-separated, whitespace around a
+  /// pair is trimmed, the name/value split is the first `=`. Cookie values are
+  /// opaque octets, so nothing is decoded beyond that. A malformed pair (no
+  /// `=`, or an empty name) is skipped — never a 500 — and the first occurrence
+  /// of a duplicate name wins.
+  Map<String, String> get cookies => _cookies ??= _parseCookies();
+
+  Map<String, String> _parseCookies() {
+    final values = headers['cookie'];
+    if (values == null || values.isEmpty) return const {};
+    final result = <String, String>{};
+    for (final headerValue in values) {
+      for (final raw in headerValue.split(';')) {
+        final pair = raw.trim();
+        final eq = pair.indexOf('=');
+        // eq <= 0 covers both "no =" (-1) and an empty name (0).
+        if (eq <= 0) continue;
+        final name = pair.substring(0, eq).trimRight();
+        if (name.isEmpty) continue;
+        result.putIfAbsent(name, () => pair.substring(eq + 1).trim());
+      }
+    }
+    return result;
+  }
 
   Future<List<int>> bodyBytes() async {
     final cached = _bytes;
@@ -258,6 +288,14 @@ extension type Context<E>(RequestCtx<E> _raw) {
 
   /// All request headers: lower-cased names to their ordered values. Read-only.
   Map<String, List<String>> get headers => Map.unmodifiable(_raw.headers);
+
+  /// The request cookie named [name], or null. Parsed from the `Cookie` header
+  /// (RFC 6265 pair syntax); a malformed pair is skipped, never a 500.
+  String? cookie(String name) => _raw.cookie(name);
+
+  /// All request cookies as name→value, parsed once per request. Malformed
+  /// pairs are skipped and the first occurrence of a duplicate name wins.
+  Map<String, String> get cookies => _raw.cookies;
 
   /// The path parameter [name] parsed as `T` (String, int, double, or bool).
   /// An unsupported `T` is an `ArgumentError`; a parse failure is a [BadRequest].

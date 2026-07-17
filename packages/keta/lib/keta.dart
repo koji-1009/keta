@@ -19,10 +19,20 @@ export 'src/app.dart'
         Disposable;
 export 'src/chain.dart' show chain, guard;
 export 'src/context.dart' show Context, Key;
+export 'src/cookie.dart' show SameSite, SetCookie;
 export 'src/h1_transport.dart' show H1Transport;
 export 'src/log.dart' show Log, StdoutLog;
 export 'src/middleware.dart'
-    show accessLog, recover, cors, timeout, tracing, TraceContext, traceKey;
+    show
+        accessLog,
+        recover,
+        cors,
+        etag,
+        gzip,
+        timeout,
+        tracing,
+        TraceContext,
+        traceKey;
 export 'src/response.dart'
     show
         Response,
