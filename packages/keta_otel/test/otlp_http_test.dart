@@ -161,6 +161,14 @@ void main() {
     );
   });
 
+  // Still valid after the batching redesign, unchanged: `enqueue` no longer
+  // sends synchronously, but the three sends below are never simultaneously
+  // queued — each is separated by an in-flight `export()`'s completion — so
+  // there is no opportunity for batching to coalesce any two of them into a
+  // single POST. `hits` still lands on exactly 3: one for the queued span
+  // `flush()` drains first, one for the direct `export()`, and one for the
+  // span enqueued from that export's completion callback, which flush()'s
+  // quiescence loop picks up on its next pass.
   test(
     'flush loops until quiescent, awaiting exports enqueued mid-flush',
     () async {

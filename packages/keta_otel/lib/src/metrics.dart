@@ -13,13 +13,17 @@ library;
 /// attacker-controlled method or route — either grows memory without bound.
 class MetricsRegistry {
   final Map<_Key, int> _count = {};
-  final Map<_Key, int> _durationMsSum = {};
+  // `double`, not `int`: most in-process handlers finish in well under a
+  // millisecond, and truncating each sample to whole milliseconds before
+  // summing systematically undercounts (often to exactly 0) rather than
+  // just losing sub-ms precision on the total.
+  final Map<_Key, double> _durationMsSum = {};
 
   void record({
     required String method,
     required String route,
     required int status,
-    required int durationMs,
+    required double durationMs,
   }) {
     final key = _Key(method, route, status);
     _count.update(key, (v) => v + 1, ifAbsent: () => 1);

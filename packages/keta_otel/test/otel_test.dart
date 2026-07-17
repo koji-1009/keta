@@ -8,36 +8,6 @@ import 'package:test/test.dart';
 
 class Env {}
 
-/// An in-memory log for asserting on middleware output.
-class MemLog implements Log {
-  MemLog(this.lines) : _baked = const {};
-  MemLog._(this.lines, this._baked);
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
-  void _add(String level, String msg, Map<String, Object?> fields) =>
-      lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
-  @override
-  void debug(String msg, [Map<String, Object?> f = const {}]) =>
-      _add('debug', msg, f);
-  @override
-  void info(String msg, [Map<String, Object?> f = const {}]) =>
-      _add('info', msg, f);
-  @override
-  void warn(String msg, [Map<String, Object?> f = const {}]) =>
-      _add('warn', msg, f);
-  @override
-  void error(
-    String msg, [
-    Object? e,
-    StackTrace? st,
-    Map<String, Object?> f = const {},
-  ]) => _add('error', msg, {...f, if (e != null) 'error': '$e'});
-  @override
-  Future<void> flush() async {}
-  @override
-  Log withFields(Map<String, Object?> f) => MemLog._(lines, {..._baked, ...f});
-}
-
 /// A minimal, directly-constructed request bypassing [TestClient] — its
 /// verb helpers (`get`/`post`/...) only ever send the seven known keta
 /// verbs, so a bogus/lowercase method needs the transport seam directly.
@@ -59,20 +29,23 @@ class _RawRequest implements TransportRequest {
   Future<void> get closed => Completer<void>().future;
 }
 
-class LogEnv implements HasLog {
-  LogEnv(this.log);
-  @override
-  final Log log;
-}
-
 Map<String, Object?> _spanIn(Map<String, Object?> doc) {
   final rs = (doc['resourceSpans'] as List).first as Map<String, Object?>;
   final ss = (rs['scopeSpans'] as List).first as Map<String, Object?>;
   return (ss['spans'] as List).first as Map<String, Object?>;
 }
 
+List<Object?> _spansIn(Map<String, Object?> doc) {
+  final rs = (doc['resourceSpans'] as List).first as Map<String, Object?>;
+  final ss = (rs['scopeSpans'] as List).first as Map<String, Object?>;
+  return ss['spans'] as List;
+}
+
 Map<String, Object?> _spanOf(String payload) =>
     _spanIn(jsonDecode(payload) as Map<String, Object?>);
+
+List<Object?> _spansOf(String payload) =>
+    _spansIn(jsonDecode(payload) as Map<String, Object?>);
 
 Map<String, Object?> _firstSpan(List<String> captured) =>
     _spanOf(captured.single);
@@ -88,6 +61,7 @@ void main() {
     () async {
       final captured = <String>[];
       final exporter = OtlpExporter((payload) async => captured.add(payload));
+      addTearDown(exporter.close);
       final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/users/:id', (c) => c.json({'id': c.param<String>('id')}));
       final client = TestClient(app, Env());
@@ -99,7 +73,9 @@ void main() {
               '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
         },
       );
-      await pumpEventQueue(); // export is deferred off the hot path
+      // Batching defers the actual send to the exporter's own timer/flush,
+      // not to the next microtask turn — force it so the span lands here.
+      await exporter.flush();
 
       expect(captured, hasLength(1));
       final span = _firstSpan(captured);
@@ -114,12 +90,13 @@ void main() {
   test('a 5xx span is marked error', () async {
     final captured = <String>[];
     final exporter = OtlpExporter((payload) async => captured.add(payload));
+    addTearDown(exporter.close);
     final app = App<Env>()..use(otel(exporter: exporter));
     app.get('/boom', (c) => throw StateError('x'));
     final client = TestClient(app, Env());
 
     await client.get('/boom');
-    await pumpEventQueue();
+    await exporter.flush();
     final span = _firstSpan(captured);
     expect((span['status'] as Map)['code'], SpanStatus.error.index);
   });
@@ -165,11 +142,12 @@ void main() {
   group('trace context', () {
     test('no traceparent starts a new root trace', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
       await TestClient(app, Env()).get('/x');
-      await pumpEventQueue();
+      await exporter.flush();
 
       final span = _firstSpan(captured);
       expect(span['traceId'], matches(RegExp(r'^[0-9a-f]{32}$')));
@@ -187,11 +165,12 @@ void main() {
         'a malformed traceparent "$bad" falls back to a new trace',
         () async {
           final captured = <String>[];
-          final app = App<Env>()
-            ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+          final exporter = OtlpExporter((p) async => captured.add(p));
+          addTearDown(exporter.close);
+          final app = App<Env>()..use(otel(exporter: exporter));
           app.get('/x', (c) => c.text('ok'));
           await TestClient(app, Env()).get('/x', headers: {'traceparent': bad});
-          await pumpEventQueue();
+          await exporter.flush();
 
           final span = _firstSpan(captured);
           expect(span['traceId'], matches(RegExp(r'^[0-9a-f]{32}$')));
@@ -205,11 +184,12 @@ void main() {
   group('span status', () {
     test('a thrown NotFound (404) yields a 4xx unset span', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/missing', (c) => throw const NotFound('nope'));
       final res = await TestClient(app, Env()).get('/missing');
-      await pumpEventQueue();
+      await exporter.flush();
 
       expect(res.status, 404);
       final span = _firstSpan(captured);
@@ -219,11 +199,12 @@ void main() {
 
     test('a thrown Unavailable (503) yields an error span', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/down', (c) => throw const Unavailable('down'));
       await TestClient(app, Env()).get('/down');
-      await pumpEventQueue();
+      await exporter.flush();
 
       expect(
         (_firstSpan(captured)['status'] as Map)['code'],
@@ -233,34 +214,36 @@ void main() {
 
     test('499 is unset and 500 is error at the boundary', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/r499', (c) => Response(499));
       app.get('/r500', (c) => Response(500));
       final client = TestClient(app, Env());
       await client.get('/r499');
       await client.get('/r500');
-      await pumpEventQueue();
+      await exporter.flush();
 
-      expect(
-        (_spanOf(captured[0])['status'] as Map)['code'],
-        SpanStatus.unset.index,
-      );
-      expect(
-        (_spanOf(captured[1])['status'] as Map)['code'],
-        SpanStatus.error.index,
-      );
+      // Both spans are still queued (nothing has drained yet) when flush()
+      // runs, so batching coalesces them into a single POST — unlike the
+      // old one-POST-per-request design, `captured` has one payload holding
+      // both spans, not two payloads of one each.
+      expect(captured, hasLength(1));
+      final spans = _spansOf(captured.single).cast<Map<String, Object?>>();
+      expect((spans[0]['status'] as Map)['code'], SpanStatus.unset.index);
+      expect((spans[1]['status'] as Map)['code'], SpanStatus.error.index);
     });
   });
 
   group('span attributes and resilience', () {
     test('the span carries method, route, and status attributes', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/users/:id', (c) => c.text('ok'));
       await TestClient(app, Env()).get('/users/7');
-      await pumpEventQueue();
+      await exporter.flush();
 
       final attrs = _attrsOf(_firstSpan(captured));
       expect(attrs['http.request.method'], {'stringValue': 'GET'});
@@ -269,24 +252,26 @@ void main() {
     });
 
     test('a synchronously-throwing sender never fails the request', () async {
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) => throw StateError('down'))));
+      final exporter = OtlpExporter((p) => throw StateError('down'));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
       final res = await TestClient(app, Env()).get('/x');
       expect(res.status, 200);
       expect(res.text(), 'ok');
-      await Future<void>.delayed(Duration.zero);
+      // The span only sits in the queue until drained — flush() to actually
+      // exercise the throwing sender and confirm it still doesn't surface.
+      await exporter.flush();
     });
 
     test('an async-rejecting sender never fails the request', () async {
-      final app = App<Env>()
-        ..use(
-          otel(exporter: OtlpExporter((p) async => throw StateError('down'))),
-        );
+      final exporter = OtlpExporter((p) async => throw StateError('down'));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
       final res = await TestClient(app, Env()).get('/x');
       expect(res.status, 200);
-      await Future<void>.delayed(Duration.zero);
+      await exporter.flush();
     });
 
     test(
@@ -294,16 +279,12 @@ void main() {
       () async {
         final captured = <String>[];
         final metrics = MetricsRegistry();
-        final app = App<Env>()
-          ..use(
-            otel(
-              exporter: OtlpExporter((p) async => captured.add(p)),
-              metrics: metrics,
-            ),
-          );
+        final exporter = OtlpExporter((p) async => captured.add(p));
+        addTearDown(exporter.close);
+        final app = App<Env>()..use(otel(exporter: exporter, metrics: metrics));
         app.get('/x', (c) => c.text('ok'));
         await TestClient(app, Env()).get('/x');
-        await pumpEventQueue();
+        await exporter.flush();
 
         expect(captured, hasLength(1));
         expect(
@@ -358,12 +339,13 @@ void main() {
       'an unmatched request emits a path-free, method-only span name',
       () async {
         final captured = <String>[];
-        final app = App<Env>()
-          ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+        final exporter = OtlpExporter((p) async => captured.add(p));
+        addTearDown(exporter.close);
+        final app = App<Env>()..use(otel(exporter: exporter));
         app.get('/users/:id', (c) => c.text('ok'));
 
         await TestClient(app, Env()).get('/scanner-path-123');
-        await pumpEventQueue();
+        await exporter.flush();
 
         final span = _firstSpan(captured);
         expect(span['name'], 'GET');
@@ -374,12 +356,13 @@ void main() {
 
     test('a matched request keeps its templated span name', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/users/:id', (c) => c.text('ok'));
 
       await TestClient(app, Env()).get('/users/42');
-      await pumpEventQueue();
+      await exporter.flush();
 
       final span = _firstSpan(captured);
       expect(span['name'], 'GET /users/:id');
@@ -421,13 +404,14 @@ void main() {
       "a bogus method's span name and attribute use the fixed label",
       () async {
         final captured = <String>[];
-        final app = App<Env>()
-          ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+        final exporter = OtlpExporter((p) async => captured.add(p));
+        addTearDown(exporter.close);
+        final app = App<Env>()..use(otel(exporter: exporter));
         app.get('/x', (c) => c.text('ok'));
         final router = app.compile(Env());
 
         await router.dispatch(_RawRequest('BREW-COFFEE', '/x'));
-        await pumpEventQueue();
+        await exporter.flush();
 
         final span = _firstSpan(captured);
         // The path exists but the method doesn't match any registered route
@@ -481,10 +465,31 @@ void main() {
     });
   });
 
+  group('duration precision', () {
+    test('fast handlers record a fractional, nonzero duration (not truncated '
+        'to 0)', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/x', (c) => c.text('ok'));
+      await TestClient(app, Env()).get('/x');
+
+      final match = RegExp(
+        r'keta_request_duration_ms_sum\{method="GET",route="/x",'
+        r'status="200"\} (\S+)',
+      ).firstMatch(metrics.prometheus());
+      expect(match, isNotNull);
+      // Before this fix, `elapsedMilliseconds` truncated almost every
+      // in-process handler's duration to 0; a handler this fast would
+      // have recorded exactly 0 every single time.
+      expect(double.parse(match!.group(1)!), greaterThan(0));
+    });
+  });
+
   group('encodeOtlp / OtlpExporter', () {
     test('export of no spans never invokes the sender', () async {
       var calls = 0;
       final exporter = OtlpExporter((p) async => calls++);
+      addTearDown(exporter.close);
       await exporter.export([]);
       expect(calls, 0);
     });
@@ -552,31 +557,148 @@ void main() {
     );
   });
 
+  group('OtlpExporter batching', () {
+    final span = OtelSpan(
+      traceId: 'a' * 32,
+      spanId: 'b' * 16,
+      name: 'GET /x',
+      startUnixNano: 1,
+      endUnixNano: 2,
+    );
+
+    test('N enqueues coalesce into a single batched POST on flush', () async {
+      final payloads = <String>[];
+      final exporter = OtlpExporter((p) async => payloads.add(p));
+      addTearDown(exporter.close);
+
+      // Simulates 10 served requests each enqueuing their own span — the
+      // exact pattern that used to mean 10 separate POSTs (one per
+      // request). Batching means they share one.
+      for (var i = 0; i < 10; i++) {
+        exporter.enqueue([span]);
+      }
+      await exporter.flush();
+
+      expect(payloads, hasLength(1));
+      expect(_spansOf(payloads.single), hasLength(10));
+    });
+
+    test(
+      'a batch larger than maxBatchSize is drained over multiple POSTs',
+      () async {
+        final payloads = <String>[];
+        final exporter = OtlpExporter(
+          (p) async => payloads.add(p),
+          maxBatchSize: 4,
+        );
+        addTearDown(exporter.close);
+
+        for (var i = 0; i < 10; i++) {
+          exporter.enqueue([span]);
+        }
+        await exporter.flush();
+
+        // 10 spans at up to 4 per POST: 3 POSTs (4, 4, 2), every span sent.
+        expect(payloads, hasLength(3));
+        expect(payloads.map(_spansOf).map((s) => s.length).toList(), [4, 4, 2]);
+      },
+    );
+
+    test('a full queue drops the oldest span and reports the count once, on '
+        'the next successful export', () async {
+      final payloads = <String>[];
+      final warnings = <MapEntry<String, Map<String, Object?>>>[];
+      final exporter = OtlpExporter(
+        (p) async => payloads.add(p),
+        maxQueueSize: 3,
+        onWarn: (msg, fields) => warnings.add(MapEntry(msg, fields)),
+      );
+      addTearDown(exporter.close);
+
+      // 5 spans into a queue capped at 3: the oldest 2 are evicted.
+      for (var i = 0; i < 5; i++) {
+        exporter.enqueue([span]);
+      }
+      await exporter.flush();
+
+      expect(_spansOf(payloads.single), hasLength(3));
+      expect(warnings, hasLength(1));
+      expect(warnings.single.key, 'OTLP spans dropped');
+      expect(warnings.single.value['dropped'], 2);
+
+      // Nothing new was dropped, so a later successful export must not
+      // repeat the report — it fires once, not on every export.
+      exporter.enqueue([span]);
+      await exporter.flush();
+      expect(warnings, hasLength(1));
+    });
+
+    test(
+      'close cancels the periodic timer; none remains pending after',
+      () async {
+        Timer? captured;
+        final zone = Zone.current.fork(
+          specification: ZoneSpecification(
+            createPeriodicTimer: (self, parent, zone, duration, callback) {
+              final timer = parent.createPeriodicTimer(
+                zone,
+                duration,
+                callback,
+              );
+              captured = timer;
+              return timer;
+            },
+          ),
+        );
+
+        late OtlpExporter exporter;
+        await zone.run(() async {
+          exporter = OtlpExporter(
+            (p) async {},
+            exportInterval: const Duration(milliseconds: 10),
+          );
+        });
+
+        expect(captured, isNotNull);
+        expect(captured!.isActive, isTrue);
+        await exporter.close();
+        expect(captured!.isActive, isFalse);
+      },
+    );
+  });
+
   group('lifecycle and sampling', () {
-    test('export runs off the response hot path', () async {
+    test('export is deferred off the request path until flushed', () async {
       final captured = <String>[];
-      final app = App<Env>()
-        ..use(otel(exporter: OtlpExporter((p) async => captured.add(p))));
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
       await TestClient(app, Env()).get('/x');
-      // The deferred export has not run yet, right after the response.
+      // Batching defers the POST to the periodic timer or an explicit
+      // flush — never to the request itself, nor even to the next
+      // microtask turn.
       expect(captured, isEmpty);
-      await pumpEventQueue();
+      await exporter.flush();
       expect(captured, hasLength(1));
     });
 
-    test('flush awaits a pending export before returning', () async {
+    test('flush drains the queue and awaits the resulting export before '
+        'returning', () async {
       final gate = Completer<void>();
       final captured = <String>[];
       final exporter = OtlpExporter((p) async {
         await gate.future;
         captured.add(p);
       });
+      addTearDown(exporter.close);
       final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
       await TestClient(app, Env()).get('/x');
       await pumpEventQueue();
-      expect(captured, isEmpty); // the send is gated open
+      // The span is only queued so far; nothing is sent (and so nothing
+      // is gated) until flush() below drains it.
+      expect(captured, isEmpty);
 
       final flushed = exporter.flush();
       gate.complete();
@@ -589,13 +711,9 @@ void main() {
       () async {
         final captured = <String>[];
         final metrics = MetricsRegistry();
-        final app = App<Env>()
-          ..use(
-            otel(
-              exporter: OtlpExporter((p) async => captured.add(p)),
-              metrics: metrics,
-            ),
-          );
+        final exporter = OtlpExporter((p) async => captured.add(p));
+        addTearDown(exporter.close);
+        final app = App<Env>()..use(otel(exporter: exporter, metrics: metrics));
         app.get('/x', (c) => c.text('ok'));
         // flags '00' = the upstream did not sample this trace.
         await TestClient(app, Env()).get(
@@ -605,7 +723,9 @@ void main() {
                 '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
           },
         );
-        await pumpEventQueue();
+        // No span is ever enqueued for an unsampled trace, so there's
+        // nothing for flush() to surface — captured stays empty regardless.
+        await exporter.flush();
 
         expect(captured, isEmpty);
         expect(
@@ -619,13 +739,10 @@ void main() {
 
     test('exportUnsampled forces export of an unsampled trace', () async {
       final captured = <String>[];
+      final exporter = OtlpExporter((p) async => captured.add(p));
+      addTearDown(exporter.close);
       final app = App<Env>()
-        ..use(
-          otel(
-            exporter: OtlpExporter((p) async => captured.add(p)),
-            exportUnsampled: true,
-          ),
-        );
+        ..use(otel(exporter: exporter, exportUnsampled: true));
       app.get('/x', (c) => c.text('ok'));
       await TestClient(app, Env()).get(
         '/x',
@@ -634,28 +751,31 @@ void main() {
               '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00',
         },
       );
-      await pumpEventQueue();
+      await exporter.flush();
 
       expect(captured, hasLength(1)); // exported despite sampled=0
     });
 
-    test('a failing export is logged, not silently dropped', () async {
-      final lines = <Map<String, Object?>>[];
-      final env = LogEnv(MemLog(lines));
-      final app = App<LogEnv>()
-        ..use(
-          otel(
-            exporter: OtlpExporter(
-              (p) async => throw StateError('collector down'),
-            ),
-          ),
-        );
+    test('a failing batch export is reported via the exporter\'s own onWarn '
+        'hook, not silently dropped', () async {
+      final warnings = <Map<String, Object?>>[];
+      final exporter = OtlpExporter(
+        (p) async => throw StateError('collector down'),
+        onWarn: (msg, fields) => warnings.add({'msg': msg, ...fields}),
+      );
+      addTearDown(exporter.close);
+      final app = App<Env>()..use(otel(exporter: exporter));
       app.get('/x', (c) => c.text('ok'));
 
-      final res = await TestClient(app, env).get('/x');
+      final res = await TestClient(app, Env()).get('/x');
       expect(res.status, 200); // export failure never fails the request
-      await pumpEventQueue();
-      expect(lines.any((l) => l['msg'] == 'span export failed'), isTrue);
+      // Batching moved the exporter's lifecycle off any single request's
+      // Context (a batch can span many requests' spans), so a failed send
+      // is no longer routed through `c.log` per request — it's reported
+      // through the exporter's own `onWarn` hook, wired once at
+      // construction, instead.
+      await exporter.flush();
+      expect(warnings.any((l) => l['msg'] == 'span export failed'), isTrue);
     });
   });
 }

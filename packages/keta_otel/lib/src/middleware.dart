@@ -87,7 +87,13 @@ Middleware<E> otel<E>({
         method: method,
         route: template ?? unmatchedRoute,
         status: status,
-        durationMs: watch.elapsedMilliseconds,
+        // Fractional, not `elapsedMilliseconds`: most in-process handlers
+        // finish in well under a millisecond, and `elapsedMilliseconds`
+        // truncates — recording 0 for nearly every fast route and
+        // systematically undercounting `keta_request_duration_ms_sum`.
+        // `elapsedMicroseconds` carries the same resolution the wall-clock
+        // span timestamps below already use, just divided down to ms.
+        durationMs: watch.elapsedMicroseconds / 1000,
       );
       final export = exporter;
       if (export != null && sampled) {
@@ -107,13 +113,14 @@ Middleware<E> otel<E>({
           // (a 4xx is a client problem, not a server error).
           status: status >= 500 ? SpanStatus.error : SpanStatus.unset,
         );
-        // Enqueued off the response hot path; a failing collector is logged
-        // (not silently dropped) and never fails the request.
-        export.enqueue(
-          [span],
-          onError: (error, _) =>
-              c.log.warn('span export failed', {'error': '$error'}),
-        );
+        // Enqueued off the response hot path: this only appends to the
+        // exporter's own bounded queue (see `OtlpExporter.enqueue`), never
+        // sends synchronously. The exporter drains it on its own timer (or
+        // `flush()`), so a failing collector — or a queue overflowing under
+        // sustained load — is no longer tied to any one request's `Context`;
+        // it is reported through the exporter's own `onWarn` hook (wired
+        // once, when the exporter is constructed) instead of `c.log` here.
+        export.enqueue([span]);
       }
     }
 

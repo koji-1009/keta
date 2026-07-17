@@ -1,6 +1,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,40 +13,100 @@ import 'span.dart';
 /// need no collector.
 typedef OtlpSender = Future<void> Function(String jsonPayload);
 
+/// Reports something the exporter noticed on its own, off any request's hot
+/// path: a batch that failed to send, or a span-loss count discovered when
+/// the queue overflowed. The signature mirrors `Log.warn`'s `(message,
+/// fields)` so a caller can wire this straight to their own logger (e.g.
+/// `c.log.warn`) without this package depending on `package:keta`'s `Log`
+/// type. This replaces `enqueue`'s old per-call `onError` callback: once a
+/// batch can hold spans from many `enqueue` calls, a failure is no longer
+/// attributable to any one of them, so the seam moves to the exporter itself
+/// (set once, at construction) instead.
+typedef OtlpWarn = void Function(String message, Map<String, Object?> fields);
+
 /// A minimal OTLP/HTTP exporter. It encodes spans as OTLP/JSON and hands the
 /// payload to a [OtlpSender]; it depends on no external OpenTelemetry SDK.
 ///
-/// It has a lifecycle: [export]/[enqueue] register in-flight sends that [flush]
-/// awaits, and [close] flushes then releases resources (the HTTP client). It
-/// implements keta's [Disposable] so an env that owns an exporter is drained on
-/// `Server.shutdown` — call `close()` there so pending spans are not dropped.
+/// Spans are not sent one per [enqueue] call. They accumulate in a bounded
+/// queue that a periodic timer drains in batches — mirroring OTel's
+/// BatchSpanProcessor defaults ([defaultMaxQueueSize] spans queued,
+/// [defaultMaxBatchSize] spans per POST, [defaultExportInterval] between
+/// drains). Sending one POST per served request does not survive contact
+/// with a slow collector: at 1000 RPS a 10s-hanging collector accumulates
+/// ~10k in-flight sockets. Batching bounds both the POST rate and the memory
+/// a stalled collector can pin.
+///
+/// It has a lifecycle: [export]/[enqueue] register work that [flush] awaits,
+/// and [close] flushes then releases resources (the HTTP client, the
+/// timer). It implements keta's [Disposable] so an env that owns an exporter
+/// is drained on `Server.shutdown` — call `close()` there so pending spans
+/// are not dropped.
 class OtlpExporter implements Disposable {
-  OtlpExporter(this._send, {this.serviceName = 'keta'})
-    : _releaseResources = null;
+  /// [maxQueueSize]: spans queued past this many evict the oldest queued span
+  /// (drop-oldest) rather than growing without bound — see [enqueue].
+  /// [maxBatchSize]: the most spans placed on one POST body; a bigger
+  /// backlog is drained over several batches instead of one unbounded
+  /// request. [exportInterval]: how often the queue is drained absent a
+  /// manual [flush] (`Duration.zero` disables the timer — draining then
+  /// happens only via explicit [flush] calls). [onWarn]: see [OtlpWarn].
+  OtlpExporter(
+    OtlpSender send, {
+    String serviceName = 'keta',
+    int maxQueueSize = defaultMaxQueueSize,
+    int maxBatchSize = defaultMaxBatchSize,
+    Duration exportInterval = defaultExportInterval,
+    OtlpWarn? onWarn,
+  }) : this._(
+         send,
+         serviceName,
+         null,
+         maxQueueSize: maxQueueSize,
+         maxBatchSize: maxBatchSize,
+         exportInterval: exportInterval,
+         onWarn: onWarn,
+       );
 
-  OtlpExporter._(this._send, this.serviceName, this._releaseResources);
+  OtlpExporter._(
+    this._send,
+    this.serviceName,
+    this._releaseResources, {
+    required this.maxQueueSize,
+    required this.maxBatchSize,
+    required Duration exportInterval,
+    this._onWarn,
+  }) {
+    if (exportInterval > Duration.zero) {
+      _timer = Timer.periodic(exportInterval, (_) => _drainNextBatch());
+    }
+  }
 
   /// An exporter that POSTs to an OTLP/HTTP `v1/traces` [endpoint]. A non-2xx
   /// response is treated as a failure (so a persistently-down collector is
-  /// visible to the caller), and the underlying [HttpClient] is released by
+  /// visible via [onWarn]), and the underlying [HttpClient] is released by
   /// [close].
   ///
-  /// The whole request/response cycle is bounded by [timeout] (default 10s):
-  /// a collector that accepts the connection and never responds cannot hang
-  /// `flush()`/`close()` (the latter runs inside server shutdown). A timeout
-  /// surfaces as a [TimeoutException], the same failed-export path as any
-  /// other send error, and also `abort()`s the in-flight request — a bare
-  /// `Future.timeout` only gives up on waiting, it does not tell the socket
-  /// to stop, so without the abort a dead collector accumulates one
-  /// ESTABLISHED connection per timed-out export forever. [close] also
-  /// force-closes the client so a still-open connection at shutdown (flush
-  /// already ran; anything left is exactly the stuck kind) is not left
-  /// dangling either.
+  /// The whole request/response cycle of each POST is bounded by [timeout]
+  /// (default 10s): a collector that accepts the connection and never
+  /// responds cannot hang `flush()`/`close()` (the latter runs inside server
+  /// shutdown). A timeout surfaces as a [TimeoutException], the same
+  /// failed-batch path as any other send error, and also `abort()`s the
+  /// in-flight request — a bare `Future.timeout` only gives up on waiting,
+  /// it does not tell the socket to stop, so without the abort a dead
+  /// collector accumulates one ESTABLISHED connection per timed-out export
+  /// forever. [close] also force-closes the client so a still-open
+  /// connection at shutdown (flush already ran; anything left is exactly
+  /// the stuck kind) is not left dangling either. This per-POST protection
+  /// is orthogonal to batching above it: batching changes when a POST is
+  /// made, not how each individual POST is guarded.
   factory OtlpExporter.http(
     Uri endpoint, {
     String serviceName = 'keta',
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 10),
+    int maxQueueSize = defaultMaxQueueSize,
+    int maxBatchSize = defaultMaxBatchSize,
+    Duration exportInterval = defaultExportInterval,
+    OtlpWarn? onWarn,
   }) {
     final client = HttpClient();
 
@@ -85,41 +146,116 @@ class OtlpExporter implements Disposable {
       );
     }
 
-    return OtlpExporter._(post, serviceName, () => client.close(force: true));
+    return OtlpExporter._(
+      post,
+      serviceName,
+      () => client.close(force: true),
+      maxQueueSize: maxQueueSize,
+      maxBatchSize: maxBatchSize,
+      exportInterval: exportInterval,
+      onWarn: onWarn,
+    );
   }
+
+  /// Mirrors OTel's BatchSpanProcessor `maxQueueSize` default.
+  static const int defaultMaxQueueSize = 2048;
+
+  /// Mirrors OTel's BatchSpanProcessor `maxExportBatchSize` default.
+  static const int defaultMaxBatchSize = 512;
+
+  /// Mirrors OTel's BatchSpanProcessor `scheduledDelayMillis` default.
+  static const Duration defaultExportInterval = Duration(seconds: 5);
+
   final OtlpSender _send;
   final String serviceName;
+  final int maxQueueSize;
+  final int maxBatchSize;
   final void Function()? _releaseResources;
+  final OtlpWarn? _onWarn;
   final Set<Future<void>> _inFlight = {};
 
-  /// Encodes and sends [spans], returning a future that completes when the send
-  /// finishes. Tracked so [flush] can await it.
+  /// The bounded export queue [enqueue] appends to and [_drainNextBatch]
+  /// drains from, oldest-first.
+  final ListQueue<OtelSpan> _queue = ListQueue<OtelSpan>();
+
+  /// Spans lost since the last report: either evicted by [enqueue] to keep
+  /// the queue within [maxQueueSize], or lost because the batch containing
+  /// them failed to send. Reported via [_onWarn] the next time a batch
+  /// export *succeeds* — never reset by a failed export, so a report is
+  /// deferred, not dropped (the same discipline as keta core's log
+  /// backlog: losing data beats losing the server, but losing it silently
+  /// is not on the menu).
+  int _dropped = 0;
+
+  Timer? _timer;
+
+  /// Encodes and sends [spans] immediately, bypassing the queue, returning a
+  /// future that completes when the send finishes (or rejects on failure).
+  /// Tracked so [flush] can await it. Use this for a one-off, directly
+  /// observed send; [enqueue] is the batched path everything else goes
+  /// through.
   Future<void> export(List<OtelSpan> spans) {
     if (spans.isEmpty) return Future.value();
     return _track(_send(jsonEncode(encodeOtlp(spans, serviceName))));
   }
 
-  /// Fire-and-forget export scheduled OFF the caller's hot path: the encode and
-  /// send run in a later event-loop task, never on the response path. Failures
-  /// go to [onError] (never to the caller). Tracked so [flush] awaits it.
-  void enqueue(
-    List<OtelSpan> spans, {
-    void Function(Object error, StackTrace stack)? onError,
-  }) {
-    if (spans.isEmpty) return;
-    final completer = Completer<void>();
-    _inFlight.add(completer.future);
-    completer.future.catchError((_) {}); // never an unhandled rejection
-    Future<void>(() async {
-      try {
-        await _send(jsonEncode(encodeOtlp(spans, serviceName)));
-      } catch (e, st) {
-        onError?.call(e, st);
-      } finally {
-        _inFlight.remove(completer.future);
-        completer.complete();
+  /// Appends [spans] to the bounded export queue. Actual sending happens
+  /// later — on [exportInterval]'s timer or when [flush] is called — so
+  /// this is a synchronous queue append, never a network call: it costs
+  /// nothing on the caller's hot path regardless of collector health.
+  ///
+  /// Past [maxQueueSize] the oldest queued span is evicted to admit each new
+  /// one (drop-oldest): a stalled collector must not let the queue, and so
+  /// memory, grow without bound. The eviction is never silent — see
+  /// [_dropped].
+  void enqueue(List<OtelSpan> spans) {
+    for (final span in spans) {
+      if (_queue.length >= maxQueueSize) {
+        _queue.removeFirst();
+        _dropped++;
       }
-    });
+      _queue.add(span);
+    }
+  }
+
+  /// Sends the next single batch (up to [maxBatchSize] spans) if the queue
+  /// is non-empty, tracked so [flush] can await it. Called by the periodic
+  /// timer and, in a loop, by [flush] — same primitive, two callers.
+  void _drainNextBatch() {
+    if (_queue.isEmpty) return;
+    final batch = <OtelSpan>[];
+    while (batch.length < maxBatchSize && _queue.isNotEmpty) {
+      batch.add(_queue.removeFirst());
+    }
+    // Snapshot-and-clear before the send, mirroring `_Backlog._drain`: a
+    // report that lands is reported exactly once, and one that doesn't
+    // (the send below fails) is folded back rather than lost — see the
+    // catchError branch.
+    final droppedNow = _dropped;
+    _dropped = 0;
+    // Wrapped in an `async` body (rather than chaining `.then`/`.catchError`
+    // straight off `_send(...)`'s call expression) so a sender that throws
+    // *synchronously* — never returning a Future at all — is caught here
+    // too, the same as a sender that returns a rejected Future. Without
+    // this, a synchronously-throwing sender would blow up `flush()`/`close()`
+    // itself instead of being reported through [_onWarn].
+    final Future<void> future = () async {
+      try {
+        await _send(jsonEncode(encodeOtlp(batch, serviceName)));
+        if (droppedNow > 0) {
+          _onWarn?.call('OTLP spans dropped', {'dropped': droppedNow});
+        }
+      } catch (error) {
+        // This batch didn't land either, so its spans are lost the same way
+        // a drop-oldest eviction is. Folding their count in with any pending
+        // drop report (rather than reporting only the eviction count and
+        // silently eating the failed batch) keeps the total loss visible at
+        // the next successful export.
+        _dropped += droppedNow + batch.length;
+        _onWarn?.call('span export failed', {'error': '$error'});
+      }
+    }();
+    _track(future);
   }
 
   Future<void> _track(Future<void> future) {
@@ -128,26 +264,37 @@ class OtlpExporter implements Disposable {
     return future;
   }
 
-  /// Awaits every in-flight export, looping until none remain. Call before
-  /// shutdown so pending spans land.
+  /// Drains the export queue fully — every batch, including spans [enqueue]d
+  /// mid-flush — and awaits every export in flight, looping until both are
+  /// quiescent. Call before shutdown so pending spans land.
   ///
-  /// A snapshot-and-wait would miss exports [enqueue]d while the wait was in
-  /// flight — e.g. a request still finishing during shutdown's drain window.
-  /// Looping instead picks those up too; it stays bounded because each
-  /// export races the sender's own timeout (see `OtlpExporter.http`), so a
-  /// stuck collector cannot make this loop over indefinitely, only requests
-  /// that keep enqueuing new exports forever can.
+  /// Looping (rather than one pass over a snapshot) is what makes "drains
+  /// spans enqueued mid-flush" true: a snapshot would miss a span appended
+  /// while this wait is already in progress — e.g. a request still
+  /// finishing during shutdown's drain window. It stays bounded because
+  /// each export races the sender's own timeout (see `OtlpExporter.http`),
+  /// so a stuck collector cannot make this loop over indefinitely, only
+  /// requests that keep enqueuing new spans forever can.
   Future<void> flush() async {
-    while (_inFlight.isNotEmpty) {
-      await Future.wait(_inFlight.toList()).then((_) {}).catchError((_) {});
+    while (_queue.isNotEmpty || _inFlight.isNotEmpty) {
+      while (_queue.isNotEmpty) {
+        _drainNextBatch();
+      }
+      if (_inFlight.isNotEmpty) {
+        await Future.wait(_inFlight.toList()).then((_) {}).catchError((_) {});
+      }
     }
   }
 
-  /// Flushes, then releases resources (the HTTP client). Idempotent-ish; safe to
-  /// call from `Server.shutdown` via [Disposable].
+  /// Flushes, then cancels the periodic timer and releases resources (the
+  /// HTTP client). The timer must never outlive `close()` — a periodic
+  /// `Timer` pins its isolate open, so a leaked one keeps a shut-down server
+  /// process from exiting. Safe to call from `Server.shutdown` via
+  /// [Disposable].
   @override
   Future<void> close() async {
     await flush();
+    _timer?.cancel();
     _releaseResources?.call();
   }
 }

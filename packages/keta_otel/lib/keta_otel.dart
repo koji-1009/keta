@@ -4,5 +4,5 @@ library;
 
 export 'src/metrics.dart' show MetricsRegistry;
 export 'src/middleware.dart' show otel, metricsHandler;
-export 'src/otlp.dart' show OtlpExporter, OtlpSender, encodeOtlp;
+export 'src/otlp.dart' show OtlpExporter, OtlpSender, OtlpWarn, encodeOtlp;
 export 'src/span.dart' show OtelSpan, SpanStatus;

@@ -18,6 +18,26 @@ void main() {
     expect(registry.prometheus(), contains(r'route="/a\"b\\c\nd"'));
   });
 
+  test(
+    'fractional durations accumulate exactly, not truncated to whole ms',
+    () {
+      // 0.5 and 0.25 are exact binary fractions, so this sum is exact —
+      // no floating-point noise to account for in the assertion. Before the
+      // fix, `middleware.dart` passed `elapsedMilliseconds` (an int), which
+      // would have truncated a sub-millisecond duration like these to 0.
+      final registry = MetricsRegistry()
+        ..record(method: 'GET', route: '/x', status: 200, durationMs: 0.5)
+        ..record(method: 'GET', route: '/x', status: 200, durationMs: 0.25);
+      expect(
+        registry.prometheus(),
+        contains(
+          'keta_request_duration_ms_sum'
+          '{method="GET",route="/x",status="200"} 0.75',
+        ),
+      );
+    },
+  );
+
   test('identical keys aggregate; any differing field is a separate series', () {
     final registry = MetricsRegistry()
       ..record(method: 'GET', route: '/x', status: 200, durationMs: 5)
