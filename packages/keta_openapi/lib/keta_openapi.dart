@@ -4,6 +4,13 @@ library;
 
 export 'src/openapi.dart' show OpenApi;
 export 'src/route_doc.dart'
-    show RouteDoc, Success, SecurityScheme, QueryParam, bearer, apiKey;
+    show
+        RouteDoc,
+        Success,
+        SwitchingProtocols,
+        SecurityScheme,
+        QueryParam,
+        bearer,
+        apiKey;
 export 'src/schema.dart' show Schema;
 export 'src/security.dart' show SecurityPolicy, enforceSecurity;

@@ -146,39 +146,67 @@ Map<String, Object?> _operation(
   }
   final responses = <String, Object?>{};
   if (doc != null) {
-    // Success.status is only an `assert` in its constructor, so a non-const
-    // `Success(status: 500)` sails through with asserts off (release builds).
-    // failureResponses gets a hard StateError for the mirror mistake below; the
-    // same invariant is enforced here too, so the two are no longer asymmetric.
-    if (doc.success.status < 200 || doc.success.status >= 400) {
+    final upgrade = doc.upgrade;
+    final success = doc.success;
+    if (upgrade != null) {
+      // An upgrade route's terminal response is 101 Switching Protocols, not a
+      // 2xx. It is modelled separately (see [SwitchingProtocols]) precisely
+      // because a [Success] cannot hold it; here that separate declaration is
+      // projected as a `101` entry. The switched protocol itself has no OpenAPI
+      // body slot, so the shadow documents the switch and — when pinned — the
+      // negotiated subprotocol via the standard handshake response header.
+      responses['101'] = {
+        'description': upgrade.description,
+        if (upgrade.subprotocol != null)
+          'headers': {
+            'Sec-WebSocket-Protocol': {
+              'description': 'The negotiated WebSocket subprotocol.',
+              'schema': {'type': 'string', 'const': upgrade.subprotocol},
+            },
+          },
+      };
+    } else if (success != null) {
+      // Success.status is only an `assert` in its constructor, so a non-const
+      // `Success(status: 500)` sails through with asserts off (release builds).
+      // failureResponses gets a hard StateError for the mirror mistake below;
+      // the same invariant is enforced here too, so the two are not asymmetric.
+      if (success.status < 200 || success.status >= 400) {
+        throw StateError(
+          '${route.method} ${_openApiPath(route.segments)}: '
+          'Success.status is ${success.status}, which is not a 2xx/3xx — '
+          'a success is always 2xx or 3xx',
+        );
+      }
+      // Mirrors Success's own constructor `assert` for the same reason the
+      // status-range check above mirrors it: `assert` is off in release builds,
+      // so a non-const `Success(status: 204, schema: notNull)` — bodyless per
+      // RFC 9110, yet paired with a schema here — would otherwise sail through
+      // and the emitted document would document a body on a response that never
+      // carries one.
+      if (success.schema != null &&
+          (success.status == 204 || success.status == 304)) {
+        throw StateError(
+          '${route.method} ${_openApiPath(route.segments)}: '
+          'Success(status: ${success.status}, schema: ...) declares a body '
+          'on a bodyless status — 204 and 304 must not carry a schema',
+        );
+      }
+      // The success is not conditional: the primary [RouteDoc] requires it, so
+      // there is no branch here that could leave a non-upgrade document without
+      // a 2xx, and no guess about which one it is.
+      responses['${success.status}'] = {
+        'description': 'OK',
+        if (success.schema != null) ..._body(success.schema!, success.contentType),
+      };
+    } else {
+      // Neither a success nor an upgrade: unreachable through RouteDoc's
+      // constructors (each sets exactly one), but held here as a hard error to
+      // match the package's posture — an invalid doc never reaches a document.
       throw StateError(
         '${route.method} ${_openApiPath(route.segments)}: '
-        'Success.status is ${doc.success.status}, which is not a 2xx/3xx — '
-        'a success is always 2xx or 3xx',
+        'RouteDoc has neither a success nor an upgrade declaration',
       );
     }
-    // Mirrors Success's own constructor `assert` for the same reason the
-    // status-range check above mirrors it: `assert` is off in release builds,
-    // so a non-const `Success(status: 204, schema: notNull)` — bodyless per
-    // RFC 9110, yet paired with a schema here — would otherwise sail through
-    // and the emitted document would document a body on a response that never
-    // carries one.
-    if (doc.success.schema != null &&
-        (doc.success.status == 204 || doc.success.status == 304)) {
-      throw StateError(
-        '${route.method} ${_openApiPath(route.segments)}: '
-        'Success(status: ${doc.success.status}, schema: ...) declares a body '
-        'on a bodyless status — 204 and 304 must not carry a schema',
-      );
-    }
-    // The success is not conditional: [RouteDoc.success] is required, so there
-    // is no branch here that could leave a document without a 2xx, and no guess
-    // about which one it is.
-    responses['${doc.success.status}'] = {
-      'description': 'OK',
-      if (doc.success.schema != null)
-        ..._body(doc.success.schema!, doc.success.contentType),
-    };
     final failures = doc.failureResponses;
     if (failures != null) {
       for (final entry in failures.entries) {

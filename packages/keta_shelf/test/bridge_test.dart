@@ -41,6 +41,26 @@ void main() {
     expect(response.statusCode, 404);
   });
 
+  test('ketaToShelf rejects a Response.upgrade loudly (no socket)', () async {
+    // shelf hands no socket across this bridge, so an upgrade route cannot be
+    // served through it. It must fail loudly — a StateError — rather than
+    // mis-frame a bodyless 101 onto the wire that no client could use.
+    final app = App<Env>();
+    app.get('/ws', (c) => Response.upgrade((channel) => channel.close()));
+    final handler = ketaToShelf(app, Env());
+
+    await expectLater(
+      handler(shelf.Request('GET', Uri.parse('http://localhost/ws'))),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('cannot switch protocols'),
+        ),
+      ),
+    );
+  });
+
   test('shelfToKeta runs a shelf handler inside a keta route', () async {
     shelf.Response shelfHandler(shelf.Request request) =>
         shelf.Response.ok('hi from shelf via ${request.method}');

@@ -1,6 +1,9 @@
 library;
 
+import 'dart:async';
 import 'dart:convert';
+
+import 'upgrade.dart';
 
 /// Stateless across calls (`convert` builds its own state each time), so one
 /// instance is shared. The default 256-byte buffer is kept on purpose: measured
@@ -13,8 +16,12 @@ final _jsonUtf8 = JsonUtf8Encoder();
 /// Wire framing (Content-Length, chunked, H2/H3 frames) belongs to the
 /// Transport, not here.
 class Response {
-  Response(this.status, {Map<String, List<String>>? headers, this.body = ''})
-    : headers = _normalize(headers) {
+  Response(
+    this.status, {
+    Map<String, List<String>>? headers,
+    this.body = '',
+    this.upgrade,
+  }) : headers = _normalize(headers) {
     // Enforced unconditionally (not via assert): in a release binary an invalid
     // body would otherwise be written as a silent empty 200.
     if (body is! String && body is! List<int> && body is! Stream<List<int>>) {
@@ -23,6 +30,26 @@ class Response {
         'body',
         'must be String, List<int>, or Stream<List<int>>',
       );
+    }
+    // An upgrade response answers by switching protocols: its status is fixed at
+    // 101 and it carries no body (the switched protocol carries the bytes). A
+    // mismatched status/body here is an authoring defect, caught at the semantic
+    // layer before any transport tries — and fails — to realize it.
+    if (upgrade != null) {
+      if (status != 101) {
+        throw ArgumentError.value(
+          status,
+          'status',
+          'an upgrade response must have status 101 (switching protocols)',
+        );
+      }
+      if (body is! String || (body as String).isNotEmpty) {
+        throw ArgumentError.value(
+          body,
+          'body',
+          'an upgrade response carries no body',
+        );
+      }
     }
     // Reject CR/LF and other control characters in header names/values here, at
     // the semantic layer — not every Transport rejects them, and a value built
@@ -86,6 +113,26 @@ class Response {
     },
     body: body,
   );
+
+  /// A response that answers by *upgrading* the connection — the value form of
+  /// "this route replies with 101 Switching Protocols and then speaks another
+  /// protocol." [onConnected] is handed the switched [UpgradedChannel] once (and
+  /// only if) a transport that can perform the switch acts on this value; until
+  /// then it is inert data. Because this is an ordinary return value, every
+  /// declaration-driven middleware runs in front of it — a security gate returns
+  /// a plain 401 and this value is never even built.
+  ///
+  /// [subprotocol], when given, is the WebSocket subprotocol to negotiate; the
+  /// client must have offered it.
+  ///
+  /// A transport that cannot switch protocols must reject this loudly (the shelf
+  /// bridge raises a `StateError`; `TestClient` routes it to an in-process
+  /// channel or a rejection). Handshake response headers belong to the
+  /// realizing transport, not to this value, so none are accepted here.
+  factory Response.upgrade(
+    FutureOr<void> Function(UpgradedChannel channel) onConnected, {
+    String? subprotocol,
+  }) => Response(101, upgrade: Upgrade(onConnected, subprotocol: subprotocol));
   final int status;
 
   /// Header names are lower-cased; each maps to its ordered values (multi-value,
@@ -94,6 +141,13 @@ class Response {
 
   /// One of `String`, `List<int>`, or `Stream<List<int>>`.
   final Object body;
+
+  /// Non-null when this response answers by switching protocols instead of
+  /// returning [body]: the realizing transport reads it, performs the handshake,
+  /// and invokes its `onConnected`. Null for every ordinary response — the
+  /// discriminator a transport keys off to choose the upgrade path. See
+  /// `Response.upgrade`.
+  final Upgrade? upgrade;
 
   static bool _hasControlChar(String s, {bool allowTab = false}) {
     for (final u in s.codeUnits) {

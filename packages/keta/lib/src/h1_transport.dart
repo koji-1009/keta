@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'response.dart';
 import 'transport.dart';
+import 'upgrade.dart';
 
 /// The default HTTP/1.1 transport, built on `dart:io`. Uses only the SDK, so
 /// the core's zero-dependency rule holds even with a transport bundled.
@@ -52,6 +53,15 @@ class _H1Server implements TransportServer {
   final void Function(Object, StackTrace) _onError;
   final Set<Future<void>> _inFlight = {};
 
+  // Upgraded connections outlive the request that switched them, so they are NOT
+  // tracked in `_inFlight` (which gates request/response draining). A WebSocket
+  // could stay open for hours; if the handshake request stayed "in flight" for
+  // that whole time, `close(grace)` would always burn the full grace window and
+  // shutdown could hang on an idle chat socket. They are tracked here instead so
+  // shutdown can force-close them after the request grace — bounding shutdown
+  // without conflating a live socket with an unfinished request.
+  final Set<WebSocket> _openSockets = {};
+
   void _accept(HttpRequest request) {
     // _handle never throws (it catches internally), but guard the derived
     // future so no rejection can reach the root zone.
@@ -70,7 +80,90 @@ class _H1Server implements TransportServer {
       _onError(error, stack);
       response = Response(500, body: '');
     }
+    final upgrade = response.upgrade;
+    if (upgrade != null) {
+      // The handler asked to switch protocols. This returns once the handshake
+      // is done and the connection callback has been *started* — not when the
+      // socket eventually closes — so the handshake request leaves `_inFlight`
+      // promptly while the live socket is tracked in `_openSockets`.
+      await _switchProtocols(request, upgrade);
+      return;
+    }
     await _write(request.response, wrapped, response);
+  }
+
+  /// Realizes an [Upgrade] value against the concrete `dart:io` request this
+  /// transport already holds — the piece that keeps `dart:io`'s `WebSocket` out
+  /// of the transport-neutral seam: the switch happens here, behind [Transport],
+  /// and only a neutral [UpgradedChannel] crosses back to the handler.
+  Future<void> _switchProtocols(HttpRequest request, Upgrade upgrade) async {
+    if (!WebSocketTransformer.isUpgradeRequest(request)) {
+      // An upgrade route was hit by a plain request (no `Upgrade: websocket`).
+      // RFC 9110 §15.5.22 / RFC 6455 §4.2.2: answer 426 Upgrade Required and
+      // advertise the protocol the client must switch to, so a browser hitting
+      // the WS URL directly gets a precise, self-describing refusal rather than
+      // a hung or malformed handshake.
+      try {
+        final out = request.response
+          ..statusCode = HttpStatus.upgradeRequired
+          ..headers.set(HttpHeaders.upgradeHeader, 'websocket')
+          ..headers.set(HttpHeaders.connectionHeader, 'Upgrade');
+        out.write('426 Upgrade Required: this endpoint speaks WebSocket');
+        await out.close();
+      } catch (error, stack) {
+        _onError(error, stack);
+      }
+      return;
+    }
+    final WebSocket ws;
+    try {
+      ws = await WebSocketTransformer.upgrade(
+        request,
+        protocolSelector: _selectorFor(upgrade.subprotocol),
+      );
+    } catch (error, stack) {
+      // A failed handshake (a bad key, or a subprotocol the client never
+      // offered) — WebSocketTransformer has already written its own error
+      // response and closed the socket. Log rather than swallow.
+      _onError(error, stack);
+      return;
+    }
+    _openSockets.add(ws);
+    final channel = _IoWebSocketChannel(ws);
+    // Drop the socket from the tracked set once the connection is closed,
+    // however it closes (peer, us, or a drop). The channel's `done` is the
+    // reliable signal — it fires on the *stream's* end, which a remote close
+    // triggers, unlike `dart:io`'s WebSocket.done (the sink's done), which only
+    // completes when THIS side closes (verified: a peer-initiated close leaves
+    // the sink's done pending forever).
+    unawaited(channel.done.whenComplete(() => _openSockets.remove(ws)));
+    // Start the connection callback detached: it may loop for the socket's whole
+    // lifetime, which must not keep the handshake request in `_inFlight`. A
+    // throw from it is a handler defect — report it and close the socket so a
+    // half-initialized connection does not linger.
+    unawaited(
+      Future.sync(() => upgrade.onConnected(channel)).then(
+        (_) {},
+        onError: (Object error, StackTrace stack) {
+          _onError(error, stack);
+          ws.close(WebSocketStatus.internalServerError).catchError((_) {});
+        },
+      ),
+    );
+  }
+
+  /// The handshake subprotocol selector: null when the route declares none.
+  /// When it declares one, the client must have offered it (WebSocket
+  /// negotiation cannot invent a subprotocol the client did not list), so a
+  /// missing offer fails the handshake rather than silently downgrading.
+  String Function(List<String>)? _selectorFor(String? subprotocol) {
+    if (subprotocol == null) return null;
+    return (offered) {
+      if (offered.contains(subprotocol)) return subprotocol;
+      throw WebSocketException(
+        'client did not offer the required subprotocol "$subprotocol"',
+      );
+    };
   }
 
   Future<void> _write(
@@ -132,9 +225,81 @@ class _H1Server implements TransportServer {
     if (_inFlight.isNotEmpty) {
       await Future.wait(_inFlight).timeout(grace, onTimeout: () => const []);
     }
+    // Open WebSocket connections are not "in-flight requests" — their handshake
+    // already completed — so the drain above never waits on them. Send each a
+    // 1001 "going away" and bound the wait: a peer that never acknowledges the
+    // close must not hang shutdown, so after a short margin we stop waiting and
+    // fall through to the forced server close, which destroys their sockets.
+    if (_openSockets.isNotEmpty) {
+      final closing = [
+        for (final ws in _openSockets.toList())
+          ws.close(WebSocketStatus.goingAway).catchError((_) {}),
+      ];
+      await Future.wait(
+        closing,
+      ).timeout(const Duration(seconds: 2), onTimeout: () => const []);
+    }
     await _server.close(force: true).catchError((_) {});
     await stopped.catchError((_) {});
   }
+}
+
+/// Adapts a `dart:io` [WebSocket] to the transport-neutral [UpgradedChannel].
+/// This is the only place `dart:io`'s WebSocket type is named on the server
+/// path; everything above the transport sees the neutral value alone.
+///
+/// It owns the single subscription to the raw socket and re-presents inbound
+/// frames through [messages], for one load-bearing reason: [done] must complete
+/// when the *peer* closes, and the only `dart:io` signal that fires on a peer
+/// close is the data stream's `onDone` — not WebSocket.done, which completes
+/// only on a local close (verified). Consuming the stream here lets that
+/// `onDone` reliably drive [done], which is the handler's disconnect signal and
+/// how the transport reclaims a closed socket from its shutdown set.
+class _IoWebSocketChannel implements UpgradedChannel {
+  _IoWebSocketChannel(this._ws) {
+    _sub = _ws.listen(
+      // Data frames are `String` or `List<int>` — never null, so the cast is
+      // total.
+      (dynamic message) => _incoming.add(message as Object),
+      onError: _incoming.addError,
+      onDone: () {
+        if (!_closed.isCompleted) _closed.complete();
+        _incoming.close();
+      },
+      cancelOnError: false,
+    );
+    // Preserve backpressure when there IS a listener; a watch-only handler (no
+    // messages listener) still needs `onDone` to fire, so the subscription is
+    // not gated on a listener existing.
+    _incoming
+      ..onPause = _sub.pause
+      ..onResume = _sub.resume
+      ..onCancel = _sub.cancel;
+  }
+  final WebSocket _ws;
+  final StreamController<Object> _incoming = StreamController<Object>();
+  final Completer<void> _closed = Completer<void>();
+
+  // The subscription's lifetime is the connection's: its `onDone` closes the
+  // controller, and it is cancelled through `_incoming.onCancel` when the
+  // handler stops listening, so there is no leak to cancel by hand.
+  // ignore: cancel_subscriptions
+  late final StreamSubscription<dynamic> _sub;
+
+  @override
+  Stream<Object> get messages => _incoming.stream;
+
+  @override
+  void send(Object message) => _ws.add(message);
+
+  @override
+  Future<void> close([int? code, String? reason]) async {
+    await _ws.close(code, reason);
+    if (!_closed.isCompleted) _closed.complete();
+  }
+
+  @override
+  Future<void> get done => _closed.future;
 }
 
 class _H1Request implements TransportRequest {

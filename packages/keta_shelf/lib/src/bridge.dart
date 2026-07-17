@@ -9,12 +9,28 @@ import 'package:shelf/shelf.dart' as shelf;
 /// Mounts a keta [app] as a shelf handler: it compiles the app once (so route
 /// conflicts fail fast here) and runs the full keta pipeline per request. Use
 /// it to serve keta from an existing shelf stack.
+///
+/// A route that answers with `Response.upgrade` (WebSocket) cannot be served
+/// this way — shelf hands no socket across this bridge — so such a response is
+/// rejected with a `StateError` rather than mis-framed onto the wire.
 shelf.Handler ketaToShelf<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
   final router = app.compile(env, maxBodyBytes: maxBodyBytes);
   return (shelf.Request request) async {
     // keta handlers read the body through Context, which enforces maxBodyBytes
     // at its buffering point; bodyStream() stays the deliberate escape.
     final response = await router.dispatch(_ShelfRequest(request));
+    // A `Response.upgrade` cannot be honored here: switching protocols needs the
+    // raw socket, and this bridge deliberately exposes none (mirroring that
+    // `shelf.Request.hijack` is unsupported the other way). Fail loudly and
+    // predictably rather than silently answering 101 with an empty body that no
+    // client could use — an upgrade route simply cannot be served through shelf.
+    if (response.upgrade != null) {
+      throw StateError(
+        'keta Response.upgrade (WebSocket) reached the shelf bridge, which '
+        'cannot switch protocols — serve upgrade routes on keta\'s own '
+        'transport (H1Transport), not through ketaToShelf',
+      );
+    }
     // Drop framing headers keta may have set: the body is re-framed by shelf /
     // the server, and a stale content-length on a stream body corrupts the wire.
     final headers = {

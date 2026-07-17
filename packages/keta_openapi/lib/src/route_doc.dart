@@ -63,23 +63,72 @@ final class Success {
   final String contentType;
 }
 
+/// What an upgrade route answers with: 101 Switching Protocols, then another
+/// protocol entirely. It sits parallel to [Success] — the note's "Success と
+/// 同列の宣言(値)" — precisely because it cannot BE a [Success]: a [Success]
+/// asserts a 2xx/3xx, and a 101 is neither. A 101 does not mean "the request
+/// succeeded, here is the body"; it means "this connection is leaving HTTP." The
+/// two are different kinds of answer, so they are different types, and a route
+/// declares exactly one of them.
+///
+/// OpenAPI has no first-class representation of the switched protocol (a
+/// WebSocket session is not an HTTP response body), so the shadow documents the
+/// switch itself: a `101` response entry, plus the negotiated [subprotocol] when
+/// the route pins one.
+final class SwitchingProtocols {
+  const SwitchingProtocols({
+    this.subprotocol,
+    this.description = 'Switching Protocols',
+  });
+
+  /// The WebSocket subprotocol this endpoint negotiates, or null when it pins
+  /// none. Projected onto the `101` entry's `Sec-WebSocket-Protocol` header so
+  /// the contract names what the connection will speak.
+  final String? subprotocol;
+
+  /// The human-readable description of the `101` response.
+  final String description;
+}
+
 /// Per-route documentation, passed to a route as its opaque `doc` and read back
 /// here when emitting OpenAPI.
 class RouteDoc {
   const RouteDoc({
-    required this.success,
+    required Success this.success,
     this.requestBody,
     this.requestBodyType = 'application/json',
     this.summary,
     this.failureResponses,
     this.security,
     this.query,
-  });
+  }) : upgrade = null;
 
-  /// What this route answers with when it succeeds. Required: there is nowhere
-  /// to write a contract without one, so a document with no 2xx is
+  /// The doc for a route that answers by switching protocols (a WebSocket
+  /// upgrade). It carries a [SwitchingProtocols] instead of a [success] — the
+  /// 101 IS its terminal response — while everything else composes unchanged:
+  /// [failureResponses] (a 426 or 401), [security] (still adds the automatic
+  /// 401), and [query]. Kept a distinct constructor rather than a nullable
+  /// [success] so the ordinary `RouteDoc(success: ...)` stays non-null and every
+  /// existing caller is untouched.
+  const RouteDoc.upgrade({
+    required SwitchingProtocols this.upgrade,
+    this.requestBody,
+    this.requestBodyType = 'application/json',
+    this.summary,
+    this.failureResponses,
+    this.security,
+    this.query,
+  }) : success = null;
+
+  /// What this route answers with when it succeeds, or null for an upgrade route
+  /// (which answers 101 — see [upgrade]). Non-null for every route built with
+  /// the primary constructor: an ordinary contract with no 2xx is
   /// unrepresentable rather than caught after the fact.
-  final Success success;
+  final Success? success;
+
+  /// Non-null for an upgrade route (built with [RouteDoc.upgrade]): its 101
+  /// declaration, mutually exclusive with [success].
+  final SwitchingProtocols? upgrade;
 
   /// The schema of the request body.
   final Schema? requestBody;
@@ -108,9 +157,11 @@ class RouteDoc {
   /// choice (`c.query` = 400 on absence / `c.tryQuery` = optional).
   final List<QueryParam>? query;
 
-  /// Every schema this doc references, for transitive component collection.
+  /// Every schema this doc references, for transitive component collection. An
+  /// upgrade route has no [success] schema (its 101 carries no body), so that
+  /// slot is simply absent.
   Iterable<Schema> get schemas => [
-    ?success.schema,
+    ?success?.schema,
     ?requestBody,
     ...?failureResponses?.values,
   ];

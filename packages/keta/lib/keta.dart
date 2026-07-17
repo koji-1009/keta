@@ -63,4 +63,6 @@ export 'src/routing.dart'
         integer,
         number,
         boolean;
+export 'src/sse.dart' show SseEvent, SseResponses;
 export 'src/transport.dart' show Transport, TransportRequest, TransportServer;
+export 'src/upgrade.dart' show Upgrade, UpgradedChannel;
