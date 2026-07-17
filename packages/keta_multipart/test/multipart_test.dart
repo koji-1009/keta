@@ -51,6 +51,19 @@ void main() {
     );
   });
 
+  test('a case-insensitive Boundary= parameter name is honored', () async {
+    final raw = body('B', [
+      ('Content-Disposition: form-data; name="greeting"', 'hello'),
+    ]);
+    final collected = <(String?, String)>[];
+    await for (final p in parts(
+      ctx(raw, contentType: 'multipart/form-data; Boundary=B'),
+    )) {
+      collected.add((p.name, await p.text()));
+    }
+    expect(collected, [('greeting', 'hello')]);
+  });
+
   test('a missing boundary is a BadRequest', () {
     expect(
       parts(ctx(utf8.encode('x'), contentType: 'multipart/form-data')).toList(),

@@ -109,7 +109,10 @@ Stream<Part> parts<E>(
 String? _boundary(String contentType) {
   for (final param in contentType.split(';').skip(1)) {
     final trimmed = param.trim();
-    if (trimmed.startsWith('boundary=')) {
+    // HTTP parameter names are case-insensitive (RFC 9110 §5.6.6); only the
+    // `boundary=` prefix is matched case-insensitively, the value itself is
+    // taken verbatim.
+    if (trimmed.toLowerCase().startsWith('boundary=')) {
       var value = trimmed.substring('boundary='.length);
       if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
         value = value.substring(1, value.length - 1);
