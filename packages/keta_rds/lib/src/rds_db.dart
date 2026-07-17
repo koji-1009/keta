@@ -30,6 +30,12 @@ import 'values.dart';
 /// and per pool — behind a proxy such as RDS Proxy, keep them small, and size
 /// the sum across isolates against the server's limit (spec §3).
 ///
+/// **Disconnect recovery.** A connection the driver tears down mid-session
+/// (dead socket, server-initiated shutdown) is disposed rather than returned
+/// to the pool — see [translating] — and the next `acquire` opens a fresh one.
+/// Retrying the in-flight query itself is deliberately absent: whether it was
+/// safe to run again is unknowable at this layer.
+///
 /// **Placeholders.** SQL uses `?` positional placeholders, exactly as in
 /// keta_sqlite, so the same statement runs on either engine; the driver
 /// desugars them to PostgreSQL's `$1` form. A parameterless statement is sent
@@ -91,8 +97,21 @@ class RdsDb implements Db {
 
   // Stamped into the transaction's zone so a nested transaction() call is
   // caught as a StateError instead of silently pinning a second connection and
-  // running an independent transaction under the caller's nose.
+  // running an independent transaction under the caller's nose. Each
+  // transaction() call stamps a *fresh* token (not a constant), and the
+  // no-nest check below is a membership test against the tokens of
+  // transactions genuinely running right now — mirroring keta_sqlite's
+  // identity-checked _inActiveTxZone (sqlite_db.dart) — so a zone captured
+  // inside one transaction and leaked or reused after that transaction
+  // finished is not mistaken for nesting just because the token object still
+  // exists somewhere. Unlike keta_sqlite's single serialized connection (at
+  // most one transaction ever active, so a single field suffices), RdsDb pools
+  // several connections and genuinely concurrent transactions are normal
+  // (see the contract suite's "concurrent transactions serialize" test), so a
+  // *set* of the currently-live tokens stands in for sqlite's single
+  // `_currentTx` field.
   final Object _txZoneKey = Object();
+  final Set<Object> _activeTx = {};
 
   @override
   late final DbConn reader = _PoolConn(_readerPool);
@@ -102,21 +121,30 @@ class RdsDb implements Db {
 
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) {
-    if (Zone.current[_txZoneKey] != null) {
+    if (_activeTx.contains(Zone.current[_txZoneKey])) {
       throw StateError('transactions do not nest');
     }
+    final token = Object();
     return translating(() async {
       final conn = await _writerPool.acquire();
+      _activeTx.add(token);
       try {
         // runTx issues BEGIN, commits on a normal return, and on a throw rolls
-        // back and rethrows the ORIGINAL error (a failed ROLLBACK never masks
-        // it — the driver guarantees this). Nesting is guarded above via the
-        // zone, so f only ever touches the pinned TxSession.
+        // back and rethrows the ORIGINAL error — but only when that error is
+        // itself a PgException (package:postgres connection.dart:623-641): a
+        // non-PgException error from f, paired with a ROLLBACK that then also
+        // fails, is rethrown as the ROLLBACK failure instead, masking the
+        // original. That double-failure is narrow enough (the transaction
+        // body AND the rollback both have to fail) that this adapter leaves it
+        // as the driver's own behavior rather than adding an error-wrapping
+        // layer to paper over it. Nesting is guarded above via the zone, so f
+        // only ever touches the pinned TxSession.
         return await runZoned(
           () => conn.runTx((tx) => f(_TxConn(tx))),
-          zoneValues: {_txZoneKey: true},
+          zoneValues: {_txZoneKey: token},
         );
       } finally {
+        _activeTx.remove(token);
         // A connection the driver tore down (fatal error) must not go back into
         // the pool; isOpen tells us whether it survived.
         _writerPool.release(conn, broken: !conn.isOpen);

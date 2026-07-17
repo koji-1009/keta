@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:keta/keta.dart' show Conflict, KetaException;
@@ -151,6 +152,26 @@ void main() {
         db.transaction((_) => db.transaction((_) async => 0)),
         throwsStateError,
       );
+    });
+
+    test('a zone captured inside a finished transaction does not '
+        'false-positive as nested', () async {
+      // Regression: the nesting guard used to stamp a constant `true` into
+      // the zone, so a Zone reference captured inside one transaction and
+      // reused after it completed would still read as "inside a
+      // transaction" forever, false-positiving on a perfectly legitimate,
+      // unrelated later call.
+      final db = _connect();
+      addTearDown(db.close);
+
+      late Zone stale;
+      await db.transaction((_) async {
+        stale = Zone.current;
+        return 0;
+      });
+
+      final result = await stale.run(() => db.transaction((_) async => 1));
+      expect(result, 1);
     });
   });
 

@@ -119,6 +119,42 @@ void main() {
       final c = await pool.acquire();
       expect(c, isA<FakeConn>());
     });
+
+    test(
+      'close() completes when the in-flight open fails after close begins',
+      () async {
+        // Regression: acquire()'s catch clause used to undo the checkout and
+        // hand the slot back without nudging the drain, so a close() that
+        // started while this was the last outstanding checkout hung forever
+        // waiting on a resource that was never actually handed out.
+        final openGate = Completer<FakeConn>();
+        final closed = <FakeConn>[];
+        final pool = Pool<FakeConn>(
+          () => openGate.future,
+          (c) async => closed.add(c),
+          maxConnections: 1,
+        );
+
+        final acquiring = pool.acquire();
+        // No idle resource and the ceiling has room, so acquire() is now
+        // awaiting _open() — the sole outstanding checkout.
+        await Future<void>.delayed(Duration.zero);
+
+        final closing = pool.close();
+        var isClosed = false;
+        unawaited(closing.then((_) => isClosed = true));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(isClosed, isFalse); // still draining the in-flight open
+
+        openGate.completeError(StateError('open failed'));
+        await expectLater(acquiring, throwsStateError);
+        await closing.timeout(
+          const Duration(seconds: 1),
+          onTimeout: () => fail('close() hung on a failed in-flight open'),
+        );
+        expect(isClosed, isTrue);
+      },
+    );
   });
 
   group('release of a broken resource', () {

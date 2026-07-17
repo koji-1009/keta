@@ -24,9 +24,13 @@ Each `query`/`execute` checks out a connection for that one call and returns it 
 
 Pool ceilings are **per isolate and per pool**. Behind a proxy such as RDS Proxy, keep them small, and size the sum across isolates against the server's connection limit.
 
+**Disconnect recovery.** A connection the driver tears down mid-session (a dead socket, a server-initiated shutdown) is never handed back to the pool — it is disposed, and the next `acquire` opens a fresh one. Retrying the in-flight query itself is deliberately absent: whether it was safe to run again is unknowable at this layer (a caller wanting that must make its own query idempotent and retry above `Db`).
+
 ## Placeholders
 
 SQL uses `?` positional placeholders, exactly as in keta_sqlite, so the same statement runs on either engine — the driver desugars them to PostgreSQL's `$1` form. A parameterless statement is sent via the simple query protocol, which is what lets a migration file carry several `;`-separated statements in one `execute`.
+
+`?` inside a string literal, a `$$`-quoted (dollar-quoted) string, or a comment is safe — the driver's tokenizer skips those spans entirely before it ever looks for a placeholder. Outside them it is not: a *parameterized* statement (one with params to bind) that also uses one of PostgreSQL's own `?`-family jsonb operators (`?`, `?|`, `?&` — e.g. `data ? 'key'`) will have that operator's `?` mistaken for a placeholder and desugared out from under it. A parameterless statement never hits the tokenizer, so it is unaffected. When a query needs both bound parameters and one of these operators, either avoid mixing them in the same statement, or use the equivalent jsonb functions instead of the operators (`jsonb_exists`, `jsonb_exists_any`, `jsonb_exists_all` for `?`, `?|`, `?&` respectively).
 
 ## Error-translation floor
 
@@ -36,8 +40,8 @@ The adapter translates only the conditions a caller can act on into keta's vocab
 |---|---|---|
 | uniqueness violation | `23505` | `Conflict` (409) — the driver's constraint/detail carried in `detail`, withheld from the client |
 | lock unobtainable in time | `55P03` | `Unavailable` (503) |
-| server refusing new work | `53300`, `57P03` | `Unavailable` (503) |
-| server unreachable / connection lost / pool-acquire timeout | socket error, connection-fatal `PgException`, pool timeout | `Unavailable` (503) |
+| server refusing new work or tearing down the session | `53300`, `57P03`, `57P01`, `57P02` | `Unavailable` (503) |
+| server unreachable / connection lost mid-session / pool-acquire timeout | socket error, connection-fatal `PgException`, the socket dying mid-session, pool timeout | `Unavailable` (503) |
 
 Everything else passes through exactly as the driver threw it. A NOT NULL, CHECK, or FOREIGN KEY violation is the app's own bug: it earns the 500 it gets, and a 409 would only tell the client to retry the unretryable. This is a floor — an adapter may translate more, never less.
 

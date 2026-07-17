@@ -96,6 +96,24 @@ void main() {
       );
     });
 
+    test('admin_shutdown (57P01) becomes Unavailable', () async {
+      // The server-initiated termination codes arrive as FATAL, but they are
+      // still ServerExceptions (built from the server's own ErrorResponse),
+      // so this exercises the `on ServerException` code switch, not the
+      // severity check below.
+      await expectLater(
+        throwing<void>(serverException(adminShutdown, severity: 'FATAL')),
+        throwsA(isA<Unavailable>()),
+      );
+    });
+
+    test('crash_shutdown (57P02) becomes Unavailable', () async {
+      await expectLater(
+        throwing<void>(serverException(crashShutdown, severity: 'FATAL')),
+        throwsA(isA<Unavailable>()),
+      );
+    });
+
     test(
       'an unreachable server (SocketException) becomes Unavailable',
       () async {
@@ -106,10 +124,45 @@ void main() {
       },
     );
 
-    test('a connection-fatal PgException becomes Unavailable', () async {
+    test(
+      'a socket dying mid-session becomes Unavailable, not a raw 500',
+      () async {
+        // This is exactly what package:postgres throws from its socket-error
+        // listener (connection.dart:465) — a *plain* PgException, default
+        // (error) severity, not a ServerException. Before this fix it fell
+        // through untranslated because nothing here matched anything but a
+        // fatal/panic severity.
+        await expectLater(
+          throwing<void>(PgException('Socket error: Connection reset by peer')),
+          throwsA(isA<Unavailable>()),
+        );
+      },
+    );
+
+    test(
+      'the socket closing unexpectedly becomes Unavailable, not a raw 500',
+      () async {
+        // The other shape the driver throws for a dead mid-session connection
+        // (connection.dart:494-496 via _socketClosed), also default severity.
+        await expectLater(
+          throwing<void>(
+            PgException(
+              'The underlying socket to Postgres has been closed '
+              'unexpectedly.',
+            ),
+          ),
+          throwsA(isA<Unavailable>()),
+        );
+      },
+    );
+
+    test('a connection-fatal PgException (e.g. a bad certificate) becomes '
+        'Unavailable', () async {
+      // BadCertificateException is the driver's own example of a plain,
+      // non-server PgException carrying a connection-fatal severity.
       await expectLater(
         throwing<void>(
-          PgException('the socket died', severity: Severity.fatal),
+          PgException('Bad server certificate.', severity: Severity.fatal),
         ),
         throwsA(isA<Unavailable>()),
       );
@@ -147,6 +200,25 @@ void main() {
       test('a non-fatal query-level PgException passes through', () async {
         await expectLater(
           throwing<void>(PgException('some client-side error')),
+          throwsA(
+            isA<PgException>().having(
+              (e) => e,
+              'not keta',
+              isNot(isA<KetaException>()),
+            ),
+          ),
+        );
+      });
+
+      test('a client-side encoding PgException is not mistaken for a dead '
+          'connection', () async {
+        // The exact shape package:postgres throws when a parameter's type
+        // cannot be inferred (lib/src/types/type_registry.dart:293) — a
+        // plain, default-severity PgException with the connection perfectly
+        // healthy. It must NOT be swept up by the connection-lost check just
+        // because it, too, is "a PgException that is not a ServerException".
+        await expectLater(
+          throwing<void>(PgException("Could not infer type of value 'x'.")),
           throwsA(
             isA<PgException>().having(
               (e) => e,

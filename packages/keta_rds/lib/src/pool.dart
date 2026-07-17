@@ -85,9 +85,13 @@ class Pool<C> {
       // Opening failed, so no resource was actually taken: undo the checkout
       // and hand the slot back (a waiter, if any, gets to try). The error
       // propagates to the caller, where RdsDb translates an unreachable server
-      // into Unavailable.
+      // into Unavailable. This checkout may also be the one close() is
+      // draining on — nudge it the same way release() does, or a close() that
+      // started while this open was in flight hangs forever on a checkout
+      // that never comes back.
       _checkedOut--;
       _givePermit();
+      _finishDrainIfIdle();
       rethrow;
     }
   }
