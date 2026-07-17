@@ -46,15 +46,38 @@ String _importFor(RouteFile file) =>
 /// centralized in one place" generator norm. A path segment is a filename, not
 /// a guaranteed-safe identifier: a backslash, a single quote, or a `$` in one
 /// would otherwise be written straight into the generated source and either
-/// break the string literal or trigger string interpolation. The backslash is
-/// escaped first so it cannot double-escape the quote/dollar this function
-/// introduces.
+/// break the string literal or trigger string interpolation. POSIX also allows
+/// raw control characters in a filename — a literal newline or tab would split
+/// or corrupt the generated line just as surely, so every C0/C1 control is
+/// escaped too (the common three by name, the rest as `\u{...}`). Runs a
+/// single pass over runes rather than chained `replaceAll` calls so introduced
+/// backslashes are never themselves re-escaped.
 String _dartStringLiteral(String value) {
-  final escaped = value
-      .replaceAll(r'\', r'\\')
-      .replaceAll("'", r"\'")
-      .replaceAll(r'$', r'\$');
-  return "'$escaped'";
+  final buffer = StringBuffer("'");
+  for (final rune in value.runes) {
+    switch (rune) {
+      case 0x5C: // \
+        buffer.write(r'\\');
+      case 0x27: // '
+        buffer.write(r"\'");
+      case 0x24: // $
+        buffer.write(r'\$');
+      case 0x0A:
+        buffer.write(r'\n');
+      case 0x0D:
+        buffer.write(r'\r');
+      case 0x09:
+        buffer.write(r'\t');
+      default:
+        if (rune <= 0x1F || (rune >= 0x7F && rune <= 0x9F)) {
+          buffer.write('\\u{${rune.toRadixString(16)}}');
+        } else {
+          buffer.writeCharCode(rune);
+        }
+    }
+  }
+  buffer.write("'");
+  return buffer.toString();
 }
 
 /// Rewrites the two marked regions of [source] to import every route file and

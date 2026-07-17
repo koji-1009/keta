@@ -1,3 +1,4 @@
+import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:test/test.dart';
@@ -68,6 +69,33 @@ void main() {
           r"$weird.exported.bind(app, const ['it\'s', '\$weird', 'back\\slash']);",
         ),
       );
+    });
+
+    test('hostile segments — quote, dollar, backslash, newline, tab — emit '
+        'source that actually parses', () {
+      // The `contains` assertions above pin the exact escaped text; they
+      // cannot see whether the *rest* of the emitted file still parses. A
+      // raw control character (legal in a POSIX filename) is the gap: it
+      // would otherwise land in the generated source as a literal newline
+      // or tab and split the line, producing an unterminated string
+      // literal the emitter itself cannot detect. Feeding the generated
+      // region through a real Dart parser is the only check that catches
+      // that class of bug.
+      final out = syncManifest(_imports, [
+        file(
+          importPath: "routes/it's/\$weird/back\\slash/new\nline/ta\tb.dart",
+          prefix: r'$hostile',
+          template: [
+            "it's",
+            r'$weird',
+            r'back\slash',
+            'new\nline',
+            'ta\tb',
+            'cr\rreturn',
+          ],
+        ),
+      ]);
+      expect(() => parseString(content: out), returnsNormally);
     });
 
     test('every region is fenced from the formatter', () {
