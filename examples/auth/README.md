@@ -20,6 +20,38 @@ unchanged) and the role guard.
 
 `SecurityPolicy(defaults: [bearer])`: a route that declares no security fails closed (401), matching `../register` and `../files`. `/public` is public only because it says so explicitly (`RouteDoc(security: const [])`) — forgetting that declaration would 401 it, not leave it open.
 
+## Two verifiers, one gate
+
+The bearer table above and the cookie session below are the same gate
+(`enforceSecurity`, one upstream `app.use`) with two different verifiers —
+that is the whole demonstration. A route just names the scheme it accepts
+(`security: [bearer]` or `security: [cookieAuth]`); the runtime 401, the
+OpenAPI `security` entry, and the `components/securitySchemes` document all
+follow from that one declaration, regardless of which verifier services it.
+
+`/login` verifies a username/password against a demo credential table (the
+same kind of stand-in `_tokens` is for bearer), mints a random session id
+(`Random.secure`, hex — the same idiom `App` uses for request ids), stores
+`sid -> role` in an in-memory `Map` owned by `Env`, and renders it as a
+`Set-Cookie` (`httpOnly`, `SameSite=Lax`) onto the response headers — there is
+no second channel for a cookie, just the ordinary multi-value headers keta
+already has. `/me` and `/logout` read `c.cookie('sid')` back and look it up in
+that same store. keta ships no session store by design (the same "keta ships
+no auth" rule bearer already demonstrates); the in-memory `Map` on `Env` is
+the app's own state, and a real app swaps it for Redis or a database table
+without touching the verifier, `/me`, or `/logout`.
+
+Cookie auth is documented in OpenAPI as an `apiKey`-style scheme
+(`type: apiKey, in: cookie, name: sid`) — keta_openapi ships `bearer` and a
+header-carried `apiKey`, so this example mints its own `cookieAuth`
+`SecurityScheme` constant for the cookie-carried case.
+
+`secure: true` is deliberately **not** set on the login cookie — this demo
+serves plain HTTP, and a browser drops a `Secure` cookie sent over an
+insecure connection outright. A production deployment over TLS must add
+`secure: true`; `SameSite.none` would require it by construction (`SetCookie`
+enforces that pairing at construction, so the mistake is unrepresentable).
+
 ## Run
 
 ```bash
@@ -34,6 +66,15 @@ curl -s localhost:8080/public                                                # 2
 curl -s localhost:8080/admin/whoami                                          # 401, no token
 curl -s localhost:8080/admin/whoami -H 'authorization: Bearer member-token'  # 403, wrong role
 curl -s localhost:8080/admin/whoami -H 'authorization: Bearer admin-token'   # 200 {"role":"admin"}
+
+# Cookie session: /login sets the cookie, /me and /logout spend it.
+curl -sc /tmp/cookies -X POST localhost:8080/login \
+  -H 'content-type: application/json' -d '{"username":"admin","password":"admin-pass"}'
+curl -sb /tmp/cookies localhost:8080/me                                      # 200 {"role":"admin"}
+curl -sX POST -b /tmp/cookies localhost:8080/logout                          # 200, session ended
+curl -sb /tmp/cookies localhost:8080/me                                      # 401, sid no longer valid
 ```
 
-Tokens: `admin-token` → `admin`, `member-token` → `member`.
+Bearer tokens: `admin-token` → `admin`, `member-token` → `member`. Login
+credentials: `admin`/`admin-pass`, `member`/`member-pass` (same two roles, a
+different credential shape).
