@@ -21,7 +21,16 @@ Future<void> main() async {
     debounce?.cancel();
     debounce = Timer(const Duration(milliseconds: 150), () async {
       stdout.writeln('[dev] change detected — restarting');
-      child?.kill();
+      // The old process's SIGTERM triggers a graceful shutdown (up to 30s
+      // grace), which means it can still hold the port well after `kill()`
+      // returns — `kill()` only requests the signal, it does not wait for the
+      // process to exit. Starting the replacement immediately raced it for the
+      // port and lost under load ("address already in use"). Awaiting
+      // exitCode makes the restart wait for the old process to actually be
+      // gone before the new one binds.
+      final old = child;
+      old?.kill();
+      await old?.exitCode;
       await start();
     });
   }

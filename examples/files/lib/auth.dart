@@ -63,12 +63,20 @@ const errorSchema = Schema('Error', {
   },
 });
 
-// `../example` has a `requireAdmin()` group middleware, scoped with
-// `app.group('/admin').use(requireAdmin())`. There is no equivalent here:
-// `Exported.bind` (keta_files) always registers straight onto the flat
-// `App<E>` passed to `register()` — there is no per-file or per-subtree
-// group/middleware surface to hang a scoped guard on, and the manifest that
-// calls `bind` is generated (`dart run keta_files:sync`), not hand-editable.
-// `routes/admin/ping.dart` therefore inlines the same check
-// (`c.tryGet(principal)` / `Forbidden`) in the handler itself. See its
-// authorization comment, and ../example_files/README.md.
+/// Authorization, which is deliberately not the security gate's job: the gate
+/// answers "who are you", this answers "may you". Ordinary middleware —
+/// mirrors `../register`'s `requireAdmin()`, scoped here via
+/// `routes/admin/_middleware.dart`'s `ScopedMiddleware<Env>` instead of
+/// `app.group('/admin').use(...)`, since keta_files has no flat `App<E>`
+/// group to hang it on.
+///
+/// [principal] is read with tryGet, not get: a route reachable through a scheme
+/// whose verifier sets no principal (apiKey, here) would otherwise crash rather
+/// than refuse. Absent principal is not an admin, and that is the whole rule.
+Middleware<Env> requireAdmin() => (c, next) {
+  final who = c.tryGet(principal);
+  if (who == null || !who.admin) {
+    throw const Forbidden('admin only');
+  }
+  return next(c);
+};

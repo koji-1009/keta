@@ -7,16 +7,17 @@ and calls into the marked regions of `lib/routes.dart`. Everything else — the
 domain, the middleware stack, the routes, the security declarations — matches
 the register-based example, so the two emit **byte-identical OpenAPI**.
 
-One thing does *not* match: how `/admin/ping`'s authorization is wired.
-`../register` scopes a `requireAdmin()` middleware over the whole `/admin`
-subtree with `app.group('/admin').use(requireAdmin())`. keta_files has no
-equivalent — `Exported.bind` always registers a file's handlers straight onto
-the one flat `App<E>` that `register(app)` receives (there is no per-file or
-per-subtree group to hang middleware on), and the manifest that calls `bind`
-is generated, not hand-editable. So `routes/admin/ping.dart` inlines the same
-check (`c.tryGet(principal)` / `Forbidden`) in its handler instead of via
-middleware — the same authorization outcome, reached without a group-scoping
-mechanism that the file-convention has no surface for.
+How `/admin/ping`'s authorization is wired now matches too. `../register`
+scopes a `requireAdmin()` middleware over the whole `/admin` subtree with
+`app.group('/admin').use(requireAdmin())`; keta_files' answer is
+`routes/admin/_middleware.dart`, a file declaring a single typed
+`ScopedMiddleware<Env>([requireAdmin()])` whose *directory* stands in for the
+prefix. `dart run keta_files:sync` gathers every `_middleware.dart` on the
+path from `lib/routes/` down to a route file and threads them into that
+route's `Exported.bind` call, outer scope first — `routes/admin/ping.dart`
+itself is back to a plain handler with no inline authorization check. See
+`packages/keta_files/README.md`'s "Directory-scoped middleware" section for
+the full contract.
 
 ## Run
 

@@ -17,3 +17,8 @@ dependencies:
 
 dev_dependencies:
   test: ^1.25.0
+  # The drift-repair loop demo (test/canonical_drift_demo_test.dart, README's
+  # "When you add a field") runs keta_lints' canonicalDiagnostics/
+  # applyCanonicalFix directly. Dev-time only: the checker/fixer never ships in
+  # the running app. A workspace member, so path resolution is automatic.
+  keta_lints: ^0.1.0

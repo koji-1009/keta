@@ -17,7 +17,12 @@ final exported = Exported<Env>(
       [c.param<String>('uid')],
     );
     if (rows.isEmpty) throw const NotFound('user not found');
-    final tags = (rows.first['tags'] as String).split(',');
+    // A comma-joined empty column is `''`, and `''.split(',')` is `['']`, not
+    // `[]` — the same trap UserDto.fromRow guards against. Left unguarded,
+    // `GET /users/<zero-tag id>/tags/0` answered `{"tag": ""}` instead of the
+    // 404 an out-of-range index gets everywhere else.
+    final tagsRaw = rows.first['tags'] as String;
+    final tags = tagsRaw.isEmpty ? const <String>[] : tagsRaw.split(',');
     final index = c.param<int>('index');
     if (index < 0 || index >= tags.length) {
       throw const NotFound('tag index out of range');

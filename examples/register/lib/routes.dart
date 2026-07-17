@@ -75,9 +75,7 @@ void register(App<Env> app) {
 
   app.on(root.segments('users')).post(
     (c, _) async {
-      final dto = UserDto.fromJson(
-        userDtoSchema.require(await c.body()) as Map<String, Object?>,
-      );
+      final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));
       await c.get(txConn).execute(
         'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
         [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
@@ -114,7 +112,12 @@ void register(App<Env> app) {
           [p.$1],
         );
         if (rows.isEmpty) throw const NotFound('user not found');
-        final tags = (rows.first['tags'] as String).split(',');
+        // A comma-joined empty column is `''`, and `''.split(',')` is `['']`,
+        // not `[]` — the same trap UserDto.fromRow guards against. Left
+        // unguarded, `GET /users/<zero-tag id>/tags/0` answered `{"tag": ""}`
+        // instead of the 404 an out-of-range index gets everywhere else.
+        final tagsRaw = rows.first['tags'] as String;
+        final tags = tagsRaw.isEmpty ? const <String>[] : tagsRaw.split(',');
         if (p.$2 < 0 || p.$2 >= tags.length) {
           throw const NotFound('tag index out of range');
         }
@@ -126,18 +129,20 @@ void register(App<Env> app) {
   app.put(
     '/users/:id',
     (c) async {
-      final dto = UserDto.fromJson(
-        userDtoSchema.require(await c.body()) as Map<String, Object?>,
-      );
+      final pathId = c.param<String>('id');
+      final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));
+      // The schema requires a body `id`, but requiring it says nothing about it
+      // matching the path — unchecked, `PUT /users/1` with body id "2" updated
+      // row 1 and echoed back id "2", silently renaming a row through a path
+      // that named a different one.
+      if (dto.id != pathId) {
+        throw BadRequest(
+          'body id "${dto.id}" does not match path id "$pathId"',
+        );
+      }
       final changed = await c.get(txConn).execute(
         'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
-        [
-          dto.name,
-          dto.age,
-          dto.role.name,
-          dto.tags.join(','),
-          c.param<String>('id'),
-        ],
+        [dto.name, dto.age, dto.role.name, dto.tags.join(','), pathId],
       );
       if (changed == 0) throw const NotFound('user not found');
       return c.json(dto.toJson());

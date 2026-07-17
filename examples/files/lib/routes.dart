@@ -21,6 +21,7 @@ import 'routes/users.dart' as $users;
 import 'routes/users/_id.dart' as $users_id;
 import 'routes/users/_uid/tags/_index.dart' as $users_uid_tags_index;
 import 'routes/whoami.dart' as $whoami;
+import 'routes/admin/_middleware.dart' as $mw$admin;
 // dart format on
 // keta_files:end
 
@@ -62,7 +63,7 @@ App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
 void register(App<Env> app) {
   // keta_files:routes
   // dart format off
-  $admin_ping.exported.bind(app, const ['admin', 'ping']);
+  $admin_ping.exported.bind(app, const ['admin', 'ping'], [$mw$admin.scoped]);
   $health.exported.bind(app, const ['health']);
   $metrics.exported.bind(app, const ['metrics']);
   $uploads.exported.bind(app, const ['uploads']);

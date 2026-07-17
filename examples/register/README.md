@@ -55,6 +55,59 @@ dart run tool/openapi.dart > openapi.yaml
 The document is a shadow of the code (routes-as-values → OpenAPI 3.1); it is
 never a source that drives the code.
 
+## When you add a field
+
+A DTO's `fromJson`, `toJson`, and `Schema` constant are three hand-written
+mirrors of one field set (`lib/user_dto.dart`'s `UserDto`, say). Add a field to
+the class and those three do not update themselves — that gap is drift, and
+`keta_lints` exists to make it loud instead of a runtime surprise three requests
+later. The loop, concretely:
+
+1. Edit the class — add a field, nothing else:
+
+   ```dart
+   final String? nickname;
+   ```
+
+   (and the matching constructor parameter). `fromJson`, `toJson`, and the
+   `Schema` constant are now stale: they do not read, write, or document
+   `nickname`.
+
+2. Run the checker. It fails, naming exactly what drifted:
+
+   ```bash
+   dart run keta_lints:check canonical lib/
+   ```
+
+   ```
+   [<id>] keta_canonical_drift: class UserDto has drifted (fields not in
+   toJson: nickname; fields not read by fromJson: nickname); run keta_lints:fix
+   to reconcile the mapper (lib/user_dto.dart)
+   [<id>] keta_schema_drift: class UserDto Schema constant has drifted (fields
+   not in schema: nickname); run keta_lints:fix to reconcile the Schema
+   (lib/user_dto.dart)
+   ```
+
+3. Run the fixer. It materializes the repair — regenerating `fromJson`,
+   `toJson`, and the `Schema`'s `properties`/`required` from the field set,
+   preserving everything else (enums, formats, doc comments) verbatim:
+
+   ```bash
+   dart run keta_lints:fix canonical lib/
+   ```
+
+4. Run the checker again — clean, because the three mirrors agree with the
+   class once more:
+
+   ```bash
+   dart run keta_lints:check canonical lib/
+   ```
+
+`test/canonical_drift_demo_test.dart` runs exactly this loop against this
+example's real `user_dto.dart` (via string surgery on a copy, never the file on
+disk): it asserts the drift is caught, then that the fix clears it, so the
+claim above is a passing test, not just this paragraph.
+
 ## Layout
 
 - `lib/app.dart` — `buildApp`: the middleware stack (the single assembly point)

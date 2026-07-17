@@ -39,9 +39,7 @@ final exported = Exported<Env>(
     // A duplicate id needs no code here: keta_sqlite turns the engine's
     // uniqueness violation into a Conflict, and recover() renders it as a 409.
     (c) async {
-      final dto = UserDto.fromJson(
-        userDtoSchema.require(await c.body()) as Map<String, Object?>,
-      );
+      final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));
       await c.get(txConn).execute(
         'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
         [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],

@@ -179,6 +179,57 @@ void main() {
     expect((await client.delete('/users/1', headers: admin)).status, 404);
   });
 
+  test('PUT rejects a body id that disagrees with the path id', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+
+    await client.post(
+      '/users',
+      headers: admin,
+      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+    );
+
+    // The schema requires a body `id`; nothing checked it agreed with the path
+    // one. Unchecked, this updated row 1 and echoed back id "2" — a silent
+    // rename through a path that named a different row.
+    final mismatch = await client.put(
+      '/users/1',
+      headers: admin,
+      json: {'id': '2', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
+    );
+    expect(mismatch.status, 400);
+    // The row is untouched: no update ran.
+    expect(
+      (await client.get('/users/1', headers: admin)).json(),
+      containsPair('name', 'Ada'),
+    );
+
+    final match = await client.put(
+      '/users/1',
+      headers: admin,
+      json: {'id': '1', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
+    );
+    expect(match.status, 200);
+    expect(match.json(), containsPair('name', 'Ada B'));
+  });
+
+  test('a zero-tag user 404s at any tag index, not ""', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+
+    await client.post(
+      '/users',
+      headers: admin,
+      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+    );
+
+    // The tags column is a comma-joined `''`, and `''.split(',')` is `['']`,
+    // not `[]` — unguarded, index 0 answered `{"tag": ""}` instead of 404.
+    expect((await client.get('/users/1/tags/0', headers: admin)).status, 404);
+  });
+
   test('list returns a nested UserList and filters by ?role', () async {
     final env = await bootTestEnv();
     addTearDown(env.close);

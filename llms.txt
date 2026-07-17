@@ -120,8 +120,8 @@ A single `Schema` constant is one source of truth: OpenAPI output,
 (throws `BadRequest` with the violation list as `detail` on any violation),
 and contract tests.
 
-Usage: `final dto = UserDto.fromJson(userDtoSchema.require(await c.body()) as Map<String, Object?>);`
-(`require` validates and returns its input unchanged — `Object? require(Object?)`; the mapper does the typing.)
+Usage: `final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));`
+(`requireMap` requires, then hands the result back typed as `Map<String, Object?>` — the shape every write handler needs before `fromJson`. `require` remains the untyped primitive — `Object? require(Object?)`, unchanged — for a schema that isn't `type: object`.)
 
 ## OpenAPI
 
