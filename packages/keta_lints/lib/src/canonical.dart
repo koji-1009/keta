@@ -117,6 +117,11 @@ void _checkClass(
 
   final jsonKeys = _toJsonKeys(toJson);
   if (jsonKeys == null) return; // hand-modified shape; not verified.
+  if (!_isCanonicalFromJson(fromJson, className)) {
+    return; // hand-modified shape; not verified — mirrors the toJson gate
+    // above, so `keta_lints:fix` (which shares this same recognizer, see
+    // fix.dart) is never recommended for a fromJson it will refuse to touch.
+  }
   final fields = finalFields.toSet();
   // Verify BOTH directions of the round-trip: toJson writes exactly the fields,
   // and fromJson reads exactly the fields. A half-done rename (fromJson still
@@ -146,6 +151,36 @@ void _checkClass(
       ),
     );
   }
+}
+
+/// Whether [fromJson]'s body is a recognizable canonical shape: a single
+/// expression that is a direct call to the class's own default constructor
+/// (`ClassName(...)`) — the shape `keta_lints:fix` itself generates. Mirrors
+/// [_toJsonKeys] returning null for a non-canonical toJson at the same
+/// granularity — it recognizes the outer shape (an expression-bodied factory
+/// that instantiates the class directly) without verifying each argument's
+/// inner expression, exactly as `_toJsonKeys`/[_isCanonicalMap]-in-fix.dart
+/// recognize a map literal without verifying each entry's value.
+///
+/// A block body with local variables, or a fallback lookup spread across
+/// statements (`final id = json['id'] ?? json['legacy_id']; return
+/// Dto(id: id);`), does not match and is treated as hand-modified — the
+/// fromJson key set below is only trustworthy, and only worth reporting drift
+/// on, once this recognizes the shape. That keeps this diagnostic in
+/// lockstep with what the fix (see fix.dart, which shares this exact
+/// recognizer) can and cannot touch.
+bool _isCanonicalFromJson(ConstructorDeclaration fromJson, String className) {
+  final body = fromJson.body;
+  if (body is! ExpressionFunctionBody) return false;
+  return switch (body.expression) {
+    InstanceCreationExpression(:final constructorName)
+        when constructorName.type.name.lexeme == className &&
+            constructorName.name == null =>
+      true,
+    MethodInvocation(:final methodName) when methodName.name == className =>
+      true,
+    _ => false,
+  };
 }
 
 /// The string keys read via `…['key']` inside the fromJson factory (regardless

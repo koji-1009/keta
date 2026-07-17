@@ -18,7 +18,8 @@ import 'dart_literal.dart';
 /// A leading `///` doc comment on a regenerated member is preserved. The
 /// `Schema` constant keeps every existing per-property definition (enums,
 /// formats) verbatim and re-derives `$ref`/`deps` from one model. A class whose
-/// `toJson` is not a recognizable canonical map literal is treated as
+/// `toJson` is not a recognizable canonical map literal, or whose `fromJson`
+/// is not a recognizable canonical constructor call, is treated as
 /// hand-modified and left untouched.
 String applyCanonicalFix(String source) {
   final unit = parseString(content: source, throwIfDiagnostics: false).unit;
@@ -142,6 +143,9 @@ void _fixClass(
   };
   if (!fields.every((f) => ctorNamed.contains(f.name))) return;
   if (toJson != null && !_isCanonicalMap(toJson)) return; // hand-modified.
+  if (fromJson != null && !_isCanonicalFromJson(fromJson, className)) {
+    return; // hand-modified.
+  }
 
   final fieldNames = {for (final f in fields) f.name};
   final schema = schemas[className];
@@ -324,6 +328,40 @@ String _schemaSource(
 }
 
 bool _isCanonicalMap(MethodDeclaration toJson) => _returnedMap(toJson) != null;
+
+/// Whether [fromJson]'s body is a recognizable canonical shape: a single
+/// expression that is a direct call to the class's own default constructor
+/// (`ClassName(...)`), like the fix itself generates. Mirrors [_isCanonicalMap]
+/// for toJson at the same granularity — it recognizes the outer shape (an
+/// expression-bodied factory that instantiates the class directly) without
+/// verifying each argument's inner expression, exactly as `_isCanonicalMap`
+/// recognizes a map literal without verifying each entry's value.
+///
+/// A block body with local variables, or a fallback lookup spread across
+/// statements (`final id = json['id'] ?? json['legacy_id']; return
+/// Dto(id: id);`), does not match this shape and is left untouched — that is
+/// what makes a hand-written back-compat alias fromJson survive the fix
+/// instead of being silently collapsed to the naive one-liner.
+bool _isCanonicalFromJson(ConstructorDeclaration fromJson, String className) =>
+    _returnedInstantiationArgs(fromJson, className) != null;
+
+ArgumentList? _returnedInstantiationArgs(
+  ConstructorDeclaration fromJson,
+  String className,
+) {
+  final body = fromJson.body;
+  if (body is! ExpressionFunctionBody) return null;
+  return switch (body.expression) {
+    InstanceCreationExpression(:final constructorName, :final argumentList)
+        when constructorName.type.name.lexeme == className &&
+            constructorName.name == null =>
+      argumentList,
+    MethodInvocation(:final methodName, :final argumentList)
+        when methodName.name == className =>
+      argumentList,
+    _ => null,
+  };
+}
 
 /// The string keys read via `…['key']` inside the fromJson factory (regardless
 /// of the map parameter's name), i.e. the wire keys fromJson consumes.

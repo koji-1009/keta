@@ -790,6 +790,23 @@ class Weird {
 ''';
       expect(canonicalDiagnostics(source), isEmpty);
     });
+
+    test(
+      'a hand-modified fromJson is not verified (symmetric with toJson)',
+      () {
+        const source = '''
+class Weird {
+  final String id;
+  Weird(this.id);
+  factory Weird.fromJson(Map<String, Object?> json) {
+    return Weird(json['id'] as String);
+  }
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+        expect(canonicalDiagnostics(source), isEmpty);
+      },
+    );
   });
 
   group('applyCanonicalFix — generation edges', () {
@@ -1298,6 +1315,50 @@ class Dto {
       expect(fixed, contains("'uuid': uuid,"));
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+
+    test('a hand-modified fromJson with a back-compat alias key is left '
+        'byte-identical by the fix, and produces no diagnostic (regression: '
+        'c2088e3 widened the drift trigger to read fromJson keys with no '
+        'canonical-shape gate, so this alias-preserving fromJson was silently '
+        'collapsed to the naive one-liner, deleting the user_id branch)', () {
+      const source = '''
+class UserDto {
+  final String id;
+  final String name;
+  UserDto({required this.id, required this.name});
+  factory UserDto.fromJson(Map<String, Object?> json) {
+    final id = (json['id'] ?? json['user_id']) as String;
+    return UserDto(id: id, name: json['name'] as String);
+  }
+  Map<String, Object?> toJson() => {'id': id, 'name': name};
+}
+''';
+      // The fix must refuse to touch it: byte-identical output.
+      expect(applyCanonicalFix(source), source);
+      // The diagnostic layer must agree it's unverified — it must not tell
+      // the user to run a fix that will refuse to do anything. Mirroring
+      // the existing "hand-modified toJson is not verified" behavior
+      // (silence, not a drift warning that recommends `keta_lints:fix`),
+      // canonicalDiagnostics reports nothing for this class.
+      expect(canonicalDiagnostics(source), isEmpty);
+    });
+
+    test('a canonical fromJson with a stale key is still repaired (the case '
+        'c2088e3 legitimately fixed)', () {
+      const source = '''
+class Dto {
+  final String uuid;
+  Dto({required this.uuid});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(uuid: json['id'] as String);
+  Map<String, Object?> toJson() => {'uuid': uuid};
+}
+''';
+      expect(canonicalDiagnostics(source), hasLength(1));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(source));
+      expect(fixed, contains("uuid: json['uuid'] as String,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
     });
 
     test('fix leaves a positional-ctor DTO untouched', () {
