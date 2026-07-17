@@ -24,11 +24,23 @@ import 'diagnostic.dart';
 /// [CanonicalClass] (canonical_shape.dart), the *same* recognizer the fixer
 /// uses. That is deliberate: `check` must flag exactly what `fix` would change
 /// and must never recommend a `fix` that would silently refuse the class.
+///
+/// The [String] entrypoint parses [source] (the CLI path); the analyzer plugin
+/// holds a parsed unit and calls [canonicalDiagnosticsUnit] directly, so it
+/// never re-parses a file the analyzer already parsed.
 List<Diagnostic> canonicalDiagnostics(
   String source, {
   String file = '<memory>',
+}) => canonicalDiagnosticsUnit(
+  parseString(content: source, throwIfDiagnostics: false).unit,
+  file: file,
+);
+
+/// [canonicalDiagnostics] over an already-parsed [unit].
+List<Diagnostic> canonicalDiagnosticsUnit(
+  CompilationUnit unit, {
+  String file = '<memory>',
 }) {
-  final unit = parseString(content: source, throwIfDiagnostics: false).unit;
   final context = CanonicalUnit.of(unit);
   final diagnostics = <Diagnostic>[];
   for (final declaration in unit.declarations) {
@@ -129,6 +141,35 @@ void _checkClass(
             '${advise('reconcile the mapper', 'reconcile it')}',
       ),
     );
+  }
+
+  // --- type drift ----------------------------------------------------------
+  // A field whose declared type changed while its fromJson cast lagged (the
+  // `field: json['key'] as T` shape) round-trips through the WRONG runtime type
+  // — a `String` field still cast `as int` throws at parse, an `int?` field
+  // cast `as int` throws on an absent key. This axis is orthogonal to the key
+  // set (keys can match while a type drifts), so it carries its own rule id,
+  // keeping its stable id separate when a class drifts on both. It fires only
+  // for a fixable class: the fixer regenerates fromJson from the field types,
+  // so whatever type drift is flagged here its whole-fromJson rewrite repairs —
+  // check/fix symmetry by construction. (On a non-fixable class the recommended
+  // action would be a no-op, so we stay silent, exactly as elsewhere.)
+  if (dto.isFixable) {
+    final drifts = dto.typeDrifts;
+    if (drifts.isNotEmpty) {
+      String describe(TypeDrift d) =>
+          '${d.field}: fromJson casts as ${d.cast} but the field is '
+          '${d.declared}';
+      final parts = [for (final d in drifts) describe(d)];
+      diagnostics.add(
+        make(
+          'keta_type_drift',
+          'class $className has a fromJson cast that disagrees with its field '
+              'type (${parts.join('; ')}); '
+              '${advise('reconcile the mapper', 'reconcile it')}',
+        ),
+      );
+    }
   }
 
   // --- schema drift --------------------------------------------------------

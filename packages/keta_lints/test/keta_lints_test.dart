@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:keta_lints/keta_lints.dart';
 import 'package:keta_lints/src/dart_literal.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 Map<String, Object?> get _doc => {
@@ -1809,6 +1812,298 @@ void register(app) {
       expect(dtos, contains("const eventSchema = Schema('Event'"));
       expect(dtos, contains('deps: [createdSchema, deletedSchema]'));
       parseString(content: dtos, throwIfDiagnostics: true); // parses cleanly
+    });
+  });
+
+  // --- item 1: diagnostic id portability -----------------------------------
+
+  group('diagnostic id portability', () {
+    test('the stable id keys on the path WITHIN the enclosing package, so two '
+        'checkouts at different absolute locations hash the same file to one id '
+        '(the cross-machine portability the id exists for)', () {
+      final a = Directory.systemTemp.createTempSync('keta_lints_ida');
+      final b = Directory.systemTemp.createTempSync('keta_lints_idb');
+      addTearDown(() {
+        a.deleteSync(recursive: true);
+        b.deleteSync(recursive: true);
+      });
+      for (final dir in [a, b]) {
+        File(
+          p.join(dir.path, 'pubspec.yaml'),
+        ).writeAsStringSync('name: fixture\n');
+        Directory(p.join(dir.path, 'lib')).createSync();
+        File(
+          p.join(dir.path, 'lib', 'foo.dart'),
+        ).writeAsStringSync('class X {}');
+      }
+      final relA = packageRelativePath(p.join(a.path, 'lib', 'foo.dart'));
+      final relB = packageRelativePath(p.join(b.path, 'lib', 'foo.dart'));
+      expect(relA, 'lib/foo.dart');
+      expect(relB, 'lib/foo.dart');
+      expect(
+        diagnosticId(relA, 'X', 'keta_canonical_missing'),
+        diagnosticId(relB, 'X', 'keta_canonical_missing'),
+      );
+    });
+
+    test('a path with no enclosing pubspec falls back to the basename', () {
+      final dir = Directory.systemTemp.createTempSync('keta_lints_noroot');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File(p.join(dir.path, 'loose.dart'))
+        ..writeAsStringSync('class Y {}');
+      // No pubspec.yaml anywhere above the temp file, so the basename is the
+      // most stable key available.
+      expect(packageRelativePath(file.path), 'loose.dart');
+    });
+  });
+
+  // --- item 3: syntactic type-drift detection ------------------------------
+
+  group('type drift', () {
+    test('a fromJson cast that disagrees with the field type is keta_type_drift '
+        'and the fix regenerates the cast from the field type (check/fix '
+        'symmetry, keys unchanged)', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as int);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      // Keys all line up (fromJson reads 'id', toJson writes 'id', field 'id'),
+      // so the ONLY finding is the type axis.
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_type_drift');
+      expect(
+        d.single.message,
+        contains('fromJson casts as int but the field is String'),
+      );
+      expect(d.single.message, contains('run keta_lints:fix'));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("id: json['id'] as String,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+
+    test('an int? field whose fromJson casts as int (an optionality slip) is '
+        'type drift, and the fix restores the nullable cast', () {
+      const source = '''
+class Dto {
+  final int? age;
+  Dto({this.age});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(age: json['age'] as int);
+  Map<String, Object?> toJson() => {if (age != null) 'age': age};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_type_drift');
+      expect(d.single.message, contains('casts as int but the field is int?'));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("age: json['age'] as int?,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a correct enum field is not misread as type drift: the inner '
+        'transport `as String` is not the field cast (no false positive)', () {
+      const source = '''
+enum Role { admin, member }
+class Dto {
+  final Role role;
+  Dto({required this.role});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(role: Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {'role': role.name};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+    });
+
+    test('a class that drifts on both keys and a cast reports both rule ids '
+        'with distinct stable ids, and the fix reconciles both', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as int, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      final rules = d.map((e) => e.rule).toSet();
+      expect(rules, containsAll({'keta_canonical_drift', 'keta_type_drift'}));
+      // Separate findings carry separate stable ids (the same reason schema
+      // drift has its own id).
+      expect(d.map((e) => e.id).toSet(), hasLength(d.length));
+      final fixed = applyCanonicalFix(source);
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a non-fixable class (positional ctor) is not flagged for type drift, '
+        'so nothing is recommended that the fixer would refuse', () {
+      const source = '''
+class P {
+  final String a;
+  P(this.a);
+  factory P.fromJson(Map<String, Object?> json) => P(json['a'] as int);
+  Map<String, Object?> toJson() => {'a': a};
+}
+''';
+      // The cast (`as int`) disagrees with `String a`, but the positional ctor
+      // makes the class non-fixable; flagging type drift here would point at a
+      // fix that no-ops. Silence, matching the other refusal gates.
+      expect(canonicalDiagnostics(source).any((d) => d.rule == 'keta_type_drift'),
+          isFalse);
+      expect(applyCanonicalFix(source), source);
+    });
+  });
+
+  // --- item 5: external-input audit completion -----------------------------
+
+  group('external-input audit — drift', () {
+    test('a malformed oracle path item is reported as descriptive drift, not a '
+        'raw TypeError that crashes the CI gate', () {
+      final drift = contractDrift(
+        {
+          'paths': {'/x': 'not an operations map'},
+        },
+        {'paths': <String, Object?>{}},
+      );
+      expect(drift, isNotEmpty);
+      expect(
+        drift.map((d) => d.message).join('\n'),
+        contains('path "/x" is not an operations mapping'),
+      );
+      expect(drift.every((d) => d.rule == 'keta_contract_drift'), isTrue);
+    });
+
+    test('a malformed oracle schema entry is reported as descriptive drift', () {
+      final drift = contractDrift(
+        {
+          'components': {
+            'schemas': {'D': 'not an object'},
+          },
+        },
+        {
+          'components': {'schemas': <String, Object?>{}},
+        },
+      );
+      expect(
+        drift.map((d) => d.message).join('\n'),
+        contains('schema "D" is not an object'),
+      );
+    });
+
+    test('a non-mapping oracle "paths" is descriptive drift', () {
+      final drift = contractDrift({'paths': 'nope'}, {'paths': <String, Object?>{}});
+      expect(
+        drift.map((d) => d.message).join('\n'),
+        contains('"paths" is not a mapping'),
+      );
+    });
+  });
+
+  group('external-input audit — scaffold', () {
+    test('a malformed path item raises ScaffoldError instead of a raw '
+        'TypeError', () {
+      expect(
+        () => generateScaffold({
+          'paths': {'/x': 'not an operations map'},
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('a non-object requestBody raises ScaffoldError', () {
+      expect(
+        () => generateScaffold({
+          'paths': {
+            '/x': {
+              'post': {
+                'requestBody': 'not an object',
+                'responses': {'200': <String, Object?>{}},
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('a oneOf/discriminator ref to a schema absent from components raises '
+        'ScaffoldError instead of emitting Missing.fromJson', () {
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'Event': {
+                'oneOf': [
+                  {r'$ref': '#/components/schemas/Missing'},
+                ],
+                'discriminator': {'propertyName': 'type'},
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('a required key with no matching property raises ScaffoldError instead '
+        'of silently dropping it from the contract-test sample', () {
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'D': {
+                'type': 'object',
+                'required': ['ghost'],
+                'properties': {
+                  'id': {'type': 'string'},
+                },
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('a discriminator carrying a \$ still emits a compiling error string '
+        '(the sealed BadRequest message goes through dartStringLiteral)', () {
+      final doc = {
+        'components': {
+          'schemas': {
+            'Event': {
+              'oneOf': [
+                {r'$ref': '#/components/schemas/Created'},
+              ],
+              'discriminator': {
+                'propertyName': r'type$',
+                'mapping': {'created': '#/components/schemas/Created'},
+              },
+            },
+            'Created': {
+              'type': 'object',
+              'required': ['at'],
+              'properties': {
+                'at': {'type': 'string'},
+              },
+            },
+          },
+        },
+      };
+      final dtos = generateScaffold(doc).dtos;
+      // The error string is escaped (raw literal), so the generated source
+      // compiles rather than treating `$` as interpolation.
+      expect(dtos, contains(r"throw const BadRequest(r'unknown Event type$')"));
+      parseString(content: dtos, throwIfDiagnostics: true);
     });
   });
 }

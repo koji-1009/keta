@@ -24,6 +24,7 @@ Scaffold generateScaffold(Map<String, Object?> document) {
   final schemas = _namedSchemas(document);
   _checkSchemaNames(schemas);
   _checkRefCycles(schemas);
+  _checkSealedVariants(schemas);
   final dtos = _generateDtos(schemas);
   final routes = _generateRoutes(document, schemas);
   return Scaffold(
@@ -179,7 +180,12 @@ void _writeSealed(
   }
   buffer
     ..writeln(
-      "        _ => throw const BadRequest('unknown $name $discriminator'),",
+      // The message is emitted as a Dart string literal, and `discriminator` is
+      // an arbitrary external JSON property name — a quote or `$` in it would
+      // otherwise break out of the literal into non-compiling code. Route it
+      // through dartStringLiteral so the ERROR string is always valid source.
+      '        _ => throw const BadRequest('
+      '${dartStringLiteral('unknown $name $discriminator')}),',
     )
     ..writeln('      };')
     ..writeln('  Map<String, Object?> toJson();')
@@ -421,6 +427,36 @@ String _toJsonExpr(String name, _Type type, {required bool nullable}) {
 
 // --- routes, tool, tests --------------------------------------------------
 
+/// The `paths` mapping of the oracle [document]. EXTERNAL input, so a `paths`
+/// value that is not a mapping is a descriptive [ScaffoldError], never a bare
+/// `TypeError` deep in a comprehension.
+Map<String, Object?> _pathsOf(Map<String, Object?> document) {
+  final paths = document['paths'];
+  if (paths == null) return const {};
+  if (paths is! Map) {
+    throw ScaffoldError('"paths" is not a mapping: $paths');
+  }
+  return paths.cast<String, Object?>();
+}
+
+/// One path item (its operations map). A non-object item names the offending
+/// path in a [ScaffoldError] instead of crashing on a cast.
+Map<String, Object?> _pathItemOf(Object? value, Object? path) {
+  if (value is! Map) {
+    throw ScaffoldError('path "$path" is not an operations mapping: $value');
+  }
+  return value.cast<String, Object?>();
+}
+
+/// One operation object. A non-object operation names the offending method+path
+/// in a [ScaffoldError] instead of crashing on a cast.
+Map<String, Object?> _operationOf(Object? value, Object? method, Object? path) {
+  if (value is! Map) {
+    throw ScaffoldError('operation "$method $path" is not an object: $value');
+  }
+  return value.cast<String, Object?>();
+}
+
 String _generateRoutes(
   Map<String, Object?> document,
   Map<String, Map<String, Object?>> schemas,
@@ -435,13 +471,13 @@ String _generateRoutes(
     ..writeln('/// 501 until implemented; the red contract tests are the work.')
     ..writeln('void register<E>(App<E> app) {');
 
-  final paths = (document['paths'] as Map?)?.cast<String, Object?>() ?? {};
+  final paths = _pathsOf(document);
   for (final pathEntry in paths.entries) {
-    final item = (pathEntry.value as Map).cast<String, Object?>();
+    final item = _pathItemOf(pathEntry.value, pathEntry.key);
     for (final opEntry in item.entries) {
       final method = opEntry.key;
       if (!_httpMethods.contains(method)) continue;
-      final op = (opEntry.value as Map).cast<String, Object?>();
+      final op = _operationOf(opEntry.value, method, pathEntry.key);
       // Always a doc: RouteDoc.success is required, so there is no scaffolded
       // route without a declared success.
       buffer.writeln("  app.$method('${_ketaPath(pathEntry.key)}',");
@@ -477,7 +513,11 @@ String _routeDoc(Map<String, Object?> op) {
   final parts = <String>['success: ${_successDecl(op)}'];
   final summary = op['summary'];
   if (summary is String) parts.add('summary: ${dartStringLiteral(summary)}');
-  final request = _schemaRefName(((op['requestBody'] as Map?)?['content']));
+  final requestBody = op['requestBody'];
+  if (requestBody != null && requestBody is! Map) {
+    throw ScaffoldError('requestBody is not an object: $requestBody');
+  }
+  final request = _schemaRefName((requestBody as Map?)?['content']);
   if (request != null) parts.add('requestBody: ${_lowerFirst(request)}Schema');
   final security = _securityDecl(op['security']);
   if (security != null) parts.add('security: $security');
@@ -646,28 +686,28 @@ String _samplePath(String openApiPath) =>
     openApiPath.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x');
 
 List<_Endpoint> _securedEndpoints(Map<String, Object?> document) {
-  final paths =
-      (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
   return [
-    for (final pathEntry in paths.entries)
-      for (final opEntry
-          in (pathEntry.value as Map).cast<String, Object?>().entries)
+    for (final pathEntry in _pathsOf(document).entries)
+      for (final opEntry in _pathItemOf(pathEntry.value, pathEntry.key).entries)
         if (_httpMethods.contains(opEntry.key))
-          if ((opEntry.value as Map).cast<String, Object?>()['security']
+          if (_operationOf(
+                opEntry.value,
+                opEntry.key,
+                pathEntry.key,
+              )['security']
               case final List<Object?> s when s.isNotEmpty)
             _Endpoint(opEntry.key, pathEntry.key, _samplePath(pathEntry.key)),
   ];
 }
 
 List<_Endpoint> _requiredQueryEndpoints(Map<String, Object?> document) {
-  final paths =
-      (document['paths'] as Map?)?.cast<String, Object?>() ?? const {};
   return [
-    for (final pathEntry in paths.entries)
-      for (final opEntry
-          in (pathEntry.value as Map).cast<String, Object?>().entries)
+    for (final pathEntry in _pathsOf(document).entries)
+      for (final opEntry in _pathItemOf(pathEntry.value, pathEntry.key).entries)
         if (_httpMethods.contains(opEntry.key))
-          if (_hasRequiredQuery((opEntry.value as Map).cast<String, Object?>()))
+          if (_hasRequiredQuery(
+            _operationOf(opEntry.value, opEntry.key, pathEntry.key),
+          ))
             _Endpoint(opEntry.key, pathEntry.key, _samplePath(pathEntry.key)),
   ];
 }
@@ -687,13 +727,22 @@ Object? _sample(
 ) {
   final required = _requiredOf(schema, name);
   final properties = _propertiesOf(schema, name);
+  // A required key with no matching property was previously dropped from the
+  // sample silently, so the generated contract test fed the DTO a map missing a
+  // field its fromJson reads — an undescriptive `type Null is not a subtype`
+  // crash at test time. Reject it here with the same descriptive-error standard
+  // the rest of the oracle audit holds to, naming the offending schema.field.
+  for (final key in required) {
+    if (properties[key] == null) {
+      throw ScaffoldError(
+        'schema "$name" lists "$key" as required but declares no such '
+        'property; fix the contract',
+      );
+    }
+  }
   return {
     for (final key in required)
-      if (properties[key] != null)
-        key: _sampleValue(
-          _asSchemaObject(properties[key], '$name.$key'),
-          schemas,
-        ),
+      key: _sampleValue(_asSchemaObject(properties[key], '$name.$key'), schemas),
   };
 }
 
@@ -784,6 +833,26 @@ void _checkSchemaNames(Map<String, Map<String, Object?>> schemas) {
       );
     }
     constNames[constName] = name;
+  }
+}
+
+/// Rejects a sealed type whose `oneOf`/`discriminator.mapping` names a variant
+/// absent from `components/schemas`. Without this, [_writeSealed] emits a
+/// `Missing.fromJson(json)` delegation and [_variants] a dep on a class that was
+/// never generated — non-compiling code from a dangling external ref, exactly
+/// the class of silent failure [_checkRefCycles] cannot catch (it only follows
+/// refs that resolve).
+void _checkSealedVariants(Map<String, Map<String, Object?>> schemas) {
+  for (final entry in schemas.entries) {
+    if (!_isSealed(entry.value)) continue;
+    for (final variant in _variants(entry.value).values) {
+      if (!schemas.containsKey(variant)) {
+        throw ScaffoldError(
+          'sealed schema "${entry.key}" references variant "$variant", which '
+          'is not defined in components/schemas',
+        );
+      }
+    }
   }
 }
 

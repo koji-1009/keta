@@ -8,6 +8,7 @@ export 'src/drift.dart' show contractDrift;
 export 'src/fix.dart' show applyCanonicalFix;
 export 'src/generate.dart' show Scaffold, ScaffoldError, generateScaffold;
 export 'src/internal_await.dart' show internalAwaitDiagnostics;
+export 'src/package_path.dart' show packageRelativePath;
 export 'src/query_lint.dart' show queryDiagnostics;
 export 'src/routes_lint.dart' show routeDiagnostics;
 export 'src/tx_order.dart' show txOrderDiagnostics;

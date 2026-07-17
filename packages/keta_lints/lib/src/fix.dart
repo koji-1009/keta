@@ -91,9 +91,18 @@ void _fixClass(
       toJson == null ||
       !setEquals(toJsonKeys(toJson)!, fieldNames) ||
       !setEquals(fromJsonKeys(fromJson), fieldNames);
+  // Type drift is invisible to a key-set comparison: keys can match exactly
+  // while a field's fromJson `as T` cast disagrees with its declared type. The
+  // whole-fromJson regeneration below rewrites the cast from the field type, so
+  // this must be part of the "needs regeneration" verdict or a type-only drift
+  // — which `check` reports as keta_type_drift — would never be repaired,
+  // breaking check/fix symmetry.
+  final typeDrifted = dto.typeDrifts.isNotEmpty;
   final schemaDrifted =
       schema != null && !setEquals(schemaPropertyNames(schema), fieldNames);
-  if (!mapperDrifted && !schemaDrifted) return; // already canonical.
+  if (!mapperDrifted && !typeDrifted && !schemaDrifted) {
+    return; // already canonical.
+  }
 
   final insertions = <String>[];
   void member(Declaration? existing, String generated) {

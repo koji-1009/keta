@@ -15,8 +15,21 @@ import 'diagnostic.dart';
 ///
 /// Single-file and syntactic: it matches `app.<verb>('<path>', (c) { ... })`
 /// registrations against the `param('...')` calls in the handler body.
-List<Diagnostic> routeDiagnostics(String source, {String file = '<memory>'}) {
-  final unit = parseString(content: source, throwIfDiagnostics: false).unit;
+///
+/// The [String] entrypoint parses [source] itself (the CLI path); the analyzer
+/// plugin already holds a parsed unit and calls [routeDiagnosticsUnit] directly,
+/// so no rule re-parses a file the analyzer has already parsed.
+List<Diagnostic> routeDiagnostics(String source, {String file = '<memory>'}) =>
+    routeDiagnosticsUnit(
+      parseString(content: source, throwIfDiagnostics: false).unit,
+      file: file,
+    );
+
+/// [routeDiagnostics] over an already-parsed [unit].
+List<Diagnostic> routeDiagnosticsUnit(
+  CompilationUnit unit, {
+  String file = '<memory>',
+}) {
   final diagnostics = <Diagnostic>[];
   unit.accept(_RouteVisitor(file, diagnostics));
   return diagnostics;

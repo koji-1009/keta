@@ -24,12 +24,10 @@ import 'package:analyzer/error/error.dart';
 import '../canonical.dart';
 import '../diagnostic.dart';
 import '../internal_await.dart';
+import '../package_path.dart';
 import '../query_lint.dart';
 import '../routes_lint.dart';
 import '../tx_order.dart';
-
-/// A per-file keta analysis function: source in, diagnostics out.
-typedef _Analyze = List<Diagnostic> Function(String source, {String file});
 
 // The lint codes, one per keta rule id. Each is a top-level `const` so a single
 // instance exists — a functional requirement for `// ignore:` suppression to
@@ -65,6 +63,11 @@ const _canonicalDrift = LintCode(
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
+const _typeDrift = LintCode(
+  'keta_type_drift',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
 const _schemaDrift = LintCode(
   'keta_schema_drift',
   '{0}',
@@ -90,8 +93,11 @@ abstract class _KetaRule extends MultiAnalysisRule {
   /// Maps a keta rule id (e.g. `keta_param_unknown`) to its [LintCode].
   Map<String, LintCode> get _codes;
 
-  /// The per-file diagnostic function this rule surfaces.
-  _Analyze get _analyze;
+  /// Runs the rule's per-file diagnostic over the already-parsed [unit],
+  /// keyed by the package-relative [file]. Each rule feeds the analyzer's own
+  /// parsed [RuleContextUnit.unit] to the matching `…Unit` function, so no rule
+  /// re-parses source the analyzer has already parsed.
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file);
 
   @override
   List<DiagnosticCode> get diagnosticCodes => _codes.values.toList();
@@ -107,7 +113,10 @@ abstract class _KetaRule extends MultiAnalysisRule {
   void _run(RuleContext context) {
     final unit = context.currentUnit;
     if (unit == null) return;
-    for (final d in _analyze(unit.content, file: unit.file.path)) {
+    // Key the stable id on the package-relative path, exactly as the CLI does,
+    // so the same finding carries the same `[id]` in the IDE and on CI.
+    final file = packageRelativePath(unit.file.path);
+    for (final d in _analyze(unit, file)) {
       final code = _codes[d.rule];
       if (code == null) continue;
       reportAtOffset(
@@ -141,7 +150,8 @@ class KetaRouteRule extends _KetaRule {
       );
 
   @override
-  _Analyze get _analyze => routeDiagnostics;
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      routeDiagnosticsUnit(unit.unit, file: file);
 
   @override
   Map<String, LintCode> get _codes => const {
@@ -162,7 +172,8 @@ class KetaQueryRule extends _KetaRule {
       );
 
   @override
-  _Analyze get _analyze => queryDiagnostics;
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      queryDiagnosticsUnit(unit.unit, file: file);
 
   @override
   Map<String, LintCode> get _codes => const {
@@ -171,9 +182,11 @@ class KetaQueryRule extends _KetaRule {
   };
 }
 
-/// `keta_canonical_missing` + `keta_canonical_drift` + `keta_schema_drift` — a
-/// DTO's mapper is absent, its mapper has drifted from its field set, or its
-/// `Schema` constant has drifted from its field set (a wrong OpenAPI document).
+/// `keta_canonical_missing` + `keta_canonical_drift` + `keta_type_drift` +
+/// `keta_schema_drift` — a DTO's mapper is absent, its mapper keys have drifted
+/// from its field set, a fromJson cast has drifted from a field's declared type,
+/// or its `Schema` constant has drifted from its field set (a wrong OpenAPI
+/// document).
 class KetaCanonicalRule extends _KetaRule {
   KetaCanonicalRule()
     : super(
@@ -184,12 +197,14 @@ class KetaCanonicalRule extends _KetaRule {
       );
 
   @override
-  _Analyze get _analyze => canonicalDiagnostics;
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      canonicalDiagnosticsUnit(unit.unit, file: file);
 
   @override
   Map<String, LintCode> get _codes => const {
     'keta_canonical_missing': _canonicalMissing,
     'keta_canonical_drift': _canonicalDrift,
+    'keta_type_drift': _typeDrift,
     'keta_schema_drift': _schemaDrift,
   };
 }
@@ -205,7 +220,8 @@ class KetaTxOrderRule extends _KetaRule {
       );
 
   @override
-  _Analyze get _analyze => txOrderDiagnostics;
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      txOrderDiagnosticsUnit(unit.unit, file: file);
 
   @override
   Map<String, LintCode> get _codes => const {
@@ -226,7 +242,8 @@ class KetaInternalAwaitRule extends _KetaRule {
       );
 
   @override
-  _Analyze get _analyze => internalAwaitDiagnostics;
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      internalAwaitDiagnosticsUnit(unit.unit, unit.content, file: file);
 
   @override
   Map<String, LintCode> get _codes => const {

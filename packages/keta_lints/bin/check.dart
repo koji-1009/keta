@@ -55,7 +55,12 @@ void _drift(List<String> args) {
   }
   final oracle = loadYamlDocument(File(args[0]).readAsStringSync());
   final shadow = loadYamlDocument(File(args[1]).readAsStringSync());
-  _report(contractDrift(oracle, shadow, file: args[0]), 'no contract drift');
+  // Key the id on the package-relative path so a drift finding correlates
+  // across machines and with the IDE, not on the absolute/typed oracle path.
+  _report(
+    contractDrift(oracle, shadow, file: packageRelativePath(args[0])),
+    'no contract drift',
+  );
 }
 
 void _sourceCheck(
@@ -69,7 +74,10 @@ void _sourceCheck(
   }
   final diagnostics = [
     for (final file in _dartFiles(args))
-      ...analyze(File(file).readAsStringSync(), file: file),
+      // Normalize to a package-relative path so the stable id matches the one
+      // the analyzer plugin computes from its absolute path, and matches across
+      // machines regardless of how the file was addressed on the command line.
+      ...analyze(File(file).readAsStringSync(), file: packageRelativePath(file)),
   ];
   _report(diagnostics, cleanMessage);
 }

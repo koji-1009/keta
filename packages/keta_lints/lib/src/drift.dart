@@ -25,8 +25,8 @@ List<Diagnostic> contractDrift(
     ),
   );
 
-  final oraclePaths = _paths(oracle);
-  final shadowPaths = _paths(shadow);
+  final oraclePaths = _paths(oracle, 'the contract', report);
+  final shadowPaths = _paths(shadow, 'the code', report);
 
   for (final path in oraclePaths.keys) {
     final oracleOps = oraclePaths[path]!;
@@ -72,8 +72,8 @@ void _schemaDrift(
   Map<String, Object?> shadow,
   void Function(String scope, String message) report,
 ) {
-  final oracleSchemas = _schemas(oracle);
-  final shadowSchemas = _schemas(shadow);
+  final oracleSchemas = _schemas(oracle, 'the contract', report);
+  final shadowSchemas = _schemas(shadow, 'the code', report);
   for (final name in oracleSchemas.keys) {
     final oracleProps = _propertyNames(oracleSchemas[name]!);
     final shadowSchema = shadowSchemas[name];
@@ -138,25 +138,71 @@ void _schemaDrift(
   }
 }
 
-Map<String, Set<String>> _paths(Map<String, Object?> document) {
-  final paths = (document['paths'] as Map?) ?? const {};
-  return {
-    for (final entry in paths.entries)
-      entry.key.toString(): {
-        for (final method in (entry.value as Map).keys)
-          if (_httpMethods.contains(method.toString())) method.toString(),
-      },
-  };
+/// The operation-method set per path in [document], keyed by path. The oracle
+/// half of this is EXTERNAL input, so a malformed `paths` mapping or a path
+/// whose item is not an operations map is reported as descriptive drift and
+/// skipped, never allowed to crash the CI gate with a bare `TypeError`. [label]
+/// names the offending side ('the contract' / 'the code') in the message.
+Map<String, Set<String>> _paths(
+  Map<String, Object?> document,
+  String label,
+  void Function(String scope, String message) report,
+) {
+  final paths = document['paths'];
+  if (paths == null) return const {};
+  if (paths is! Map) {
+    report(
+      'paths',
+      '$label "paths" is not a mapping (${paths.runtimeType}); fix the document',
+    );
+    return const {};
+  }
+  final result = <String, Set<String>>{};
+  for (final entry in paths.entries) {
+    final path = entry.key.toString();
+    final item = entry.value;
+    if (item is! Map) {
+      report(
+        path,
+        '$label path "$path" is not an operations mapping '
+            '(${item.runtimeType}); fix the document',
+      );
+      continue;
+    }
+    result[path] = {
+      for (final method in item.keys)
+        if (_httpMethods.contains(method.toString())) method.toString(),
+    };
+  }
+  return result;
 }
 
-Map<String, Map<String, Object?>> _schemas(Map<String, Object?> document) {
+/// The named component schemas in [document]. As with [_paths], the oracle side
+/// is EXTERNAL, so a schema entry that is not an object is reported as
+/// descriptive drift and skipped rather than crashing on a bare cast.
+Map<String, Map<String, Object?>> _schemas(
+  Map<String, Object?> document,
+  String label,
+  void Function(String scope, String message) report,
+) {
   final components = document['components'];
   final schemas = components is Map ? components['schemas'] : null;
   if (schemas is! Map) return {};
-  return {
-    for (final entry in schemas.entries)
-      entry.key.toString(): (entry.value as Map).cast<String, Object?>(),
-  };
+  final result = <String, Map<String, Object?>>{};
+  for (final entry in schemas.entries) {
+    final name = entry.key.toString();
+    final value = entry.value;
+    if (value is! Map) {
+      report(
+        'schema $name',
+        '$label schema "$name" is not an object (${value.runtimeType}); '
+            'fix the document',
+      );
+      continue;
+    }
+    result[name] = value.cast<String, Object?>();
+  }
+  return result;
 }
 
 Set<String> _propertyNames(Map<String, Object?> schema) {

@@ -15,8 +15,20 @@ import 'diagnostic.dart';
 /// a request that actually failed. The correct order registers recover() first:
 /// `..use(recover())..use(tx())`. Detection is scoped to a single cascade (the
 /// idiomatic `app..use(...)..use(...)` form).
-List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) {
-  final unit = parseString(content: source, throwIfDiagnostics: false).unit;
+///
+/// The [String] entrypoint parses [source] (the CLI path); the plugin holds a
+/// parsed unit and calls [txOrderDiagnosticsUnit], so it never re-parses.
+List<Diagnostic> txOrderDiagnostics(String source, {String file = '<memory>'}) =>
+    txOrderDiagnosticsUnit(
+      parseString(content: source, throwIfDiagnostics: false).unit,
+      file: file,
+    );
+
+/// [txOrderDiagnostics] over an already-parsed [unit].
+List<Diagnostic> txOrderDiagnosticsUnit(
+  CompilationUnit unit, {
+  String file = '<memory>',
+}) {
   final diagnostics = <Diagnostic>[];
   unit.accept(
     _CascadeVisitor((offset, length) {

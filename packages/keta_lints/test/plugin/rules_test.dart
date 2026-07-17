@@ -12,7 +12,8 @@
 library;
 
 import 'package:analyzer_testing/analysis_rule/analysis_rule.dart';
-import 'package:keta_lints/keta_lints.dart' show diagnosticId;
+import 'package:keta_lints/keta_lints.dart'
+    show diagnosticId, packageRelativePath;
 import 'package:keta_lints/src/plugin/rules.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -180,9 +181,15 @@ class KetaCanonicalRuleTest extends AnalysisRuleTest {
 
   Future<void> test_missing_firesWithExactId() async {
     // The full `[id] message` must equal what the CLI produces for the same
-    // file path — so compute the id from the same path the analyzer resolves.
+    // file — so compute the id from the SAME normalized key both sides use: the
+    // package-relative path, not the analyzer's raw absolute path. This is the
+    // portability guarantee (item 1) exercised through the wired plugin.
     final path = convertPath('$testPackageLibPath/test.dart');
-    final id = diagnosticId(path, 'Point', 'keta_canonical_missing');
+    final id = diagnosticId(
+      packageRelativePath(path),
+      'Point',
+      'keta_canonical_missing',
+    );
     await assertDiagnostics(
       r'''
 class Point {
@@ -237,6 +244,69 @@ class Point {
   final int x;
   Point(this.x);
   factory Point.fromJson(Map<String, Object?> j) => Point(j['x']! as int);
+  Map<String, Object?> toJson() => {'x': x};
+}
+''');
+  }
+
+  /// The type-drift finding (keta_type_drift) is wired and reported in the IDE
+  /// path exactly like the CLI — the registration parity item 3 requires.
+  Future<void> test_typeDrift_fires() async {
+    // An `int?` field whose fromJson casts `as int` is an optionality slip:
+    // `int` is assignable to the `int?` parameter, so the analyzer sees no
+    // static error — yet the cast still throws on an absent key at runtime.
+    // The keta rule catches exactly this syntactically.
+    await assertDiagnostics(
+      r'''
+class Point {
+  final int? x;
+  Point({this.x});
+  factory Point.fromJson(Map<String, Object?> j) => Point(x: j['x'] as int);
+  Map<String, Object?> toJson() => {if (x != null) 'x': x};
+}
+''',
+      [
+        lint(
+          6,
+          5,
+          name: 'keta_type_drift',
+          messageContainsAll: [
+            _idPrefix,
+            'fromJson casts as int but the field is int?',
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// The `// ignore:` line comment suppresses the diagnostic in the plugin path.
+  /// This is exactly why every LintCode is a top-level `const` (a single
+  /// instance so suppression can match) — a load-bearing property that had no
+  /// coverage until now.
+  Future<void> test_lineIgnore_suppresses() async {
+    await assertNoDiagnostics(r'''
+// ignore: keta_canonical_drift
+class Point {
+  final int x;
+  final int y;
+  Point({required this.x, required this.y});
+  factory Point.fromJson(Map<String, Object?> j) =>
+      Point(x: j['x'] as int, y: j['y'] as int);
+  Map<String, Object?> toJson() => {'x': x};
+}
+''');
+  }
+
+  /// The file-level `// ignore_for_file:` form suppresses it too.
+  Future<void> test_ignoreForFile_suppresses() async {
+    await assertNoDiagnostics(r'''
+// ignore_for_file: keta_canonical_drift
+class Point {
+  final int x;
+  final int y;
+  Point({required this.x, required this.y});
+  factory Point.fromJson(Map<String, Object?> j) =>
+      Point(x: j['x'] as int, y: j['y'] as int);
   Map<String, Object?> toJson() => {'x': x};
 }
 ''');

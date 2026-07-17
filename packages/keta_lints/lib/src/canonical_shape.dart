@@ -68,6 +68,7 @@ class CanonicalClass {
     required this.className,
     required this.fields,
     required this.allFinalFieldNames,
+    required this.declaredTypes,
     required this.unresolvableField,
     required this.genCtor,
     required this.fromJson,
@@ -94,6 +95,12 @@ class CanonicalClass {
   /// The fixer refuses such a class rather than guess, so the check must too.
   final bool unresolvableField;
 
+  /// Each final, non-static, initializer-free field's *declared* type, verbatim
+  /// from source (e.g. `int`, `String?`, `List<Role>`), keyed by field name. It
+  /// is the syntactic ground truth the fromJson `as T` cast is checked against
+  /// for type drift; a field with no written type annotation is simply absent.
+  final Map<String, String> declaredTypes;
+
   final ConstructorDeclaration? genCtor;
   final ConstructorDeclaration? fromJson;
   final MethodDeclaration? toJson;
@@ -119,6 +126,7 @@ class CanonicalClass {
 
     final fields = <CanonicalField>[];
     final allFinalFieldNames = <String>{};
+    final declaredTypes = <String, String>{};
     var unresolvable = false;
     ConstructorDeclaration? genCtor;
     ConstructorDeclaration? fromJson;
@@ -128,10 +136,12 @@ class CanonicalClass {
       if (member is FieldDeclaration &&
           !member.isStatic &&
           member.fields.isFinal) {
+        final declaredType = member.fields.type?.toSource();
         for (final v in member.fields.variables) {
           // Fields with initializers / `late` defaults aren't ctor parameters.
           if (v.initializer != null) continue;
           allFinalFieldNames.add(v.name.lexeme);
+          if (declaredType != null) declaredTypes[v.name.lexeme] = declaredType;
           final type = unit.resolver.resolve(member.fields.type);
           if (type == null) {
             unresolvable = true;
@@ -156,6 +166,7 @@ class CanonicalClass {
       className: className,
       fields: fields,
       allFinalFieldNames: allFinalFieldNames,
+      declaredTypes: declaredTypes,
       unresolvableField: unresolvable,
       genCtor: genCtor,
       fromJson: fromJson,
@@ -195,7 +206,80 @@ class CanonicalClass {
 
   /// Whether the fixer would act on this class (materialize or reconcile).
   bool get isFixable => refusalReason == null;
+
+  /// Fields whose fromJson `as T` cast disagrees with the declared field type —
+  /// the syntactic *type*-drift axis, orthogonal to the key-set drift the round-
+  /// trip check covers (keys can line up perfectly while a type has silently
+  /// changed underneath them). Delegates to [fromJsonTypeDrifts] so `check` and
+  /// `fix` read the identical verdict; empty when there is no fromJson.
+  List<TypeDrift> get typeDrifts {
+    final fj = fromJson;
+    if (fj == null) return const [];
+    return fromJsonTypeDrifts(fj, declaredTypes);
+  }
 }
+
+/// A field whose fromJson cast type ([cast]) no longer matches its [declared]
+/// field type — one entry of the type-drift axis.
+class TypeDrift {
+  const TypeDrift(this.field, this.declared, this.cast);
+  final String field;
+  final String declared;
+  final String cast;
+}
+
+/// The fromJson arguments whose `as T` cast has drifted from the field's
+/// declared type in [declaredTypes]. ONLY a named argument of the bare shape
+/// `field: json['key'] as T` is compared: there the cast token *is* the field
+/// type, so a stale cast (a field retyped `String` while fromJson still reads
+/// `as int`) or an optionality slip (`as int?` into a non-nullable `int`) is
+/// genuine, wire-breaking drift. Enum/DTO/collection/`double` arguments cast to
+/// a *transport* type (`String`, `Map`, `List`, `num`) inside a wrapping call,
+/// carry no field-type token, and are deliberately skipped — comparing their
+/// inner cast would be a false positive. Whitespace in both types is normalized
+/// so pure formatting never reads as drift.
+List<TypeDrift> fromJsonTypeDrifts(
+  ConstructorDeclaration fromJson,
+  Map<String, String> declaredTypes,
+) {
+  final arguments = _fromJsonArguments(fromJson);
+  if (arguments == null) return const [];
+  final drifts = <TypeDrift>[];
+  for (final arg in arguments) {
+    if (arg is! NamedArgument) continue;
+    final field = arg.name.lexeme;
+    final declared = declaredTypes[field];
+    if (declared == null) continue;
+    final expr = arg.argumentExpression;
+    // Exactly the bare `json['key'] as T` shape — the whole argument is the
+    // cast, so its type token is directly the field's type. Anything else
+    // (a conditional, a wrapping `.byName(...)`/`.fromJson(...)`/`.toDouble()`)
+    // is a transport cast and not comparable here.
+    if (expr is! AsExpression || expr.expression is! IndexExpression) continue;
+    final cast = expr.type.toSource();
+    if (_normalizeType(cast) != _normalizeType(declared)) {
+      drifts.add(TypeDrift(field, declared, cast));
+    }
+  }
+  return drifts;
+}
+
+/// The argument list of a canonical fromJson body (`ClassName(...)`), or null
+/// when the body is not that single-expression shape (a hand-modified block, a
+/// fallback lookup) — matching [isCanonicalFromJson]'s outer-shape recognition.
+NodeList<Argument>? _fromJsonArguments(ConstructorDeclaration fromJson) {
+  final body = fromJson.body;
+  if (body is! ExpressionFunctionBody) return null;
+  return switch (body.expression) {
+    InstanceCreationExpression(:final argumentList) => argumentList.arguments,
+    MethodInvocation(:final argumentList) => argumentList.arguments,
+    _ => null,
+  };
+}
+
+/// Collapses all whitespace so `Map<String, int>` and `Map<String,int>` compare
+/// equal — only the type token itself, never its formatting, signals drift.
+String _normalizeType(String type) => type.replaceAll(RegExp(r'\s+'), '');
 
 /// A resolved field: its Dart name and its place in the canonical type subset.
 class CanonicalField {

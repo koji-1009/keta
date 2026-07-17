@@ -13,12 +13,28 @@ import 'diagnostic.dart';
 ///
 /// A genuine I/O boundary can opt out with a `// keta:allow-await` comment on
 /// the awaiting line or the line above it.
+///
+/// The [String] entrypoint parses [source] (the CLI path); the plugin holds a
+/// parsed unit and its content and calls [internalAwaitDiagnosticsUnit], so it
+/// never re-parses. The raw [source] is still needed on both paths to read the
+/// `// keta:allow-await` opt-out off the awaiting line and the line above it.
 List<Diagnostic> internalAwaitDiagnostics(
   String source, {
   String file = '<memory>',
+}) => internalAwaitDiagnosticsUnit(
+  parseString(content: source, throwIfDiagnostics: false).unit,
+  source,
+  file: file,
+);
+
+/// [internalAwaitDiagnostics] over an already-parsed [unit], taking the raw
+/// [source] alongside it for the line-based `// keta:allow-await` scan.
+List<Diagnostic> internalAwaitDiagnosticsUnit(
+  CompilationUnit unit,
+  String source, {
+  String file = '<memory>',
 }) {
-  final result = parseString(content: source, throwIfDiagnostics: false);
-  final lineInfo = result.lineInfo;
+  final lineInfo = unit.lineInfo;
   final lines = source.split('\n');
   final diagnostics = <Diagnostic>[];
 
@@ -44,7 +60,7 @@ List<Diagnostic> internalAwaitDiagnostics(
     );
   }
 
-  result.unit.accept(_AwaitVisitor(report));
+  unit.accept(_AwaitVisitor(report));
   return diagnostics;
 }
 

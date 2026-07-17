@@ -17,8 +17,20 @@ import 'diagnostic.dart';
 /// `doc: RouteDoc(query: [...])` on the same call. When `doc` is present but not
 /// an inspectable inline `RouteDoc` (e.g. a const reference), the declaration
 /// cannot be seen and the checks are skipped rather than risk a false positive.
-List<Diagnostic> queryDiagnostics(String source, {String file = '<memory>'}) {
-  final unit = parseString(content: source, throwIfDiagnostics: false).unit;
+///
+/// The [String] entrypoint parses [source] (the CLI path); the plugin holds a
+/// parsed unit and calls [queryDiagnosticsUnit], so it never re-parses.
+List<Diagnostic> queryDiagnostics(String source, {String file = '<memory>'}) =>
+    queryDiagnosticsUnit(
+      parseString(content: source, throwIfDiagnostics: false).unit,
+      file: file,
+    );
+
+/// [queryDiagnostics] over an already-parsed [unit].
+List<Diagnostic> queryDiagnosticsUnit(
+  CompilationUnit unit, {
+  String file = '<memory>',
+}) {
   final diagnostics = <Diagnostic>[];
   unit.accept(_QueryVisitor(file, diagnostics));
   return diagnostics;
