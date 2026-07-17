@@ -957,11 +957,16 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properti
     });
 
     test('duplicate declarations trip the overlap guard', () {
+      // Both `Dup` classes resolve to the one `dupSchema`, whose `stale`
+      // property drifts from their single `id` field, so each class emits a
+      // regenerating edit over the same schema range — the overlapping edits the
+      // guard exists to catch. (The schema must actually drift for both to touch
+      // it: under D-2's per-member granularity a matching schema is left alone.)
       const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
 class Dup { final String id; Dup({required this.id}); }
 class Dup { final String id; Dup({required this.id}); }
-const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
+const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'stale': {'type': 'string'}}});
 ''';
       expect(() => applyCanonicalFix(source), throwsStateError);
     });
@@ -1104,7 +1109,8 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
       expect(dtos, contains('Empty();')); // empty ctor, not `Empty({})`
     });
 
-    test('scaffold rejects recursion, name collision, and bad enum values', () {
+    test('scaffold rejects recursion, name collision, and colliding enum wire '
+        'values', () {
       expect(
         () => generateScaffold({
           'components': {
@@ -1132,13 +1138,17 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
         }),
         throwsA(isA<ScaffoldError>()),
       );
+      // A reserved word ('default') is no longer rejected — D-1 materializes it
+      // as an enhanced enum (default_('default')). What IS still rejected is two
+      // wire values that derive the SAME Dart identifier, since the enum would
+      // otherwise silently lose a case.
       expect(
         () => generateScaffold({
           'components': {
             'schemas': {
               'E': {
                 'type': 'string',
-                'enum': ['ok', 'default'],
+                'enum': ['super-user', 'super user'],
               },
             },
           },
@@ -2104,6 +2114,336 @@ class P {
       // compiles rather than treating `$` as interpolation.
       expect(dtos, contains(r"throw const BadRequest(r'unknown Event type$')"));
       parseString(content: dtos, throwIfDiagnostics: true);
+    });
+  });
+
+  // --- D-1: enhanced-enum wire mapping -------------------------------------
+
+  group('scaffold — enhanced enum (D-1)', () {
+    // An enum with a value that is not a valid Dart identifier: kebab-case, a
+    // reserved word, and a leading digit all force the enhanced (wire-mapped)
+    // form. A plain-identifier value in the same enum keeps its name verbatim.
+    Map<String, Object?> docWith(List<Object?> values) => {
+      'components': {
+        'schemas': {
+          'Role': {'type': 'string', 'enum': values},
+          'UserDto': {
+            'type': 'object',
+            'required': ['id', 'role'],
+            'properties': {
+              'id': {'type': 'string'},
+              'role': {r'$ref': '#/components/schemas/Role'},
+            },
+          },
+        },
+      },
+    };
+
+    test('materializes the enhanced enum, its wire field, and fromWire', () {
+      final dtos = generateScaffold(docWith(['admin', 'super-user'])).dtos;
+      // The whole file compiles (the `$`-safe derivation, the const ctor, the
+      // static factory) — a construction-time guarantee.
+      parseString(content: dtos, throwIfDiagnostics: true);
+      // fromWire throws BadRequest, so keta is imported.
+      expect(dtos, contains("import 'package:keta/keta.dart';"));
+      expect(dtos, contains('enum Role {'));
+      // A legal value keeps its name; the kebab value is lower-camel-derived and
+      // carries its wire string.
+      expect(dtos, contains("  admin('admin'),"));
+      expect(dtos, contains("  superUser('super-user');"));
+      expect(dtos, contains('  const Role(this.wire);'));
+      expect(dtos, contains('  final String wire;'));
+      expect(dtos, contains('  static Role fromWire(String wire) =>'));
+      expect(dtos, contains('v.wire == wire'));
+      // fromJson reads via fromWire; toJson writes the wire field.
+      expect(dtos, contains("role: Role.fromWire(json['role'] as String),"));
+      expect(dtos, contains("'role': role.wire,"));
+      // The enum's own Schema constant lists the WIRE strings (so drift is
+      // compared against the wire vocabulary, requirement D-1.c).
+      expect(dtos, contains("const roleSchema = Schema('Role', "
+          "{'type': 'string', 'enum': ['admin', 'super-user']}"));
+    });
+
+    test('a reserved word and a leading-digit value derive legal identifiers', () {
+      final dtos = generateScaffold(docWith(['default', '2fa'])).dtos;
+      parseString(content: dtos, throwIfDiagnostics: true);
+      expect(dtos, contains("  default_('default'),"));
+      expect(dtos, contains(r"  $2fa('2fa');"));
+    });
+
+    test('a plain enum (all values are identifiers) stays byte-identical to the '
+        'pre-D-1 form — no wire field, no churn (requirement D-1.a)', () {
+      final dtos = generateScaffold(docWith(['admin', 'member'])).dtos;
+      expect(dtos, contains('enum Role { admin, member }'));
+      expect(dtos, isNot(contains('final String wire')));
+      expect(dtos, isNot(contains('fromWire')));
+      // The plain form maps name<->wire, so the field mappers use .name/.byName.
+      expect(dtos, contains("role: Role.values.byName(json['role'] as String),"));
+      expect(dtos, contains("'role': role.name,"));
+    });
+
+    test('two wire values that derive one identifier is a ScaffoldError naming '
+        'both and the identifier (requirement D-1.b)', () {
+      Object? error;
+      try {
+        generateScaffold(docWith(['super-user', 'super user']));
+      } on ScaffoldError catch (e) {
+        error = e;
+      }
+      expect(error, isA<ScaffoldError>());
+      final message = (error! as ScaffoldError).message;
+      expect(message, contains('super-user'));
+      expect(message, contains('super user'));
+      expect(message, contains('superUser'));
+    });
+
+    test('an enhanced enum as a list item routes through fromWire/.wire', () {
+      final doc = {
+        'components': {
+          'schemas': {
+            'Role': {
+              'type': 'string',
+              'enum': ['super-user', 'admin'],
+            },
+            'Holder': {
+              'type': 'object',
+              'required': ['roles'],
+              'properties': {
+                'roles': {
+                  'type': 'array',
+                  'items': {r'$ref': '#/components/schemas/Role'},
+                },
+              },
+            },
+          },
+        },
+      };
+      final dtos = generateScaffold(doc).dtos;
+      parseString(content: dtos, throwIfDiagnostics: true);
+      expect(dtos, contains(
+          "(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()"));
+      expect(dtos, contains("'roles': roles.map((e) => e.wire).toList(),"));
+    });
+
+    test('scaffold -> check -> fix round-trips clean over an enhanced enum: the '
+        'materialized DTO is not flagged non-canonical and the fix is a byte-'
+        'identical no-op (requirement D-1.c)', () {
+      final dtos = generateScaffold(
+        docWith(['admin', 'super-user', 'default']),
+      ).dtos;
+      // check: the enum is not a DTO, and the DTO that uses it round-trips, so
+      // nothing is flagged.
+      expect(canonicalDiagnostics(dtos), isEmpty);
+      // fix: recognizing the enhanced form, there is nothing to reconcile.
+      expect(applyCanonicalFix(dtos), dtos);
+    });
+
+    test('the generated contract-test sample feeds a wire value fromWire '
+        'accepts', () {
+      final test = generateScaffold(docWith(['super-user', 'admin'])).contractTest;
+      // The sample uses the first enum value verbatim (a wire string), which is
+      // exactly what Role.fromWire matches on.
+      expect(test, contains("'role': 'super-user'"));
+    });
+  });
+
+  group('canonicalDiagnostics — enhanced enum (D-1)', () {
+    // A hand-written enhanced enum plus a DTO that uses it, both canonical.
+    const source = '''
+import 'package:keta/keta.dart';
+import 'package:keta_openapi/keta_openapi.dart';
+enum Role {
+  admin('admin'),
+  superUser('super-user');
+  const Role(this.wire);
+  final String wire;
+  static Role fromWire(String wire) => values.firstWhere(
+        (v) => v.wire == wire,
+        orElse: () => throw BadRequest('unknown Role wire value: \$wire'),
+      );
+}
+class UserDto {
+  final String id;
+  final Role role;
+  UserDto({required this.id, required this.role});
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, role: Role.fromWire(json['role'] as String));
+  Map<String, Object?> toJson() => {'id': id, 'role': role.wire};
+}
+const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id', 'role'], 'properties': {'id': {'type': 'string'}, 'role': {r'\$ref': '#/components/schemas/Role'}}});
+''';
+
+    test('an enhanced enum is not itself flagged, and a DTO using it via '
+        'fromWire/.wire is clean', () {
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('the fix repairs a sibling field drift while keeping the enhanced '
+        'enum mapper (fromWire/.wire), not the name-based form', () {
+      // Same DTO but toJson forgot the `id` field: only toJson drifts.
+      final drifted = source.replaceFirst(
+        "Map<String, Object?> toJson() => {'id': id, 'role': role.wire};",
+        "Map<String, Object?> toJson() => {'role': role.wire};",
+      );
+      final d = canonicalDiagnostics(drifted);
+      expect(d.single.rule, 'keta_canonical_drift');
+      final fixed = applyCanonicalFix(drifted);
+      // The regenerated toJson still uses the wire accessor, and fromJson (not
+      // rewritten) still uses fromWire.
+      expect(fixed, contains("'role': role.wire,"));
+      expect(fixed, contains('role: Role.fromWire('));
+      expect(fixed, isNot(contains('role.name')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+  });
+
+  group('contractDrift — enhanced-enum wire strings (D-1)', () {
+    test('an emitted enum listing the wire strings agrees with the contract; '
+        'listing the derived Dart identifiers instead drifts', () {
+      // The value-level enum comparison operates on a property's type signature,
+      // so exercise it through an enum-typed property. The point is that the
+      // scaffold/fix emit WIRE strings, so a re-emit matches the oracle.
+      Map<String, Object?> docWithEnumProp(List<String> values) => {
+        'components': {
+          'schemas': {
+            'Dto': {
+              'type': 'object',
+              'properties': {
+                'role': {'type': 'string', 'enum': values},
+              },
+            },
+          },
+        },
+      };
+      expect(
+        contractDrift(
+          docWithEnumProp(['admin', 'super-user']),
+          docWithEnumProp(['admin', 'super-user']),
+        ),
+        isEmpty,
+      );
+      // Had the code listed the Dart identifiers, the enum values would diverge
+      // from the contract — the drift the wire-string discipline avoids.
+      final drift = contractDrift(
+        docWithEnumProp(['admin', 'super-user']),
+        docWithEnumProp(['admin', 'superUser']),
+      );
+      expect(drift.map((d) => d.message).join('\n'), contains('Dto.role'));
+    });
+  });
+
+  // --- D-2: per-member drift granularity in the fix ------------------------
+
+  group('applyCanonicalFix — per-member granularity (D-2)', () {
+    test('a schema-only drift leaves an inline comment inside toJson '
+        'byte-for-byte (the mappers are not touched)', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class Dto {
+  final String id;
+  final String email;
+  Dto({required this.id, required this.email});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, email: json['email'] as String);
+  Map<String, Object?> toJson() => {
+        'id': id,
+        // keep me
+        'email': email,
+      };
+}
+const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'email'], 'properties': {'id': {'type': 'string'}}});
+''';
+      // Only the Schema drifts (missing `email`); the mappers round-trip.
+      final d = canonicalDiagnostics(source);
+      expect(d.single.rule, 'keta_schema_drift');
+      final fixed = applyCanonicalFix(source);
+      // The Schema is reconciled...
+      expect(fixed, contains("'email': {'type': 'string'}"));
+      // ...and the inline comment inside toJson survives verbatim.
+      expect(fixed, contains("        'id': id,\n"
+          '        // keep me\n'
+          "        'email': email,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a toJson-only drift leaves an inline comment inside fromJson '
+        'byte-for-byte', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(
+        id: json['id'] as String,
+        // keep me
+        name: json['name'] as String,
+      );
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      // fromJson (not drifted) keeps its comment...
+      expect(fixed, contains('        // keep me\n'
+          "        name: json['name'] as String,"));
+      // ...while the drifted toJson gains the missing field.
+      expect(fixed, contains("'name': name,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a fromJson type-drift does not rewrite toJson (its inline comment '
+        'survives)', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as int);
+  Map<String, Object?> toJson() => {
+        // keep me
+        'id': id,
+      };
+}
+''';
+      // Keys all match; only the fromJson cast drifts.
+      final d = canonicalDiagnostics(source);
+      expect(d.single.rule, 'keta_type_drift');
+      final fixed = applyCanonicalFix(source);
+      // fromJson's cast is repaired...
+      expect(fixed, contains("id: json['id'] as String,"));
+      // ...and toJson's comment is untouched.
+      expect(fixed, contains('        // keep me\n'
+          "        'id': id,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('the drifted member itself loses its inline comment but keeps its doc '
+        'comment (the documented, accepted loss)', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  /// Serializes to the wire map.
+  Map<String, Object?> toJson() => {
+        // inline note
+        'id': id,
+      };
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      // The doc comment on the regenerated member survives...
+      expect(fixed, contains('/// Serializes to the wire map.'));
+      // ...its inline comment does not (its body is what changed)...
+      expect(fixed, isNot(contains('// inline note')));
+      // ...and the drift is reconciled.
+      expect(fixed, contains("'name': name,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
     });
   });
 }

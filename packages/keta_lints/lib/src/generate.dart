@@ -95,9 +95,13 @@ bool _isEnum(Map<String, Object?> schema) =>
 
 String _generateDtos(Map<String, Map<String, Object?>> schemas) {
   final hasSealed = schemas.values.any(_isSealed);
+  final hasEnhancedEnum = schemas.values.any(_isEnhancedEnum);
   final buffer = StringBuffer();
-  // A sealed variant's fromJson switch throws BadRequest on an unknown tag.
-  if (hasSealed) buffer.writeln("import 'package:keta/keta.dart';");
+  // A sealed variant's fromJson switch and an enhanced enum's fromWire both
+  // throw BadRequest on an unknown wire tag, so either pulls in keta.
+  if (hasSealed || hasEnhancedEnum) {
+    buffer.writeln("import 'package:keta/keta.dart';");
+  }
   buffer
     ..writeln("import 'package:keta_openapi/keta_openapi.dart';")
     ..writeln();
@@ -195,10 +199,8 @@ void _writeSealed(
 
 void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
   final raw = schema['enum'] as List;
-  // Enum constants map name↔wire via `.name`/`.byName`, so each value must be a
-  // string that is also a valid, non-reserved Dart identifier as-is. Reject
-  // (don't emit broken code, and don't let a non-string value crash as a bare
-  // TypeError — the oracle document is external input).
+  // A non-string enum value can't be a wire tag at all; reject it descriptively
+  // rather than let a bare cast crash (the oracle document is external input).
   for (final v in raw) {
     if (v is! String) {
       throw ScaffoldError(
@@ -206,16 +208,107 @@ void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
         'hand',
       );
     }
-    if (!_isValidIdentifier(v) || _reservedWords.contains(v)) {
-      throw ScaffoldError(
-        'enum "$name" value "$v" is not a valid Dart identifier; '
-        'materialize this enum by hand',
-      );
-    }
   }
   final values = raw.cast<String>();
-  buffer.writeln('enum $name { ${values.join(', ')} }');
+  // Plain form: every wire value is already a valid, non-reserved identifier, so
+  // the constant name IS the wire string and `.name`/`.byName` map both ways.
+  // This is byte-for-byte the pre-D-1 output, so existing materialized enums
+  // never churn (requirement D-1.a).
+  if (!_enumNeedsWireForm(values)) {
+    buffer.writeln('enum $name { ${values.join(', ')} }');
+    buffer.writeln();
+    return;
+  }
+  // Enhanced form (D-1): a wire value that is not a valid identifier — a
+  // reserved word, kebab-case, a leading digit — cannot be a constant name, so
+  // each constant gets a deterministically derived identifier and carries its
+  // wire string, and fromJson/toJson route through `fromWire`/`.wire`. The
+  // enum itself is the only lookup table (requirement D-1.d): `fromWire` scans
+  // `values`, which grows one line per constant and stays hand-maintainable.
+  final idents = <String>[];
+  final producedBy = <String, String>{}; // derived identifier -> its wire value
+  for (final wire in values) {
+    final ident = _deriveEnumIdentifier(wire);
+    final prior = producedBy[ident];
+    if (prior != null) {
+      throw ScaffoldError(
+        'enum "$name" wire values "$prior" and "$wire" both derive the Dart '
+        'identifier "$ident"; rename one in the contract or materialize this '
+        'enum by hand',
+      );
+    }
+    producedBy[ident] = wire;
+    idents.add(ident);
+  }
+  buffer.writeln('enum $name {');
+  for (var i = 0; i < values.length; i++) {
+    final terminator = i == values.length - 1 ? ';' : ',';
+    buffer.writeln('  ${idents[i]}(${dartStringLiteral(values[i])})$terminator');
+  }
+  buffer
+    ..writeln('  const $name(this.wire);')
+    ..writeln('  final String wire;')
+    // The lookup is over the enum's own values; an unknown wire string is a
+    // client error (400), matching the sealed-variant fromJson's stance. The
+    // received value is interpolated at runtime (`\$wire` in the emitted source)
+    // so the failure names the offending tag.
+    ..writeln('  static $name fromWire(String wire) => values.firstWhere(')
+    ..writeln('        (v) => v.wire == wire,')
+    ..writeln(
+      "        orElse: () => throw BadRequest('unknown $name wire value: "
+      "\$wire'),",
+    )
+    ..writeln('      );')
+    ..writeln('}');
   buffer.writeln();
+}
+
+/// Whether an enum's wire values force the D-1 enhanced form: at least one value
+/// is not usable verbatim as a Dart constant name (a reserved word, kebab-case,
+/// a leading digit, any non-identifier string).
+bool _enumNeedsWireForm(List<String> values) =>
+    values.any((v) => !_isValidIdentifier(v) || _reservedWords.contains(v));
+
+/// Whether [schema] is an enum that must materialize in the enhanced (wire-
+/// mapped) form. A non-string value counts as "needs wire" so the keta import is
+/// added; the descriptive rejection then happens in [_writeEnum].
+bool _isEnhancedEnum(Map<String, Object?> schema) {
+  if (!_isEnum(schema)) return false;
+  final values = schema['enum'];
+  if (values is! List) return false;
+  return values.any(
+    (v) => v is! String || !_isValidIdentifier(v) || _reservedWords.contains(v),
+  );
+}
+
+/// Derives a valid, non-reserved Dart identifier from an arbitrary enum wire
+/// string, deterministically (D-1). A wire string that is ALREADY a valid,
+/// non-reserved identifier is used verbatim, so the legal values of an enhanced
+/// enum read exactly as they would in the plain form. Otherwise the string is
+/// split on every run of non-alphanumeric characters and the segments are
+/// camel-joined (`super-user` -> `superUser`, `super_user` -> `superUser`); a
+/// leading digit gets a `$` prefix (an identifier cannot start with a digit); a
+/// reserved word gets a trailing `_` (`default` -> `default_`); and an all-
+/// punctuation string falls back to `value`. The caller collision-checks the
+/// result across the enum, so any two wire values colliding on one identifier is
+/// a hard error rather than a silently dropped case.
+String _deriveEnumIdentifier(String wire) {
+  if (_isValidIdentifier(wire) && !_reservedWords.contains(wire)) return wire;
+  final segments = wire
+      .split(RegExp('[^A-Za-z0-9]+'))
+      .where((s) => s.isNotEmpty)
+      .toList();
+  if (segments.isEmpty) return 'value';
+  final buffer = StringBuffer(segments.first);
+  for (final segment in segments.skip(1)) {
+    buffer
+      ..write(segment[0].toUpperCase())
+      ..write(segment.substring(1));
+  }
+  var ident = buffer.toString();
+  if (RegExp(r'^[0-9]').hasMatch(ident)) ident = '\$$ident';
+  if (_reservedWords.contains(ident)) ident = '${ident}_';
+  return ident;
 }
 
 void _writeClass(
@@ -317,8 +410,12 @@ class _Prim extends _Type {
 }
 
 class _Enum extends _Type {
-  const _Enum(this.name);
+  const _Enum(this.name, this.enhanced);
   final String name;
+
+  /// A D-1 enhanced (wire-mapped) enum, so the mappers use `fromWire`/`.wire`
+  /// rather than the name-based `values.byName`/`.name`.
+  final bool enhanced;
 }
 
 class _Ref extends _Type {
@@ -339,7 +436,9 @@ _Type _resolve(
   if (ref is String) {
     final name = _refName(ref);
     final target = schemas[name];
-    if (target != null && _isEnum(target)) return _Enum(name);
+    if (target != null && _isEnum(target)) {
+      return _Enum(name, _isEnhancedEnum(target));
+    }
     return _Ref(name);
   }
   return switch (prop['type']) {
@@ -400,11 +499,14 @@ class _Field {
 String _fromJsonExpr(String access, _Type type) => switch (type) {
   _Prim(dart: 'double') => '($access as num).toDouble()',
   _Prim(:final dart) => '$access as $dart',
+  _Enum(:final name, enhanced: true) => '$name.fromWire($access as String)',
   _Enum(:final name) => '$name.values.byName($access as String)',
   _Ref(:final name) => '$name.fromJson($access as Map<String, Object?>)',
   _ListOf(item: _Prim(dart: 'double')) =>
     '($access as List).map((e) => (e as num).toDouble()).toList()',
   _ListOf(item: _Prim(:final dart)) => '($access as List).cast<$dart>()',
+  _ListOf(item: _Enum(:final name, enhanced: true)) =>
+    '($access as List).map((e) => $name.fromWire(e as String)).toList()',
   _ListOf(item: _Enum(:final name)) =>
     '($access as List).map((e) => $name.values.byName(e as String)).toList()',
   _ListOf(item: _Ref(:final name)) =>
@@ -416,9 +518,12 @@ String _toJsonExpr(String name, _Type type, {required bool nullable}) {
   final bang = nullable ? '!' : '';
   return switch (type) {
     _Prim() => name,
+    _Enum(enhanced: true) => '$name$bang.wire',
     _Enum() => '$name$bang.name',
     _Ref() => '$name$bang.toJson()',
     _ListOf(item: _Prim()) => name,
+    _ListOf(item: _Enum(enhanced: true)) =>
+      '$name$bang.map((e) => e.wire).toList()',
     _ListOf(item: _Enum()) => '$name$bang.map((e) => e.name).toList()',
     _ListOf(item: _Ref()) => '$name$bang.map((e) => e.toJson()).toList()',
     _ListOf() => name,

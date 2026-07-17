@@ -15,7 +15,12 @@ import 'dart_literal.dart';
 /// non-overlapping by construction, so removing several fields, renaming the
 /// sole field, or repairing a half-missing pair can't corrupt the source.
 ///
-/// A leading `///` doc comment on a regenerated member is preserved. The
+/// Only the member(s) that actually drifted are regenerated (D-2): a schema-only
+/// drift never touches the mappers, a fromJson cast drift never rewrites toJson,
+/// and so on — so a non-drifted member, with any inline comments it holds, is
+/// left byte-for-byte identical. A leading `///` doc comment on a regenerated
+/// member is preserved regardless; only inline comments inside the one drifted
+/// member are lost, which is unavoidable when its body is what changed. The
 /// `Schema` constant keeps every existing per-property definition (enums,
 /// formats) verbatim and re-derives `$ref`/`deps` from one model.
 ///
@@ -79,28 +84,36 @@ void _fixClass(
   final fieldNames = dto.fieldNames;
   final schema = context.schemas[className];
 
-  // Both round-trip directions must be checked: toJson's written keys AND
-  // fromJson's read keys against the field set. A half-done rename (fromJson
-  // still reading the old key while toJson is already correct) round-trips
-  // broken but a toJson-only check would miss it — matching the diagnostic in
-  // canonical.dart, which reports drift on either direction. The `!` on
-  // toJsonKeys is safe: isFixable guarantees a present toJson is a recognizable
-  // key set (else it would have been refused as hand-modified).
-  final mapperDrifted =
+  // D-2: decide drift PER MEMBER, and regenerate ONLY the member(s) that
+  // actually drifted, so a non-drifted member is left byte-for-byte untouched
+  // and its inline comments survive. Previously any drift rewrote fromJson,
+  // toJson, AND the Schema wholesale — a schema-only drift silently reformatted
+  // both mappers, a fromJson cast drift rewrote toJson, and so on. Each axis is
+  // now independent:
+  //
+  //  * fromJson drifts when it is missing, reads a key set other than the
+  //    fields, OR carries a stale `as T` cast (type drift — invisible to a
+  //    key-set diff, and repaired by regenerating fromJson from the field
+  //    types, which is what keeps check/fix symmetry for keta_type_drift).
+  //  * toJson drifts when it is missing or writes a key set other than the
+  //    fields.
+  //  * the Schema drifts when its `properties` key set differs from the fields.
+  //
+  // The `!` on toJsonKeys is safe: isFixable guarantees a present toJson is a
+  // recognizable key set (else it would have been refused as hand-modified).
+  // Regenerating a drifted member is still whole-member (atomic, non-
+  // overlapping); only the comments INSIDE that one member are lost, which is
+  // accepted since its body is exactly what changed. Leading doc comments and
+  // metadata are preserved for every regenerated member (see [member]).
+  final fromJsonDrifted =
       fromJson == null ||
-      toJson == null ||
-      !setEquals(toJsonKeys(toJson)!, fieldNames) ||
-      !setEquals(fromJsonKeys(fromJson), fieldNames);
-  // Type drift is invisible to a key-set comparison: keys can match exactly
-  // while a field's fromJson `as T` cast disagrees with its declared type. The
-  // whole-fromJson regeneration below rewrites the cast from the field type, so
-  // this must be part of the "needs regeneration" verdict or a type-only drift
-  // — which `check` reports as keta_type_drift — would never be repaired,
-  // breaking check/fix symmetry.
-  final typeDrifted = dto.typeDrifts.isNotEmpty;
+      !setEquals(fromJsonKeys(fromJson), fieldNames) ||
+      dto.typeDrifts.isNotEmpty;
+  final toJsonDrifted =
+      toJson == null || !setEquals(toJsonKeys(toJson)!, fieldNames);
   final schemaDrifted =
       schema != null && !setEquals(schemaPropertyNames(schema), fieldNames);
-  if (!mapperDrifted && !typeDrifted && !schemaDrifted) {
+  if (!fromJsonDrifted && !toJsonDrifted && !schemaDrifted) {
     return; // already canonical.
   }
 
@@ -114,13 +127,13 @@ void _fixClass(
     }
   }
 
-  member(fromJson, _fromJsonSource(className, fields));
-  member(toJson, _toJsonSource(fields));
+  if (fromJsonDrifted) member(fromJson, _fromJsonSource(className, fields));
+  if (toJsonDrifted) member(toJson, _toJsonSource(fields));
   if (insertions.isNotEmpty) {
     final at = node.body.end - 1; // before the class's closing brace
     edits.add(_Edit(at, at, '\n${insertions.join('\n\n')}\n'));
   }
-  if (schema != null) {
+  if (schemaDrifted) {
     edits.add(
       _Edit(
         schema.offset,

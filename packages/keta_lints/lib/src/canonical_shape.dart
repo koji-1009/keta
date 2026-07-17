@@ -24,15 +24,13 @@ class CanonicalUnit {
 
   factory CanonicalUnit.of(CompilationUnit unit) {
     final schemas = schemaInitializers(unit);
-    final enums = <String, List<String>>{};
+    final enums = <String, EnumInfo>{};
     // A class is a DTO by signal: a Schema constant, a fromJson factory, or a
     // toJson method — never by the shape of its fields (which is a guess).
     final dtoNames = <String>{...schemas.keys};
     for (final declaration in unit.declarations) {
       if (declaration is EnumDeclaration) {
-        enums[declaration.namePart.typeName.lexeme] = declaration.body.constants
-            .map((c) => c.name.lexeme)
-            .toList();
+        enums[declaration.namePart.typeName.lexeme] = _readEnumInfo(declaration);
       } else if (declaration is ClassDeclaration && hasMapper(declaration)) {
         dtoNames.add(declaration.namePart.typeName.lexeme);
       }
@@ -48,8 +46,8 @@ class CanonicalUnit {
   /// `Schema('Name', …)` initializer expressions, keyed by the DTO name.
   final Map<String, Expression> schemas;
 
-  /// Enum declarations in the unit, name → constant names.
-  final Map<String, List<String>> enums;
+  /// Enum declarations in the unit, name → its constant/wire model.
+  final Map<String, EnumInfo> enums;
 
   /// Every DTO name in the unit — Schema-declared or mapper-carrying — so a
   /// field typed as one of them resolves to a `$ref`.
@@ -315,6 +313,62 @@ class CanonicalField {
   }
 }
 
+// --- enum recognition -----------------------------------------------------
+
+/// An enum declaration seen in the unit. [constants] are the Dart constant
+/// names as written; [wireValues] are the wire strings of a D-1 *enhanced* enum
+/// (each constant's `('wire')` argument), or null for the plain form where the
+/// constant name IS the wire string. Carrying both lets the shared recognizer
+/// speak the wire vocabulary the mappers and the Schema `enum:` use, while the
+/// Dart side keeps whatever identifiers it derived — the two diverge exactly
+/// when a wire value is not a legal identifier, which is the whole reason the
+/// enhanced form exists.
+class EnumInfo {
+  const EnumInfo(this.constants, this.wireValues);
+  final List<String> constants;
+  final List<String>? wireValues;
+
+  bool get isEnhanced => wireValues != null;
+
+  /// The strings on the wire and in the Schema `enum:` — the wire values when
+  /// enhanced, else the constant names (which equal the wire strings in the
+  /// plain form, so drift is always compared against the same vocabulary).
+  List<String> get schemaValues => wireValues ?? constants;
+}
+
+/// Reads an [EnumDeclaration] into an [EnumInfo], recognizing the D-1 enhanced
+/// form. The enhanced form is signalled by BOTH a `final String wire;` instance
+/// field AND every constant carrying a single string-literal argument; requiring
+/// both keeps an ordinary value-carrying enum (a different field, numeric args,
+/// a partially-annotated constant list) from being misread as wire-mapped — such
+/// an enum stays plain, its constant names taken as the wire strings, exactly as
+/// before D-1. This is the sole place either check or fix learns an enum's wire
+/// vocabulary, so both agree by construction.
+EnumInfo _readEnumInfo(EnumDeclaration declaration) {
+  final constants = declaration.body.constants;
+  final names = [for (final c in constants) c.name.lexeme];
+  final hasWireField = declaration.body.members.any(
+    (m) =>
+        m is FieldDeclaration &&
+        !m.isStatic &&
+        m.fields.isFinal &&
+        m.fields.type?.toSource() == 'String' &&
+        m.fields.variables.any((v) => v.name.lexeme == 'wire'),
+  );
+  if (!hasWireField) return EnumInfo(names, null);
+  final wires = <String>[];
+  for (final c in constants) {
+    final args = c.arguments?.argumentList.arguments;
+    final first = (args != null && args.length == 1) ? args.first : null;
+    if (first is SimpleStringLiteral) wires.add(first.value);
+  }
+  // Only a *total* wire mapping — every constant supplied its string — is the
+  // canonical enhanced shape; a partial one is treated as a hand-written enum
+  // and left in the plain (name-is-wire) vocabulary rather than half-read.
+  if (wires.length != names.length) return EnumInfo(names, null);
+  return EnumInfo(names, wires);
+}
+
 // --- schema constant recognition ------------------------------------------
 
 /// The `Schema('Name', …)` initializer expressions in [unit], keyed by name.
@@ -531,15 +585,27 @@ class _Prim extends FieldType {
 }
 
 class _EnumType extends FieldType {
-  const _EnumType(this.name, this.values, super.nullable);
+  const _EnumType(this.name, this.values, this.enhanced, super.nullable);
   final String name;
+
+  /// The wire strings — the Schema `enum:` list and what fromWire matches on.
   final List<String>? values;
 
+  /// A D-1 enhanced (wire-mapped) enum, whose constant names are not the wire
+  /// strings, so the mappers route through `fromWire`/`.wire` instead of the
+  /// name-based `values.byName`/`.name`.
+  final bool enhanced;
+
   @override
-  String fromJson(String access) => '$name.values.byName($access as String)';
+  String fromJson(String access) => enhanced
+      ? '$name.fromWire($access as String)'
+      : '$name.values.byName($access as String)';
   @override
-  String toJson(String field, {required bool nullable}) =>
-      nullable ? '$field!.name' : '$field.name';
+  String toJson(String field, {required bool nullable}) {
+    final accessor = enhanced ? 'wire' : 'name';
+    return nullable ? '$field!.$accessor' : '$field.$accessor';
+  }
+
   @override
   Object? schemaJson() => {
     'type': 'string',
@@ -572,6 +638,8 @@ class _ListType extends FieldType {
     _Prim(dart: 'double') =>
       '($access as List).map((e) => (e as num).toDouble()).toList()',
     _Prim(:final dart) => '($access as List).cast<$dart>()',
+    _EnumType(:final name, enhanced: true) =>
+      '($access as List).map((e) => $name.fromWire(e as String)).toList()',
     _EnumType(:final name) =>
       '($access as List).map((e) => $name.values.byName(e as String)).toList()',
     _DtoType(:final name) =>
@@ -583,6 +651,7 @@ class _ListType extends FieldType {
     final f = nullable ? '$field!' : field;
     return switch (item) {
       _Prim() => field,
+      _EnumType(enhanced: true) => '$f.map((e) => e.wire).toList()',
       _EnumType() => '$f.map((e) => e.name).toList()',
       _DtoType() => '$f.map((e) => e.toJson()).toList()',
       _ => field,
@@ -604,6 +673,8 @@ class _MapType extends FieldType {
     _Prim(dart: 'double') =>
       '($access as Map).map((k, v) => MapEntry(k as String, (v as num).toDouble()))',
     _Prim(:final dart) => '($access as Map).cast<String, $dart>()',
+    _EnumType(:final name, enhanced: true) =>
+      '($access as Map).map((k, v) => MapEntry(k as String, $name.fromWire(v as String)))',
     _EnumType(:final name) =>
       '($access as Map).map((k, v) => MapEntry(k as String, $name.values.byName(v as String)))',
     _DtoType(:final name) =>
@@ -615,6 +686,7 @@ class _MapType extends FieldType {
     final f = nullable ? '$field!' : field;
     return switch (value) {
       _Prim() => field,
+      _EnumType(enhanced: true) => '$f.map((k, v) => MapEntry(k, v.wire))',
       _EnumType() => '$f.map((k, v) => MapEntry(k, v.name))',
       _DtoType() => '$f.map((k, v) => MapEntry(k, v.toJson()))',
       _ => field,
@@ -632,7 +704,7 @@ class _MapType extends FieldType {
 
 class TypeResolver {
   TypeResolver(this.enums, this.dtoNames);
-  final Map<String, List<String>> enums;
+  final Map<String, EnumInfo> enums;
   final Set<String> dtoNames;
 
   /// Resolves a field's type within the canonical subset, or null when it can't
@@ -679,7 +751,10 @@ class TypeResolver {
       case 'bool':
         return _Prim(base, nullable);
     }
-    if (enums.containsKey(base)) return _EnumType(base, enums[base], nullable);
+    final enumInfo = enums[base];
+    if (enumInfo != null) {
+      return _EnumType(base, enumInfo.schemaValues, enumInfo.isEnhanced, nullable);
+    }
     if (dtoNames.contains(base)) return _DtoType(base, nullable);
     return null; // unknown/cross-file/non-canonical
   }
