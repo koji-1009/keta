@@ -47,7 +47,17 @@ Everything else passes through exactly as the driver threw it. A NOT NULL, CHECK
 
 ## Type contract
 
-Rows come back as column-name maps. `integer` → `int`, `double precision` → `double`, `boolean` → `bool`, `null` → `null` with the key present, and `numeric`/`decimal` → `String` (precision preserved — this adapter is the first that can fully honour that clause). Timestamps decode to ISO 8601 strings; `bytea` to a fixed-length `List<int>`. Values outside the contract (json/jsonb, arrays, geometric types) pass through as the driver decoded them.
+Rows come back as column-name maps. `integer` → `int`, `double precision` → `double`, `boolean` → `bool`, `null` → `null` with the key present, and `numeric`/`decimal` → `String` (precision preserved — this adapter is the first that can fully honour that clause). `bytea` → a fixed-length `List<int>`. Values outside the contract (json/jsonb, arrays, geometric types) pass through as the driver decoded them.
+
+**Temporal types render by column type, not one blanket rule.** The driver decodes `date`, `timestamp`, and `timestamptz` all to the same UTC-tagged `DateTime`, so a single `toIso8601String()` would be wrong for two of them. keta renders each honestly instead:
+
+| Column type | Example output | Rule |
+|---|---|---|
+| `timestamptz` | `2026-07-17T10:30:00.000Z` | a real instant, emitted as UTC with a `Z` |
+| `timestamp` (no time zone) | `2026-07-17T10:30:00.000` | a wall-clock reading with **no offset designator** |
+| `date` | `2026-07-17` | a calendar day, `yyyy-MM-dd`, no time-of-day |
+
+The bare `timestamp` case is deliberate: a `timestamp without time zone` column genuinely does not know its zone, so keta refuses to stamp a `Z`/`+00:00` the value never carried — the ambiguity belongs to the column type, not to keta. **If you need an unambiguous instant, use `timestamptz`.** A `timestamp` string is a wall clock whose zone only the writer knows.
 
 ## Migrations
 

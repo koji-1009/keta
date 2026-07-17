@@ -19,6 +19,22 @@ const cannotConnectNow = '57P03'; // cannot_connect_now → 503
 const adminShutdown = '57P01'; // admin_shutdown → 503
 const crashShutdown = '57P02'; // crash_shutdown → 503
 
+/// The two verbatim messages package:postgres constructs when the socket dies
+/// mid-session. Both are raised with the driver's DEFAULT (error) severity even
+/// though the connection is already gone, and neither carries a SQLSTATE — so
+/// the only thing that distinguishes "the socket died" from an ordinary
+/// client-side PgException is the message text itself (see [translating] and
+/// the driver-source citations there). Matching by string is therefore
+/// unavoidable, and it is brittle: a driver patch release that rewords either
+/// line would silently downgrade a mid-session disconnect from a 503 to a raw
+/// 500. `test/driver_message_canary_test.dart` pins these literals against the
+/// installed driver source so `dart pub upgrade` breaking the match fails CI
+/// loudly instead. Keep the two in lockstep: this is the ONLY definition, and
+/// both the runtime match below and the canary read it from here.
+const socketErrorPrefix = 'Socket error: '; // connection.dart:465
+const socketClosedMessage =
+    'The underlying socket to Postgres has been closed unexpectedly.'; // :495
+
 /// Runs [action], translating the conditions a caller can act on into keta's
 /// sealed exceptions so a handler never imports package:postgres to find out
 /// what went wrong (and does not break when the same app is pointed at another
@@ -80,9 +96,7 @@ Future<T> translating<T>(Future<T> Function() action) async {
     // `_socketClosed` (connection.dart:465, :491-499).
     final message = e.message;
     final isSocketDeath =
-        message.startsWith('Socket error: ') ||
-        message ==
-            'The underlying socket to Postgres has been closed unexpectedly.';
+        message.startsWith(socketErrorPrefix) || message == socketClosedMessage;
     if (e.severity == Severity.fatal ||
         e.severity == Severity.panic ||
         isSocketDeath) {

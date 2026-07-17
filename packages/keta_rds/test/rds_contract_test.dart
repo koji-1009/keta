@@ -88,6 +88,37 @@ void main() {
       expect(row['missing'], isNull);
     });
 
+    test('the three temporal types each render by their own rule', () async {
+      // The live counterpart of values_test.dart: prove the driver really does
+      // hand all three back as UTC-tagged DateTimes and that keta renders each
+      // per §3 — a `timestamptz` as a Z-terminated instant, a bare `timestamp`
+      // with NO zone designator (its zone is genuinely unknown), and a `date`
+      // as a calendar day with no time-of-day.
+      final db = _connect();
+      addTearDown(db.close);
+      final t = _table('temporal');
+      await db.writer.execute('drop table if exists $t');
+      await db.writer.execute(
+        'create table $t (tz timestamptz, ts timestamp, d date)',
+      );
+      await db.writer.execute('insert into $t (tz, ts, d) values (?, ?, ?)', [
+        DateTime.utc(2026, 7, 17, 10, 30),
+        DateTime.utc(2026, 7, 17, 10, 30),
+        DateTime.utc(2026, 7, 17),
+      ]);
+
+      final row = (await db.reader.query('select tz, ts, d from $t')).single;
+
+      // timestamptz: a real instant, emitted as UTC with a Z.
+      expect(row['tz'], isA<String>());
+      expect(row['tz'], '2026-07-17T10:30:00.000Z');
+      // timestamp without time zone: same wall clock, but no zone claim.
+      expect(row['ts'], '2026-07-17T10:30:00.000');
+      expect(row['ts'] as String, isNot(endsWith('Z')));
+      // date: calendar day only, not a spurious midnight-UTC instant.
+      expect(row['d'], '2026-07-17');
+    });
+
     test('a query with no matching rows returns an empty list', () async {
       final db = _connect();
       addTearDown(db.close);
