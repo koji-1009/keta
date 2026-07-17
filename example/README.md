@@ -18,8 +18,7 @@ graceful shutdown. For a watch-and-restart dev loop: `dart run tool/dev.dart`.
 Configuration is environment-only (§9): `KETA_DB_PATH` (default `app.db`) and
 `PORT` (default `8080`).
 
-The middleware stack shows the common cross-cutting concerns: `accessLog`,
-`cors`, request metrics (`otel`), `recover`, and a `tx` per request.
+The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting concerns, in registration order: `accessLog`, `cors`, `recover`, `timeout`, request metrics (`otel`), `enforceSecurity`, and a `tx` per request. The order is load-bearing, not decoration — see the comment on `buildApp` for why (everything that can throw sits below `recover`; everything that decorates a response sits above it).
 
 ## Endpoints
 
@@ -35,13 +34,16 @@ The middleware stack shows the common cross-cutting concerns: `accessLog`,
 | POST   | `/uploads`                 | multipart/form-data upload (keta_multipart) |
 | GET    | `/metrics`                 | Prometheus-format request metrics    |
 
+Every route above defaults to `apiDefaults = [bearer]` (`lib/auth.dart`) unless it declares otherwise — `/health` is explicitly public (`security: []`), and `/metrics` requires `apiKey` instead of bearer. That default is secure-by-default: forgetting to declare a route's security fails closed, not open. `lib/auth.dart` ships two demo bearer tokens (`t-admin`, resolving to an admin principal; `t-user`, a non-admin) and one demo API key (`k-metrics`) — a real app swaps the in-memory `_tokens`/`_apiKeys` tables for a JWT or session check without touching anything else.
+
 ```bash
-curl -sX POST localhost:8080/users -H 'content-type: application/json' \
+curl -sX POST localhost:8080/users -H 'content-type: application/json' -H 'authorization: Bearer t-admin' \
   -d '{"id":"1","name":"Ada","role":"admin","tags":["x","y"]}'
-curl -s 'localhost:8080/users?role=admin&limit=10'
-curl -sX PUT localhost:8080/users/1 -H 'content-type: application/json' \
+curl -s 'localhost:8080/users?role=admin&limit=10' -H 'authorization: Bearer t-admin'
+curl -sX PUT localhost:8080/users/1 -H 'content-type: application/json' -H 'authorization: Bearer t-admin' \
   -d '{"id":"1","name":"Ada B","role":"member","tags":[]}'
-curl -sX DELETE localhost:8080/users/1 -o /dev/null -w '%{http_code}\n'
+curl -sX DELETE localhost:8080/users/1 -H 'authorization: Bearer t-admin' -o /dev/null -w '%{http_code}\n'
+curl -s localhost:8080/metrics -H 'x-api-key: k-metrics'
 ```
 
 ## OpenAPI
@@ -57,6 +59,7 @@ never a source that drives the code.
 
 - `lib/app.dart` — `buildApp`: the middleware stack (the single assembly point)
 - `lib/routes.dart` — every route, registered on the app
+- `lib/auth.dart` — `apiDefaults`, the demo `SecurityPolicy` and its tokens, `requireAdmin`
 - `lib/env.dart` — the dependency graph (`Db`, `Log`) booted per isolate, from env
 - `lib/user_dto.dart` — the canonical DTOs (`UserDto`, and the nested `UserList`)
 - `migrations/` — `NNNN_name.sql`, applied in order and recorded in `_keta_migrations`
