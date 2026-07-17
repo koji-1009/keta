@@ -14,7 +14,14 @@ App<Env> buildApp() {
     ..use(recover())
     ..use(enforceSecurity(securityPolicy));
 
-  app.get('/public', (c) => c.text('anyone can read this'));
+  // `security: const []` is not "no opinion" — it is "public", overriding the
+  // secure-by-default global (`securityPolicy.defaults`). A route that simply
+  // omitted RouteDoc entirely would inherit that default instead and 401.
+  app.get(
+    '/public',
+    (c) => c.text('anyone can read this'),
+    doc: const RouteDoc(success: Success(), summary: 'Public', security: []),
+  );
 
   app.group('/admin')
     ..use(requireRole('admin'))

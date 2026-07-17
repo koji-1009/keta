@@ -15,7 +15,13 @@ const _tokens = {'admin-token': 'admin', 'member-token': 'member'};
 /// credential check itself is app code, so "keta ships no auth" holds. The
 /// bearer verifier resolves the token to a role and stores it for the role
 /// guard downstream.
+///
+/// `defaults: [bearer]` makes a route that declares no security fail closed —
+/// forgetting to think about auth is a 401, not a silent public route. A
+/// route meant to be public says so explicitly (`RouteDoc(security: const
+/// [])`), which is what `/public` does.
 final securityPolicy = SecurityPolicy<Env>(
+  defaults: const [bearer],
   verifiers: {
     'bearer': (c) {
       final header = c.header('authorization') ?? '';

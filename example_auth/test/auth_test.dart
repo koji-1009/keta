@@ -14,6 +14,19 @@ void main() {
       expect((await newClient().get('/public')).text(), 'anyone can read this');
     });
 
+    test('a route that declares nothing fails closed, not open', () async {
+      // The policy's `defaults: [bearer]` applies to any route whose RouteDoc
+      // omits `security` (or that carries no RouteDoc at all) — forgetting to
+      // think about auth is a 401, never a silently public route.
+      final app = buildApp()
+        ..get('/undeclared', (c) => c.text('should not be reachable'));
+      final client = TestClient(
+        app,
+        Env(StdoutLog(flushInterval: Duration.zero)),
+      );
+      expect((await client.get('/undeclared')).status, 401);
+    });
+
     test('the declared route enforces auth (401) and role (403)', () async {
       final client = newClient();
 
