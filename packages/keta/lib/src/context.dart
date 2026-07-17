@@ -7,6 +7,18 @@ import 'dart:typed_data';
 import 'log.dart';
 import 'response.dart';
 
+/// The fixed label logged and reported for the route dimension (`c.log`'s
+/// baked `route` field, `accessLog`'s line, and any metrics/span exporter
+/// reading [Context.routeTemplate]) when a request matches no route.
+///
+/// A request that 404s or 405s carries an attacker-controlled, unbounded path;
+/// substituting it into a low-cardinality dimension would let a client mint
+/// one log/metric/span series per path it probes. This single fixed value
+/// keeps the dimension bounded regardless of what a client sends — one
+/// constant, so every consumer agrees on the same label rather than each
+/// coining its own.
+const String unmatchedRoute = '(unmatched)';
+
 /// A typed, identity-compared key for per-request values.
 ///
 /// Keys compare by identity, so a `const` constructor is forbidden: const
@@ -26,7 +38,6 @@ class RequestCtx<E> {
     required this.env,
     required this.method,
     required this.uri,
-    required this.route,
     required this.headers,
     required this.remoteAddress,
     required this.params,
@@ -38,10 +49,6 @@ class RequestCtx<E> {
   final E env;
   final String method;
   final Uri uri;
-
-  /// The matched route template (e.g. `/users/:id`), for low-cardinality logs,
-  /// metrics, and span names.
-  final String route;
 
   final Map<String, List<String>> headers;
   final String remoteAddress;
@@ -81,8 +88,8 @@ class RequestCtx<E> {
   bool pathMatched = false;
 
   /// The matched route's template (e.g. `/users/:id`), or null when nothing
-  /// matched. Distinct from [route], which falls back to the raw request path
-  /// for logging — this stays null so consumers get a low-cardinality label.
+  /// matched — the bounded-cardinality dimension for logs, metrics, and spans.
+  /// A raw request path never substitutes for it; see [Context.routeTemplate].
   String? matchedTemplate;
 
   /// The methods registered on the matched path, for a synthesized 405's
@@ -251,14 +258,11 @@ extension type Context<E>(RequestCtx<E> _raw) {
   String get method => _raw.method;
   Uri get uri => _raw.uri;
 
-  /// The matched route template (e.g. `/users/:id`).
-  String get route => _raw.route;
-
   /// The matched route's template (e.g. `/users/:id`), or null when nothing
-  /// matched. Unlike [route] — which falls back to the raw path so a log line
-  /// is never empty — this reports match failure as null, giving metrics and
-  /// spans a bounded-cardinality dimension (the raw path is attacker-controlled
-  /// and must never become a label).
+  /// matched. THE bounded-cardinality dimension for logs, metrics, and spans —
+  /// the raw request path is attacker-controlled and unbounded, so it never
+  /// substitutes for this and is not exposed as a route-shaped accessor at
+  /// all; read [uri] directly if the raw path itself is genuinely needed.
   String? get routeTemplate => _raw.matchedTemplate;
 
   /// The peer address as seen by the Transport. Resolving the real client

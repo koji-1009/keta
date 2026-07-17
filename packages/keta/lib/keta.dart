@@ -18,7 +18,7 @@ export 'src/app.dart'
         HasLog,
         Disposable;
 export 'src/chain.dart' show chain, guard;
-export 'src/context.dart' show Context, Key;
+export 'src/context.dart' show Context, Key, unmatchedRoute;
 export 'src/cookie.dart' show SameSite, SetCookie;
 export 'src/h1_transport.dart' show H1Transport;
 export 'src/log.dart' show Log, StdoutLog;

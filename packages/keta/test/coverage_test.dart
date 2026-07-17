@@ -396,6 +396,67 @@ void main() {
     });
   });
 
+  group('cors specific origin — Vary union', () {
+    // A specific (non-`*`) origin always adds `Vary: Origin` (shared-cache
+    // poisoning otherwise). gzip's own Vary union dedups case-insensitively
+    // (`_varyAcceptEncoding`); cors must match that discipline rather than
+    // blindly appending, which would double `Origin` when a handler (or an
+    // upstream middleware) already set it.
+    test('does not duplicate a Vary: Origin the handler already set', () async {
+      final mw = cors<Env>(allowOrigins: ['https://example.com']);
+      final c = testContext(
+        newEnv(),
+        headers: {'origin': 'https://example.com'},
+      );
+      final r = await mw(
+        c,
+        (_) => Response.text(
+          'ok',
+          headers: {
+            'vary': ['Origin'],
+          },
+        ),
+      );
+      expect(r.headers['vary'], ['Origin']);
+    });
+
+    test('unions with an unrelated existing Vary value', () async {
+      final mw = cors<Env>(allowOrigins: ['https://example.com']);
+      final c = testContext(
+        newEnv(),
+        headers: {'origin': 'https://example.com'},
+      );
+      final r = await mw(
+        c,
+        (_) => Response.text(
+          'ok',
+          headers: {
+            'vary': ['Accept-Encoding'],
+          },
+        ),
+      );
+      expect(r.headers['vary'], ['Accept-Encoding', 'Origin']);
+    });
+
+    test('dedup is case-insensitive', () async {
+      final mw = cors<Env>(allowOrigins: ['https://example.com']);
+      final c = testContext(
+        newEnv(),
+        headers: {'origin': 'https://example.com'},
+      );
+      final r = await mw(
+        c,
+        (_) => Response.text(
+          'ok',
+          headers: {
+            'vary': ['origin'],
+          },
+        ),
+      );
+      expect(r.headers['vary'], ['origin']);
+    });
+  });
+
   group('tracing', () {
     test('TraceContext.parse rejects malformed headers', () {
       const malformed = [
@@ -449,6 +510,65 @@ void main() {
     );
     // The rethrow reached the router's last-resort fallback.
     expect(lines.any((l) => l['msg'] == 'unhandled exception'), isTrue);
+  });
+
+  group('the route log field never carries a raw path', () {
+    test('accessLog logs the template when matched, a fixed placeholder '
+        'otherwise — the raw request path never appears', () async {
+      final env = newEnv();
+      final app = App<Env>()..use(accessLog());
+      app.get('/users/:id', (c) => c.text('ok'));
+      final client = TestClient(app, env);
+
+      await client.get('/users/42');
+      // Method matches the path but not the verb (405) — still unmatched
+      // for routing purposes, same as a plain 404.
+      await client.post('/users/42');
+      await client.get('/does/not/exist');
+
+      final lines = (env.log as MemLog).lines
+          .where((l) => l['msg'] == 'request')
+          .toList();
+      expect(lines, hasLength(3));
+      expect(lines[0]['route'], '/users/:id');
+      expect(lines[1]['route'], unmatchedRoute);
+      expect(lines[2]['route'], unmatchedRoute);
+      // The attacker-controlled raw path never substitutes into the
+      // low-cardinality route dimension, under any key.
+      for (final line in lines) {
+        for (final value in line.values) {
+          if (value is String) {
+            expect(value, isNot(contains('does/not/exist')));
+          }
+        }
+      }
+    });
+
+    test(
+      'c.routeTemplate is the template when matched and null when not — '
+      'reachable from app-level middleware wrapping the 404/405 synthesis',
+      () async {
+        final env = newEnv();
+        String? captured = 'unset (never ran)';
+        final app = App<Env>()
+          ..use((c, next) async {
+            final r = await next(c);
+            captured = c.routeTemplate;
+            return r;
+          });
+        app.get('/users/:id', (c) => c.text('ok'));
+        final client = TestClient(app, env);
+
+        await client.get('/users/42');
+        expect(captured, '/users/:id');
+
+        await client.get('/nope');
+        expect(captured, isNull);
+
+        await client.post('/users/42');
+        expect(captured, isNull);
+      },
+    );
   });
 
   test('KetaException subtypes carry detail and hide it from toString', () {

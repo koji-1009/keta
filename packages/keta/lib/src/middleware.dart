@@ -132,7 +132,7 @@ Middleware<E> cors<E>({
       final merged = {...r.headers};
       base.forEach((name, values) {
         if (name == 'vary' && merged['vary'] != null) {
-          merged['vary'] = [...merged['vary']!, ...values];
+          merged['vary'] = _unionVary(merged['vary']!, values);
         } else {
           merged[name] = values;
         }
@@ -359,11 +359,24 @@ Map<String, List<String>> _varyAcceptEncoding(
   Map<String, List<String>> headers,
 ) {
   final merged = {...headers};
-  final vary = merged['vary'];
-  if (vary == null) {
-    merged['vary'] = const ['Accept-Encoding'];
-  } else if (!vary.any((v) => v.toLowerCase() == 'accept-encoding')) {
-    merged['vary'] = [...vary, 'Accept-Encoding'];
+  merged['vary'] = _unionVary(merged['vary'] ?? const [], const [
+    'Accept-Encoding',
+  ]);
+  return merged;
+}
+
+/// Unions [additions] onto an existing `Vary` header's values, skipping any
+/// addition already present (case-insensitively — header names, so `Origin`
+/// and `origin` name the same thing). `Vary` is a set of header names, not a
+/// log; a duplicate confers no extra meaning while bloating the header, so
+/// every middleware that adds to it (here and [_varyAcceptEncoding]) shares
+/// this one discipline rather than each risking its own.
+List<String> _unionVary(List<String> existing, List<String> additions) {
+  final merged = [...existing];
+  for (final addition in additions) {
+    if (!merged.any((v) => v.toLowerCase() == addition.toLowerCase())) {
+      merged.add(addition);
+    }
   }
   return merged;
 }

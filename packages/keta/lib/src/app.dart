@@ -461,7 +461,7 @@ class Router<E> {
       captured,
     );
     final reqId = _reqId();
-    final route = compiled?.template ?? request.uri.path;
+    final template = compiled?.template;
     final params = <String, String>{
       if (compiled != null)
         for (var i = 0; i < compiled.captureNames.length; i++)
@@ -472,18 +472,25 @@ class Router<E> {
             env: env,
             method: request.method,
             uri: request.uri,
-            route: route,
             headers: request.headers,
             remoteAddress: request.remoteAddress,
             params: params,
             orderedCaptures: captured,
-            log: baseLog.withFields({'reqId': reqId, 'route': route}),
+            // The raw request path never reaches the `route` log field — an
+            // unmatched request (attacker-controlled path) logs the same fixed
+            // placeholder every time, keeping this dimension bounded. The raw
+            // path is still available to anyone who genuinely needs it via
+            // `c.uri`, just never as a route-shaped, label-bound value.
+            log: baseLog.withFields({
+              'reqId': reqId,
+              'route': template ?? unmatchedRoute,
+            }),
             maxBodyBytes: maxBodyBytes,
             body: request.bodyStream,
           )
           ..matched = compiled?.handler
           ..matchedDoc = compiled?.doc
-          ..matchedTemplate = compiled?.template
+          ..matchedTemplate = template
           ..pathMatched = allowed != null
           ..allowedMethods = allowed == null ? const [] : allowed.toList();
     final c = Context<E>(ctx);

@@ -31,25 +31,29 @@ Context<E> testContext<E>(
   final baseLog = env is HasLog
       ? (env as HasLog).log
       : StdoutLog(flushInterval: Duration.zero);
-  final ctx = RequestCtx<E>(
-    env: env,
-    method: method,
-    uri: Uri.parse(path),
-    route: path,
-    headers: {
-      for (final e in headers.entries) e.key.toLowerCase(): [e.value],
-    },
-    remoteAddress: 'test',
-    params: params,
-    orderedCaptures: params.values.toList(),
-    log: baseLog.withFields({'reqId': 'test', 'route': path}),
-    maxBodyBytes: maxBodyBytes,
-    body: rawBody != null
-        ? Stream.value(rawBody)
-        : jsonBody == null
-        ? const Stream.empty()
-        : Stream.value(utf8.encode(jsonEncode(jsonBody))),
-  );
+  final ctx =
+      RequestCtx<E>(
+          env: env,
+          method: method,
+          uri: Uri.parse(path),
+          headers: {
+            for (final e in headers.entries) e.key.toLowerCase(): [e.value],
+          },
+          remoteAddress: 'test',
+          params: params,
+          orderedCaptures: params.values.toList(),
+          log: baseLog.withFields({'reqId': 'test', 'route': path}),
+          maxBodyBytes: maxBodyBytes,
+          body: rawBody != null
+              ? Stream.value(rawBody)
+              : jsonBody == null
+              ? const Stream.empty()
+              : Stream.value(utf8.encode(jsonEncode(jsonBody))),
+        )
+        // Testing a handler directly (no routing occurs), so `path` stands in
+        // as the matched template — the same bounded value a real dispatch
+        // would have baked into the log line.
+        ..matchedTemplate = path;
   return Context<E>(ctx);
 }
 
