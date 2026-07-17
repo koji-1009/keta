@@ -2,6 +2,7 @@ library;
 
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
 
 import 'dart_literal.dart';
 
@@ -144,10 +145,16 @@ void _fixClass(
 
   final fieldNames = {for (final f in fields) f.name};
   final schema = schemas[className];
+  // Both round-trip directions must be checked: toJson's written keys AND
+  // fromJson's read keys against the field set. A half-done rename (fromJson
+  // still reading the old key while toJson is already correct) round-trips
+  // broken but a toJson-only check would miss it — matching the diagnostic in
+  // canonical.dart, which reports drift on either direction.
   final mapperDrifted =
       fromJson == null ||
       toJson == null ||
-      !_setEquals(_toJsonKeys(toJson)!, fieldNames);
+      !_setEquals(_toJsonKeys(toJson)!, fieldNames) ||
+      !_setEquals(_fromJsonKeys(fromJson), fieldNames);
   final schemaDrifted =
       schema != null && !_setEquals(_schemaPropertyNames(schema), fieldNames);
   if (!mapperDrifted && !schemaDrifted) return; // already canonical.
@@ -317,6 +324,25 @@ String _schemaSource(
 }
 
 bool _isCanonicalMap(MethodDeclaration toJson) => _returnedMap(toJson) != null;
+
+/// The string keys read via `…['key']` inside the fromJson factory (regardless
+/// of the map parameter's name), i.e. the wire keys fromJson consumes.
+Set<String> _fromJsonKeys(ConstructorDeclaration fromJson) {
+  final keys = <String>{};
+  fromJson.visitChildren(_IndexKeyVisitor(keys));
+  return keys;
+}
+
+class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
+  _IndexKeyVisitor(this.keys);
+  final Set<String> keys;
+  @override
+  void visitIndexExpression(IndexExpression node) {
+    final index = node.index;
+    if (index is SimpleStringLiteral) keys.add(index.value);
+    super.visitIndexExpression(node);
+  }
+}
 
 Set<String>? _toJsonKeys(MethodDeclaration toJson) {
   final returned = _returnedMap(toJson);

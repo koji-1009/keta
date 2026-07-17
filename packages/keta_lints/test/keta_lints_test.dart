@@ -1116,6 +1116,99 @@ const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properti
       );
     });
 
+    test('a non-string enum value raises ScaffoldError instead of a raw '
+        'TypeError', () {
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'E': {
+                'type': 'string',
+                'enum': ['ok', 3],
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('a type: array property without items raises ScaffoldError instead '
+        'of a raw TypeError', () {
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'D': {
+                'type': 'object',
+                'required': ['tags'],
+                'properties': {
+                  'tags': {'type': 'array'},
+                },
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
+    test('other malformed oracle shapes raise ScaffoldError instead of a raw '
+        'TypeError (audit of the same bare-cast class of bug)', () {
+      // A components/schemas entry that is not an object.
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {'D': 'not an object'},
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+      // A property schema that is not an object.
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'D': {
+                'type': 'object',
+                'required': ['x'],
+                'properties': {'x': true},
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+      // A "required" that is not a list of strings.
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'D': {
+                'type': 'object',
+                'required': 'x',
+                'properties': {
+                  'x': {'type': 'string'},
+                },
+              },
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+      // A "properties" that is not an object.
+      expect(
+        () => generateScaffold({
+          'components': {
+            'schemas': {
+              'D': {'type': 'object', 'properties': 'not an object'},
+            },
+          },
+        }),
+        throwsA(isA<ScaffoldError>()),
+      );
+    });
+
     test('drift reports a field type change and a required change', () {
       final oracle = {
         'components': {
@@ -1165,6 +1258,46 @@ class Dto {
       expect(d.single.rule, 'keta_canonical_drift');
       expect(d.single.message, contains('fromJson reads unknown keys: id'));
       expect(d.single.message, contains('fields not read by fromJson: uuid'));
+    });
+
+    test('fix repairs a stale fromJson key when toJson is already correct', () {
+      // Repro for the check/fix asymmetry: toJson was renamed but fromJson
+      // still reads the old wire key. The diagnostic already reports this
+      // (see 'canonical flags a fromJson that reads the wrong key' above);
+      // the fix must actually repair it rather than leave the source
+      // unchanged.
+      const source = '''
+class Dto {
+  final String uuid;
+  Dto({required this.uuid});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(uuid: json['id'] as String);
+  Map<String, Object?> toJson() => {'uuid': uuid};
+}
+''';
+      expect(canonicalDiagnostics(source), hasLength(1));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(source));
+      expect(fixed, contains("uuid: json['uuid'] as String,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+
+    test('fix repairs a stale toJson key when fromJson is already correct '
+        '(the reverse)', () {
+      const source = '''
+class Dto {
+  final String uuid;
+  Dto({required this.uuid});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(uuid: json['uuid'] as String);
+  Map<String, Object?> toJson() => {'id': uuid};
+}
+''';
+      expect(canonicalDiagnostics(source), hasLength(1));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(source));
+      expect(fixed, contains("'uuid': uuid,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
     test('fix leaves a positional-ctor DTO untouched', () {

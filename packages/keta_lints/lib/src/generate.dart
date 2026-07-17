@@ -48,8 +48,43 @@ Map<String, Map<String, Object?>> _namedSchemas(Map<String, Object?> document) {
   if (schemas is! Map) return {};
   return {
     for (final entry in schemas.entries)
-      entry.key.toString(): (entry.value as Map).cast<String, Object?>(),
+      entry.key.toString(): _asSchemaObject(entry.value, entry.key.toString()),
   };
+}
+
+/// Validates that a schema-shaped [value] from the oracle document is
+/// actually an object, naming the offending schema/property in the error
+/// instead of letting a bare cast crash with a raw TypeError — the oracle is
+/// external input and every rejection must be a descriptive [ScaffoldError].
+Map<String, Object?> _asSchemaObject(Object? value, String name) {
+  if (value is! Map) {
+    throw ScaffoldError('schema "$name" is not an object schema: $value');
+  }
+  return value.cast<String, Object?>();
+}
+
+/// Validates a schema's `required` list, when present, is a list of strings.
+List<String> _requiredOf(Map<String, Object?> schema, String name) {
+  final required = schema['required'];
+  if (required == null) return const [];
+  if (required is! List || required.any((e) => e is! String)) {
+    throw ScaffoldError(
+      'schema "$name" has a non-string-list "required": $required',
+    );
+  }
+  return required.cast<String>();
+}
+
+/// Validates a schema's `properties` map, when present, is an object.
+Map<String, Object?> _propertiesOf(Map<String, Object?> schema, String name) {
+  final properties = schema['properties'];
+  if (properties == null) return const {};
+  if (properties is! Map) {
+    throw ScaffoldError(
+      'schema "$name" has a non-object "properties": $properties',
+    );
+  }
+  return properties.cast<String, Object?>();
 }
 
 bool _isEnum(Map<String, Object?> schema) =>
@@ -153,10 +188,18 @@ void _writeSealed(
 }
 
 void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
-  final values = (schema['enum'] as List).cast<String>();
+  final raw = schema['enum'] as List;
   // Enum constants map name↔wire via `.name`/`.byName`, so each value must be a
-  // valid, non-reserved Dart identifier as-is. Reject (don't emit broken code).
-  for (final v in values) {
+  // string that is also a valid, non-reserved Dart identifier as-is. Reject
+  // (don't emit broken code, and don't let a non-string value crash as a bare
+  // TypeError — the oracle document is external input).
+  for (final v in raw) {
+    if (v is! String) {
+      throw ScaffoldError(
+        'enum "$name" has a non-string value $v; materialize this enum by '
+        'hand',
+      );
+    }
     if (!_isValidIdentifier(v) || _reservedWords.contains(v)) {
       throw ScaffoldError(
         'enum "$name" value "$v" is not a valid Dart identifier; '
@@ -164,6 +207,7 @@ void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
       );
     }
   }
+  final values = raw.cast<String>();
   buffer.writeln('enum $name { ${values.join(', ')} }');
   buffer.writeln();
 }
@@ -175,9 +219,8 @@ void _writeClass(
   Map<String, Map<String, Object?>> schemas, {
   String? implementsType,
 }) {
-  final required = (schema['required'] as List?)?.cast<String>() ?? const [];
-  final properties =
-      (schema['properties'] as Map?)?.cast<String, Object?>() ?? const {};
+  final required = _requiredOf(schema, name);
+  final properties = _propertiesOf(schema, name);
   // JSON property names become valid, unique Dart identifiers; the original
   // wire key is kept for the fromJson/toJson maps.
   final usedNames = <String>{};
@@ -186,7 +229,7 @@ void _writeClass(
       _Field(
         entry.key,
         _uniqueIdent(_sanitizeIdentifier(entry.key), usedNames),
-        _resolve((entry.value as Map).cast<String, Object?>(), schemas),
+        _resolve(_asSchemaObject(entry.value, '$name.${entry.key}'), schemas),
         required.contains(entry.key),
       ),
   ];
@@ -298,11 +341,20 @@ _Type _resolve(
     'integer' => const _Prim('int'),
     'number' => const _Prim('double'),
     'boolean' => const _Prim('bool'),
-    'array' => _ListOf(
-      _resolve((prop['items'] as Map).cast<String, Object?>(), schemas),
-    ),
+    'array' => _ListOf(_resolve(_itemsSchemaOf(prop), schemas)),
     _ => throw ScaffoldError('unsupported property schema: $prop'),
   };
+}
+
+/// Validates a `type: array` schema declares an object `items` schema,
+/// naming the offending array schema instead of letting `items` being absent
+/// or non-object crash as a bare TypeError.
+Map<String, Object?> _itemsSchemaOf(Map<String, Object?> prop) {
+  final items = prop['items'];
+  if (items is! Map) {
+    throw ScaffoldError('array schema is missing an "items" schema: $prop');
+  }
+  return items.cast<String, Object?>();
 }
 
 String _dartType(_Type type) => switch (type) {
@@ -539,7 +591,7 @@ String _generateContractTest(
   for (final entry in schemas.entries) {
     if (entry.value['type'] != 'object') continue;
     final name = entry.key;
-    final sample = dartLiteral(_sample(entry.value, schemas));
+    final sample = dartLiteral(_sample(entry.value, schemas, name));
     final constName = '${_lowerFirst(name)}Schema';
     buffer.writeln("  test('$name round-trips and validates', () {");
     buffer.writeln('    final Map<String, Object?> sample = $sample;');
@@ -631,15 +683,15 @@ bool _hasRequiredQuery(Map<String, Object?> op) {
 Object? _sample(
   Map<String, Object?> schema,
   Map<String, Map<String, Object?>> schemas,
+  String name,
 ) {
-  final required = (schema['required'] as List?)?.cast<String>() ?? const [];
-  final properties =
-      (schema['properties'] as Map?)?.cast<String, Object?>() ?? const {};
+  final required = _requiredOf(schema, name);
+  final properties = _propertiesOf(schema, name);
   return {
     for (final key in required)
       if (properties[key] != null)
         key: _sampleValue(
-          (properties[key] as Map).cast<String, Object?>(),
+          _asSchemaObject(properties[key], '$name.$key'),
           schemas,
         ),
   };
@@ -659,7 +711,7 @@ Object? _sampleValue(
     _Prim(dart: 'bool') => false,
     _Prim() => null,
     _Enum(:final name) => (schemas[name]!['enum'] as List).first,
-    _Ref(:final name) => _sample(schemas[name]!, schemas),
+    _Ref(:final name) => _sample(schemas[name]!, schemas, name),
     _ListOf() => const <Object?>[],
   };
 }
