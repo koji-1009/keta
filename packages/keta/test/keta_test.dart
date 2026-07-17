@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
@@ -213,6 +216,34 @@ void main() {
       expect((await client.post('/only')).status, 405);
     });
 
+    test('405 carries an Allow header listing the path methods', () async {
+      final app = App<Env>();
+      app.get('/r', (c) => c.text('g'));
+      app.delete('/r', (c) => c.text('d'));
+      final client = TestClient(app, newEnv());
+
+      final r = await client.post('/r'); // POST not registered
+      expect(r.status, 405);
+      final allow = (r.headers['allow'] ?? '').split(', ').toSet();
+      expect(allow, {'GET', 'DELETE'});
+    });
+
+    test('routeTemplate is the matched template, null when unmatched', () async {
+      final seen = <String?>[];
+      final app = App<Env>()
+        ..use((c, next) {
+          seen.add(c.routeTemplate);
+          return next(c);
+        });
+      app.get('/users/:id', (c) => c.text('ok'));
+      final client = TestClient(app, newEnv());
+
+      await client.get('/users/7');
+      await client.get('/missing');
+      // route (for logs) always has a value; routeTemplate is null on no match.
+      expect(seen, ['/users/:id', null]);
+    });
+
     test('duplicate capture names in one path fail fast', () {
       final app = App<Env>();
       expect(
@@ -304,13 +335,18 @@ void main() {
         app.get('/x', (c) => c.text('ok'));
         final client = TestClient(app, env);
 
-        // Preflight to an unregistered method is answered by cors, not 405.
+        // A real preflight (OPTIONS + access-control-request-method) to an
+        // unregistered method is answered by cors, not 405.
         final pre = await client.options(
           '/x',
-          headers: {'origin': 'https://a.example'},
+          headers: {
+            'origin': 'https://a.example',
+            'access-control-request-method': 'GET',
+          },
         );
         expect(pre.status, 204);
         expect(pre.headers['access-control-allow-origin'], 'https://a.example');
+        expect(pre.headers.containsKey('access-control-allow-methods'), isTrue);
 
         // A 404 still flows through accessLog.
         final missing = await client.get('/missing');
@@ -319,6 +355,79 @@ void main() {
         expect(
           lines.any((l) => l['msg'] == 'request' && l['status'] == 404),
           isTrue,
+        );
+      },
+    );
+
+    test('a plain OPTIONS falls through to a registered OPTIONS route', () async {
+      final app = App<Env>()..use(cors(allowOrigins: ['*']));
+      app.options('/x', (c) => c.text('user-options'));
+      final client = TestClient(app, newEnv());
+
+      // No access-control-request-method → not a preflight → reaches the route.
+      final r = await client.options('/x', headers: {'origin': 'https://a'});
+      expect(r.status, 200);
+      expect(r.text(), 'user-options');
+    });
+
+    test(
+      'echoing a specific origin adds Vary: Origin; wildcard does not',
+      () async {
+        final specific = App<Env>()
+          ..use(cors(allowOrigins: ['https://a.example']));
+        specific.get('/x', (c) => c.text('ok'));
+        final rSpecific = await TestClient(
+          specific,
+          newEnv(),
+        ).get('/x', headers: {'origin': 'https://a.example'});
+        expect(rSpecific.headers['vary'], 'Origin');
+
+        final wild = App<Env>()..use(cors(allowOrigins: ['*']));
+        wild.get('/x', (c) => c.text('ok'));
+        final rWild = await TestClient(
+          wild,
+          newEnv(),
+        ).get('/x', headers: {'origin': 'https://a.example'});
+        expect(rWild.headers['access-control-allow-origin'], '*');
+        expect(rWild.headers.containsKey('vary'), isFalse);
+      },
+    );
+
+    test(
+      'cors options project onto credentials, max-age, expose-headers',
+      () async {
+        final app = App<Env>()
+          ..use(
+            cors(
+              allowOrigins: ['https://a.example'],
+              allowCredentials: true,
+              maxAge: const Duration(minutes: 10),
+              exposeHeaders: ['x-total', 'x-page'],
+            ),
+          );
+        app.get('/x', (c) => c.text('ok'));
+        final client = TestClient(app, newEnv());
+        const origin = {'origin': 'https://a.example'};
+
+        // Actual response carries credentials + expose-headers, not max-age.
+        final actual = await client.get('/x', headers: origin);
+        expect(actual.headers['access-control-allow-credentials'], 'true');
+        expect(
+          actual.headers['access-control-expose-headers'],
+          'x-total, x-page',
+        );
+        expect(actual.headers.containsKey('access-control-max-age'), isFalse);
+
+        // Preflight carries max-age (seconds), not expose-headers.
+        final pre = await client.options(
+          '/x',
+          headers: {...origin, 'access-control-request-method': 'GET'},
+        );
+        expect(pre.headers['access-control-max-age'], '600');
+        expect(pre.headers['access-control-allow-credentials'], 'true');
+        expect(
+          pre.headers.containsKey('access-control-expose-headers'),
+          isFalse,
         );
       },
     );
@@ -363,6 +472,37 @@ void main() {
       expect(r.status, 400);
       expect(r.json(), {'error': 'bad'});
     });
+
+    test('a non-Keta body-stream error is sticky across re-reads', () async {
+      // A single-subscription body that fails with a plain I/O-style error:
+      // the second read must reproduce that same error deterministically, not
+      // an opaque "Stream already listened" StateError.
+      Stream<List<int>> ioBoom() async* {
+        yield const [1, 2, 3];
+        throw const _IoBoom();
+      }
+
+      final app = App<Env>();
+      app.post('/x', (c) async {
+        final errors = <String>[];
+        for (var i = 0; i < 2; i++) {
+          try {
+            await c.bodyBytes();
+          } catch (e) {
+            errors.add(e.runtimeType.toString());
+          }
+        }
+        return c.json(errors);
+      });
+      final router = app.compile(newEnv());
+      final response = await router.dispatch(_StreamBodyRequest(ioBoom()));
+      final bytes = await switch (response.body) {
+        String() => Future.value(utf8.encode(response.body as String)),
+        List<int>() => Future.value(response.body as List<int>),
+        _ => (response.body as Stream<List<int>>).expand((c) => c).toList(),
+      };
+      expect(jsonDecode(utf8.decode(bytes)), ['_IoBoom', '_IoBoom']);
+    });
   });
 
   group('Response', () {
@@ -373,6 +513,40 @@ void main() {
       );
       expect(Response(200, body: 'ok').body, 'ok');
       expect(Response(200, body: const [1, 2]).body, const [1, 2]);
+    });
+
+    test('a header value may carry HTAB but never CR/LF or other controls', () {
+      // RFC 9110 §5.5 permits HTAB in a field value.
+      final ok = Response(
+        200,
+        headers: {
+          'x-tabbed': ['a\tb'],
+        },
+      );
+      expect(ok.headers['x-tabbed'], ['a\tb']);
+
+      // CR, LF, and the other controls remain rejected (response splitting).
+      for (final bad in ['a\rb', 'a\nb', 'a b', 'ab']) {
+        expect(
+          () => Response(
+            200,
+            headers: {
+              'x-bad': [bad],
+            },
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+      }
+      // A tab in a header *name* is still rejected (names are tokens).
+      expect(
+        () => Response(
+          200,
+          headers: {
+            'x\tname': ['v'],
+          },
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 
@@ -442,4 +616,28 @@ void main() {
       expect(r.headers['content-type'], ['application/json; charset=utf-8']);
     });
   });
+}
+
+/// A plain (non-Keta) failure, standing in for an I/O error on the body stream.
+class _IoBoom implements Exception {
+  const _IoBoom();
+}
+
+/// A fake transport request whose body is an arbitrary (here, erroring) stream.
+class _StreamBodyRequest implements TransportRequest {
+  _StreamBodyRequest(this._body);
+  final Stream<List<int>> _body;
+
+  @override
+  String get method => 'POST';
+  @override
+  Uri get uri => Uri.parse('/x');
+  @override
+  Map<String, List<String>> get headers => const {};
+  @override
+  Stream<List<int>> get bodyStream => _body;
+  @override
+  String get remoteAddress => 'test';
+  @override
+  Future<void> get closed => Completer<void>().future;
 }

@@ -37,7 +37,10 @@ class Response {
         );
       }
       for (final value in e.value) {
-        if (_hasControlChar(value)) {
+        // A field value may carry HTAB (RFC 9110 §5.5: field-value allows
+        // HTAB alongside VCHAR/SP); only CR/LF and the other controls are the
+        // response-splitting primitive to reject.
+        if (_hasControlChar(value, allowTab: true)) {
           throw ArgumentError.value(
             value,
             'headers',
@@ -92,8 +95,9 @@ class Response {
   /// One of `String`, `List<int>`, or `Stream<List<int>>`.
   final Object body;
 
-  static bool _hasControlChar(String s) {
+  static bool _hasControlChar(String s, {bool allowTab = false}) {
     for (final u in s.codeUnits) {
+      if (allowTab && u == 0x09) continue; // HTAB is legal in a field value
       if (u < 0x20 || u == 0x7f) return true;
     }
     return false;

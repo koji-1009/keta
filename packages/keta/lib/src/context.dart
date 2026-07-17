@@ -65,7 +65,8 @@ class RequestCtx<E> {
   Object? _json;
   bool _jsonDecoded = false;
   bool _streamTaken = false;
-  KetaException? _bodyError;
+  Object? _bodyError;
+  StackTrace? _bodyStack;
 
   /// The matched route's composed handler, or null when nothing matched — set
   /// by dispatch so app-level middleware can wrap the 404/405 synthesis too.
@@ -77,6 +78,15 @@ class RequestCtx<E> {
 
   /// Whether some route shares this path (distinguishes 405 from 404).
   bool pathMatched = false;
+
+  /// The matched route's template (e.g. `/users/:id`), or null when nothing
+  /// matched. Distinct from [route], which falls back to the raw request path
+  /// for logging — this stays null so consumers get a low-cardinality label.
+  String? matchedTemplate;
+
+  /// The methods registered on the matched path, for a synthesized 405's
+  /// `Allow` header (RFC 9110 §15.5.6). Empty when no route shares the path.
+  List<String> allowedMethods = const [];
 
   Future<void> get aborted => _aborted.future;
 
@@ -142,11 +152,15 @@ class RequestCtx<E> {
   Future<List<int>> bodyBytes() async {
     final cached = _bytes;
     if (cached != null) return cached;
-    // A prior over-limit read is sticky: the single-subscription source is
-    // spent, so re-read must reproduce the 413 rather than surface an opaque
-    // "Stream already listened" StateError (which would escape as a 500).
+    // A prior failed read is sticky: the single-subscription source is spent,
+    // so a re-read must reproduce that failure — the 413 for an over-limit
+    // body, or the original I/O error for a broken stream — rather than surface
+    // an opaque "Stream already listened" StateError (which would escape as an
+    // unrelated 500).
     final priorError = _bodyError;
-    if (priorError != null) throw priorError;
+    if (priorError != null) {
+      Error.throwWithStackTrace(priorError, _bodyStack ?? StackTrace.current);
+    }
     if (_streamTaken) {
       throw StateError('body stream already taken; cannot read bytes');
     }
@@ -160,8 +174,13 @@ class RequestCtx<E> {
         }
         builder.add(chunk);
       }
-    } on KetaException catch (e) {
+    } catch (e, st) {
+      // Any failure draining the body sticks — a KetaException (413) or an
+      // I/O error from the transport alike. The source cannot be listened to
+      // twice, so recording the failure is the only way a re-read stays
+      // deterministic instead of collapsing into "Stream already listened".
       _bodyError = e;
+      _bodyStack = st;
       _streamTaken = true; // the source is consumed; block a re-listen
       rethrow;
     }
@@ -204,6 +223,13 @@ extension type Context<E>(RequestCtx<E> _raw) {
 
   /// The matched route template (e.g. `/users/:id`).
   String get route => _raw.route;
+
+  /// The matched route's template (e.g. `/users/:id`), or null when nothing
+  /// matched. Unlike [route] — which falls back to the raw path so a log line
+  /// is never empty — this reports match failure as null, giving metrics and
+  /// spans a bounded-cardinality dimension (the raw path is attacker-controlled
+  /// and must never become a label).
+  String? get routeTemplate => _raw.matchedTemplate;
 
   /// The peer address as seen by the Transport. Resolving the real client
   /// behind a proxy (X-Forwarded-For) is the application's responsibility.

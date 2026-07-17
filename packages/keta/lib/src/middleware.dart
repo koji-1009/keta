@@ -60,9 +60,19 @@ Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
   });
 };
 
-/// Attaches CORS headers and answers preflight `OPTIONS` requests. Stateless
-/// and pure: an origin is allowed when it is listed or [allowOrigins] contains
-/// `'*'`.
+/// Attaches CORS headers and answers preflight requests. Stateless and pure: an
+/// origin is allowed when it is listed or [allowOrigins] contains `'*'`.
+///
+/// A preflight is an `OPTIONS` request carrying `access-control-request-method`;
+/// it is answered here with 204. A plain `OPTIONS` (no such header) falls
+/// through to the routes, so a user-registered `OPTIONS` handler stays
+/// reachable. Echoing a specific (non-`'*'`) origin always adds `Vary: Origin`,
+/// without which a shared cache could serve one origin's response to another.
+///
+/// [allowCredentials] projects `Access-Control-Allow-Credentials: true`;
+/// [maxAge] projects `Access-Control-Max-Age` (seconds) onto the preflight; and
+/// [exposeHeaders] projects `Access-Control-Expose-Headers` onto actual
+/// responses.
 Middleware<E> cors<E>({
   required List<String> allowOrigins,
   List<String> allowMethods = const [
@@ -74,30 +84,62 @@ Middleware<E> cors<E>({
     'OPTIONS',
   ],
   List<String> allowHeaders = const ['content-type', 'authorization'],
+  bool allowCredentials = false,
+  Duration? maxAge,
+  List<String> exposeHeaders = const [],
 }) {
   final origins = allowOrigins.toSet();
   final wildcard = origins.contains('*');
   return (Context<E> c, Handler<E> next) {
     final origin = c.header('origin');
     final allowed = wildcard || (origin != null && origins.contains(origin));
-    final corsHeaders = <String, List<String>>{
+
+    // Headers shared by preflight and actual responses when the origin passes.
+    final base = <String, List<String>>{
       if (allowed) ...{
         'access-control-allow-origin': [wildcard ? '*' : origin!],
-        'access-control-allow-methods': [allowMethods.join(', ')],
-        'access-control-allow-headers': [allowHeaders.join(', ')],
+        // A specific echoed origin makes the response vary by Origin; the
+        // wildcard is origin-independent and needs no Vary.
+        if (!wildcard) 'vary': const ['Origin'],
+        if (allowCredentials)
+          'access-control-allow-credentials': const ['true'],
       },
     };
-    if (c.method == 'OPTIONS') {
-      return Response(204, headers: corsHeaders);
+
+    final isPreflight =
+        c.method == 'OPTIONS' &&
+        c.header('access-control-request-method') != null;
+    if (isPreflight) {
+      return Response(
+        204,
+        headers: {
+          ...base,
+          if (allowed) ...{
+            'access-control-allow-methods': [allowMethods.join(', ')],
+            'access-control-allow-headers': [allowHeaders.join(', ')],
+            if (maxAge != null)
+              'access-control-max-age': ['${maxAge.inSeconds}'],
+          },
+        },
+      );
     }
-    return chain(
-      next(c),
-      (Response r) => Response(
-        r.status,
-        headers: {...r.headers, ...corsHeaders},
-        body: r.body,
-      ),
-    );
+
+    return chain(next(c), (Response r) {
+      // Merge onto the handler's headers, unioning Vary so a downstream
+      // `Vary` (gzip's Accept-Encoding, etc.) is preserved rather than clobbered.
+      final merged = {...r.headers};
+      base.forEach((name, values) {
+        if (name == 'vary' && merged['vary'] != null) {
+          merged['vary'] = [...merged['vary']!, ...values];
+        } else {
+          merged[name] = values;
+        }
+      });
+      if (allowed && exposeHeaders.isNotEmpty) {
+        merged['access-control-expose-headers'] = [exposeHeaders.join(', ')];
+      }
+      return Response(r.status, headers: merged, body: r.body);
+    });
   };
 }
 

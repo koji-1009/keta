@@ -370,21 +370,29 @@ void main() {
       app.get('/x', (c) => c.text('ok'));
       final client = TestClient(app, newEnv());
 
+      // An actual response carries the allowed origin; the method/header lists
+      // are preflight-only (they have no meaning on a non-preflight response).
       final r = await client.get(
         '/x',
         headers: {'origin': 'https://any.example'},
       );
       expect(r.headers['access-control-allow-origin'], '*');
-      expect(r.headers['access-control-allow-methods'], 'GET, PUT');
-      expect(r.headers['access-control-allow-headers'], 'x-custom');
+      expect(r.headers.containsKey('access-control-allow-methods'), isFalse);
 
       // The wildcard short-circuits, so even a request with no Origin is allowed.
       final noOrigin = await client.get('/x');
       expect(noOrigin.headers['access-control-allow-origin'], '*');
 
-      final pre = await client.options('/x');
+      // A real preflight (OPTIONS + access-control-request-method) gets 204 and
+      // the custom method/header lists.
+      final pre = await client.options(
+        '/x',
+        headers: {'access-control-request-method': 'PUT'},
+      );
       expect(pre.status, 204);
       expect(pre.headers['access-control-allow-origin'], '*');
+      expect(pre.headers['access-control-allow-methods'], 'GET, PUT');
+      expect(pre.headers['access-control-allow-headers'], 'x-custom');
     });
   });
 

@@ -453,7 +453,7 @@ class Router<E> {
   FutureOr<Response> dispatch(TransportRequest request) {
     final segments = _decodedSegments(request.uri);
     final captured = <String>[];
-    final (compiled, pathMatched) = _walk(
+    final (compiled, allowed) = _walk(
       _root,
       segments,
       0,
@@ -483,7 +483,9 @@ class Router<E> {
           )
           ..matched = compiled?.handler
           ..matchedDoc = compiled?.doc
-          ..pathMatched = pathMatched;
+          ..matchedTemplate = compiled?.template
+          ..pathMatched = allowed != null
+          ..allowedMethods = allowed == null ? const [] : allowed.toList();
     final c = Context<E>(ctx);
     // Client-disconnect → cooperative cancellation. abort() is idempotent, so a
     // later timeout (or vice versa) is harmless; a never-completing `closed`
@@ -494,12 +496,21 @@ class Router<E> {
 
   /// The innermost handler: the matched route, or the 404/405 response.
   FutureOr<Response> _terminal(Context<E> c) {
-    final handler = ctxOf(c).matched;
+    final raw = ctxOf(c);
+    final handler = raw.matched;
     if (handler != null) return handler(c);
-    final pathMatched = ctxOf(c).pathMatched;
-    return Response.json({
-      'error': pathMatched ? 'method not allowed' : 'not found',
-    }, status: pathMatched ? 405 : 404);
+    if (raw.pathMatched) {
+      // RFC 9110 §15.5.6: a 405 must advertise the methods the target path
+      // does support, so the client need not probe for them.
+      return Response.json(
+        {'error': 'method not allowed'},
+        status: 405,
+        headers: {
+          'allow': [raw.allowedMethods.join(', ')],
+        },
+      );
+    }
+    return Response.json({'error': 'not found'}, status: 404);
   }
 
   /// The last-resort fallback, always applied: `KetaException` maps to its
@@ -521,9 +532,12 @@ class Router<E> {
 
 /// Depth-first match, literal before capture, with backtracking so a failed
 /// literal branch still lets a capture branch match. Returns the compiled route
-/// (or null) and whether any route shares this path (to distinguish 405 from
-/// 404).
-(_Compiled<E>?, bool) _walk<E>(
+/// (or null) and the set of methods registered on any route sharing this path
+/// (null when no route shares it — the 404/405 discriminator, and the source of
+/// the 405 `Allow` header). The set is a union: a literal and a capture branch
+/// can both terminate on the request path, so their methods together describe
+/// what the target path supports.
+(_Compiled<E>?, Set<String>?) _walk<E>(
   _TrieNode<E> node,
   List<String> segments,
   int i,
@@ -531,25 +545,26 @@ class Router<E> {
   List<String> captured,
 ) {
   if (i == segments.length) {
-    return (node.methods[method], node.methods.isNotEmpty);
+    if (node.methods.isEmpty) return (null, null);
+    return (node.methods[method], node.methods.keys.toSet());
   }
   final seg = segments[i];
-  var pathMatched = false;
+  Set<String>? allowed;
   final literal = node.literals[seg];
   if (literal != null) {
-    final (route, matched) = _walk(literal, segments, i + 1, method, captured);
-    if (route != null) return (route, true);
-    pathMatched = pathMatched || matched;
+    final (route, methods) = _walk(literal, segments, i + 1, method, captured);
+    if (route != null) return (route, methods);
+    if (methods != null) allowed = {...?allowed, ...methods};
   }
   final capture = node.capture;
   if (capture != null) {
     captured.add(seg);
-    final (route, matched) = _walk(capture, segments, i + 1, method, captured);
-    if (route != null) return (route, true);
+    final (route, methods) = _walk(capture, segments, i + 1, method, captured);
+    if (route != null) return (route, methods);
     captured.removeLast();
-    pathMatched = pathMatched || matched;
+    if (methods != null) allowed = {...?allowed, ...methods};
   }
-  return (null, pathMatched);
+  return (null, allowed);
 }
 
 /// Matchable path segments, percent-decoded, with empty segments dropped so a
