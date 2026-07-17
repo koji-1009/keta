@@ -61,18 +61,23 @@ class _H1Server implements TransportServer {
   }
 
   Future<void> _handle(HttpRequest request) async {
+    final wrapped = _H1Request(request);
     Response response;
     try {
-      response = await _onRequest(_H1Request(request));
+      response = await _onRequest(wrapped);
     } catch (error, stack) {
       // The app applies a last-resort fallback, so this is defensive only.
       _onError(error, stack);
       response = Response(500, body: '');
     }
-    await _write(request.response, response);
+    await _write(request.response, wrapped, response);
   }
 
-  Future<void> _write(HttpResponse out, Response response) async {
+  Future<void> _write(
+    HttpResponse out,
+    _H1Request request,
+    Response response,
+  ) async {
     try {
       out.statusCode = response.status;
       response.headers.forEach((name, values) {
@@ -84,20 +89,34 @@ class _H1Server implements TransportServer {
           out.headers.add(name, value);
         }
       });
+      // Before framing the response, sever the connection if the handler left
+      // a declared request body unread — otherwise dart:io would drain an
+      // arbitrarily large upload at close (see [_H1Request.severIfBodyUnread]).
+      request.severIfBodyUnread(out);
       final body = response.body;
       switch (body) {
+        // A known-length body is framed with Content-Length; only a stream,
+        // whose length is unknown up front, falls back to chunked framing
+        // (contentLength left at its -1 sentinel). Framing is the Transport's
+        // responsibility, so this is computed here, not carried on Response.
         case String():
-          out.add(utf8.encode(body));
+          final bytes = utf8.encode(body);
+          out.contentLength = bytes.length;
+          out.add(bytes);
         case List<int>():
+          out.contentLength = body.length;
           out.add(body);
         case Stream<List<int>>():
           await out.addStream(body);
       }
       await out.close();
     } catch (error, stack) {
-      // Header/framing errors and mid-stream body failures land here. Log
-      // rather than swallow, and destroy the connection so a partially-written
-      // body is never framed as a complete response.
+      // Header/framing errors and mid-stream body failures land here. When a
+      // stream body throws mid-write, dart:io has already marked the outgoing
+      // as errored: close() then emits no terminating chunk and the connection
+      // is destroyed, so the client sees a truncated response rather than one
+      // framed as complete. Log rather than swallow, and still call close() to
+      // release the connection.
       _onError(error, stack);
       try {
         await out.close();
@@ -120,9 +139,20 @@ class _H1Server implements TransportServer {
 
 class _H1Request implements TransportRequest {
   _H1Request(this._request) {
-    // A client dropping the connection surfaces as an error on response.done;
-    // signal cancellation then. A normal completion leaves `closed` pending
-    // (the request finished on its own — nothing to cancel).
+    // Client-disconnect detection is only partial on dart:io's HttpServer:
+    // while a request is handled it pauses the socket's read subscription
+    // (http_impl.dart), so a client that drops the connection *after* the full
+    // request is received and *before* the server writes cannot be observed —
+    // there is no event until the next write attempt. Two signals are wired for
+    // the cases that ARE observable:
+    //  * response.done erroring — a write hitting the dropped socket (this
+    //    reliably fires for streamed/large responses that overflow the socket
+    //    buffer; a small buffered write to a just-closed loopback socket may
+    //    still complete normally, so it is not a guarantee);
+    //  * the request body erroring mid-receive — a client that drops while
+    //    still sending its body (wired in [_trackedBody]).
+    // The residual gap (idle disconnect during a no-write handler) is inherent
+    // to dart:io's HttpServer and documented on `TransportRequest.closed`.
     _request.response.done.then(
       (_) {},
       onError: (Object _) {
@@ -132,6 +162,14 @@ class _H1Request implements TransportRequest {
   }
   final HttpRequest _request;
   final Completer<void> _closed = Completer<void>();
+
+  /// Whether the body stream has been listened to (dart:io latches
+  /// `hasSubscriber` true on the first listen and never clears it).
+  bool _bodyListened = false;
+
+  /// Whether the body stream ran to completion — the whole declared body was
+  /// received.
+  bool _bodyFullyRead = false;
 
   @override
   Future<void> get closed => _closed.future;
@@ -143,7 +181,68 @@ class _H1Request implements TransportRequest {
   Uri get uri => _request.uri;
 
   @override
-  Stream<List<int>> get bodyStream => _request;
+  Stream<List<int>> get bodyStream => _body;
+
+  /// Relays the raw body while recording whether it was fully received, with
+  /// backpressure preserved. A mid-receive error is the client dropping the
+  /// connection, so `closed` completes there too — the disconnect signal that
+  /// dart:io *can* deliver. (An explicit subscription, not `yield*`, because
+  /// `yield*` forwards the inner stream's errors straight past the generator's
+  /// try/catch to the listener, leaving the drop unseen here.)
+  late final Stream<List<int>> _body = _makeBody();
+
+  Stream<List<int>> _makeBody() {
+    final controller = StreamController<List<int>>();
+    controller.onListen = () {
+      _bodyListened = true;
+      final sub = _request.listen(
+        controller.add,
+        onError: (Object e, StackTrace st) {
+          if (!_closed.isCompleted) _closed.complete();
+          controller.addError(e, st);
+        },
+        onDone: () {
+          _bodyFullyRead = true;
+          controller.close();
+        },
+      );
+      controller
+        ..onPause = sub.pause
+        ..onResume = sub.resume
+        ..onCancel = sub.cancel;
+    };
+    return controller.stream;
+  }
+
+  /// Whether the request declares a body worth defending against — a positive
+  /// Content-Length or chunked transfer-encoding.
+  bool get _bodyDeclared =>
+      _request.contentLength > 0 || _request.headers.chunkedTransferEncoding;
+
+  /// Called once the response is framed: if the handler never fully read a
+  /// declared request body, refuse the connection so dart:io does not drain an
+  /// unbounded upload and the dirty connection is not reused for keep-alive.
+  ///
+  /// dart:io auto-drains an unread body of any size at response completion, but
+  /// skips that drain once the body has been listened to even once. So a body
+  /// that was never touched is given a subscriber — paused, so not a byte is
+  /// read — to latch the skip; a partially-read body already latched it.
+  /// Cancelling instead of pausing would let dart:io treat the body as done and
+  /// destroy the connection before the response is flushed, so the subscription
+  /// is held (paused) until the non-persistent connection closes on its own.
+  void severIfBodyUnread(HttpResponse out) {
+    if (!_bodyDeclared || _bodyFullyRead) return;
+    if (!_bodyListened) {
+      // Listen (latching the drain-skip) and immediately pause: never a byte is
+      // read, and the paused subscription stays alive — held by the incoming
+      // stream — until the non-persistent connection closes on its own.
+      // Cancelling instead would let dart:io treat the body as done and destroy
+      // the connection before the response is flushed.
+      // ignore: cancel_subscriptions
+      _request.listen(null, cancelOnError: false).pause();
+    }
+    out.persistentConnection = false;
+  }
 
   @override
   String get remoteAddress =>

@@ -37,6 +37,14 @@ abstract interface class TransportRequest {
   /// `ctx.abort()`, fulfilling the client-disconnect clause of `c.aborted`. A
   /// transport that cannot detect disconnect returns a future that never
   /// completes.
+  ///
+  /// Detection is best-effort and transport-dependent. The bundled H1 transport
+  /// can observe a drop while the client is still sending its body, and a drop
+  /// surfaced as a write error on the response; it cannot observe a drop that
+  /// happens after the full request is received while a no-write handler runs,
+  /// because dart:io's HttpServer pauses the socket's read subscription for the
+  /// duration of request handling. Cooperative cancellation is therefore a
+  /// signal, not a guarantee — a handler must still bound its own work.
   Future<void> get closed;
 }
 

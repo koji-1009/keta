@@ -72,6 +72,57 @@ void main() {
     },
   );
 
+  test(
+    'a truncated stream body is aborted, never framed as complete',
+    () async {
+      // A chunked response is only "complete" once its zero-length terminator
+      // (0\r\n\r\n) arrives. When the body producer throws mid-stream, the
+      // client must instead see the connection torn down with no terminator —
+      // a partial body framed as complete would be silent data corruption.
+      Stream<List<int>> boom() async* {
+        yield List<int>.filled(20000, 104); // large enough to flush to the wire
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        throw StateError('boom');
+      }
+
+      final app = App<Env>()..use(recover());
+      app.get('/throw', (c) => Response(200, body: boom()));
+      final server = await app.serve(boot, port: 8096);
+
+      final socket = await Socket.connect(InternetAddress.loopbackIPv4, 8096);
+      socket.write('GET /throw HTTP/1.1\r\nHost: x\r\n\r\n');
+      await socket.flush();
+      final received = <int>[];
+      final closed = Completer<void>();
+      socket.listen(
+        received.addAll,
+        onError: (_) {
+          if (!closed.isCompleted) closed.complete();
+        },
+        onDone: () {
+          if (!closed.isCompleted) closed.complete();
+        },
+      );
+
+      var hung = false;
+      await closed.future.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => hung = true,
+      );
+      final text = String.fromCharCodes(received);
+
+      expect(hung, isFalse, reason: 'the connection must be torn down');
+      expect(
+        text.endsWith('0\r\n\r\n'),
+        isFalse,
+        reason: 'no clean chunked terminator on a truncated body',
+      );
+
+      socket.destroy();
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    },
+  );
+
   test('shutdown completes despite a hung handler (force-close)', () async {
     final app = App<Env>();
     app.get('/hang', (c) => Completer<Response>().future); // never completes
