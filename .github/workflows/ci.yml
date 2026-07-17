@@ -21,7 +21,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      KETA_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres
+      # package:postgres defaults to attempting SSL; the stock postgres:16
+      # service container has it off, so connecting would fail without this.
+      KETA_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
