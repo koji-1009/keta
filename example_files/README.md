@@ -4,9 +4,19 @@ The same app as [`../example`](../example), registered by **file convention**
 (keta_files) instead of one central `register()`. Each file under `lib/routes/`
 exposes `register(app)`; `dart run keta_files:sync` materializes their imports
 and calls into the marked regions of `lib/routes.dart`. Everything else — the
-domain, the middleware stack, the routes — matches the register-based example,
-so the two emit **byte-identical OpenAPI**. Only the registration mechanism
-differs.
+domain, the middleware stack, the routes, the security declarations — matches
+the register-based example, so the two emit **byte-identical OpenAPI**.
+
+One thing does *not* match: how `/admin/ping`'s authorization is wired.
+`../example` scopes a `requireAdmin()` middleware over the whole `/admin`
+subtree with `app.group('/admin').use(requireAdmin())`. keta_files has no
+equivalent — `Exported.bind` always registers a file's handlers straight onto
+the one flat `App<E>` that `register(app)` receives (there is no per-file or
+per-subtree group to hang middleware on), and the manifest that calls `bind`
+is generated, not hand-editable. So `routes/admin/ping.dart` inlines the same
+check (`c.tryGet(principal)` / `Forbidden`) in its handler instead of via
+middleware — the same authorization outcome, reached without a group-scoping
+mechanism that the file-convention has no surface for.
 
 ## Run
 
