@@ -3,6 +3,7 @@
 library;
 
 export 'src/metrics.dart' show MetricsRegistry;
-export 'src/middleware.dart' show otel, metricsHandler;
+export 'src/middleware.dart'
+    show otel, metricsHandler, OtelSpanContext, otelSpanKey;
 export 'src/otlp.dart' show OtlpExporter, OtlpSender, OtlpWarn, encodeOtlp;
 export 'src/span.dart' show OtelSpan, SpanStatus;

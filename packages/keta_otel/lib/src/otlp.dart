@@ -103,6 +103,8 @@ class OtlpExporter implements Disposable {
     String serviceName = 'keta',
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 10),
+    int maxRetries = defaultMaxRetries,
+    Duration retryBackoff = defaultRetryBackoff,
     int maxQueueSize = defaultMaxQueueSize,
     int maxBatchSize = defaultMaxBatchSize,
     Duration exportInterval = defaultExportInterval,
@@ -110,18 +112,23 @@ class OtlpExporter implements Disposable {
   }) {
     final client = HttpClient();
 
+    // One POST attempt, guarded by [timeout]. Returns the delay to wait before
+    // retrying when the collector answered with a *retryable* status (429/503)
+    // — honoring its `Retry-After` (delta-seconds) when present, else
+    // [retryBackoff]; returns null on a 2xx success; throws on a terminal
+    // failure (any other non-2xx, or a transport/timeout error).
+    //
     // `Future.timeout` on its own only abandons the *Future*: the collector
     // side's socket stays ESTABLISHED forever because nothing ever tells the
-    // underlying HttpClientRequest to stop waiting for a response. `post`
-    // keeps a handle to the in-flight request so a timeout can `abort()` it
-    // — which is what actually tears down the socket — in addition to
-    // surfacing the same TimeoutException a bare `.timeout()` would. The
-    // original `pending` future is `ignore()`d once aborted: `abort()`
-    // completes it with an error asynchronously, after the returned future
-    // has already completed via `onTimeout`, so nothing is left to observe
-    // it — without `ignore()` that would surface as an unhandled async
-    // error.
-    Future<void> post(String payload) {
+    // underlying HttpClientRequest to stop waiting for a response. This keeps a
+    // handle to the in-flight request so a timeout can `abort()` it — which is
+    // what actually tears down the socket — in addition to surfacing the same
+    // TimeoutException a bare `.timeout()` would. The original `pending` future
+    // is `ignore()`d once aborted: `abort()` completes it with an error
+    // asynchronously, after the returned future has already completed via
+    // `onTimeout`, so nothing is left to observe it — without `ignore()` that
+    // would surface as an unhandled async error.
+    Future<Duration?> attempt(String payload) {
       HttpClientRequest? request;
       final pending = () async {
         request = await client.postUrl(endpoint);
@@ -129,12 +136,18 @@ class OtlpExporter implements Disposable {
         headers.forEach(request!.headers.set);
         request!.add(utf8.encode(payload));
         final response = await request!.close();
+        final retryAfter = response.headers.value('retry-after');
         await response.drain<void>();
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw HttpException(
-            'OTLP export rejected: HTTP ${response.statusCode}',
-          );
+        final status = response.statusCode;
+        if (status >= 200 && status < 300) return null;
+        // 429 (Too Many Requests) and 503 (Service Unavailable) are the
+        // collector saying "not now" — retryable. Every other non-2xx (a 4xx
+        // config/auth error, a 500) is terminal: re-POSTing the same body just
+        // earns the same rejection, so it fails the batch immediately.
+        if (status == 429 || status == 503) {
+          return _retryDelay(retryAfter, retryBackoff);
         }
+        throw HttpException('OTLP export rejected: HTTP $status');
       }();
       return pending.timeout(
         timeout,
@@ -144,6 +157,36 @@ class OtlpExporter implements Disposable {
           throw TimeoutException('OTLP export timed out after $timeout');
         },
       );
+    }
+
+    // Bounded retry loop: at most [maxRetries] retries after the first attempt,
+    // so a collector that is briefly overloaded (429) or restarting (503) does
+    // not cost the batch, while a persistently-unavailable one still gives up
+    // after a fixed number of tries rather than retrying forever.
+    //
+    // Retrying happens *here*, inside the single send — the batch is not
+    // re-queued at the front. That is the bounded-memory choice: a retrying
+    // batch holds only its own (<= maxBatchSize) spans for the duration of its
+    // bounded attempts, and because `_drainNextBatch` tracks this future
+    // without awaiting it, the periodic timer keeps draining *newer* batches
+    // from the queue meanwhile — a stuck collector delays only its own batch,
+    // never the ones behind it, and the queue stays capped at maxQueueSize with
+    // drop-oldest regardless. Re-queuing at the front would instead let one
+    // unlucky batch head-of-line-block every newer span behind it.
+    Future<void> post(String payload) async {
+      for (var remaining = maxRetries; ; remaining--) {
+        final delay = await attempt(payload);
+        if (delay == null) return; // 2xx: sent.
+        if (remaining == 0) {
+          // Out of retries: surface the same failure shape any other rejected
+          // send has, so `_drainNextBatch` counts the batch as dropped and
+          // folds it into the deferred drop report.
+          throw HttpException(
+            'OTLP export still retryable after ${maxRetries + 1} attempts',
+          );
+        }
+        await Future<void>.delayed(delay);
+      }
     }
 
     return OtlpExporter._(
@@ -165,6 +208,15 @@ class OtlpExporter implements Disposable {
 
   /// Mirrors OTel's BatchSpanProcessor `scheduledDelayMillis` default.
   static const Duration defaultExportInterval = Duration(seconds: 5);
+
+  /// Retries after the first attempt for a retryable (429/503) response — three
+  /// total tries. Bounded so a persistently-down collector gives up rather than
+  /// retrying a doomed batch forever.
+  static const int defaultMaxRetries = 2;
+
+  /// The backoff between retryable attempts when the collector sends no
+  /// `Retry-After` to override it.
+  static const Duration defaultRetryBackoff = Duration(milliseconds: 500);
 
   final OtlpSender _send;
   final String serviceName;
@@ -297,6 +349,19 @@ class OtlpExporter implements Disposable {
     _timer?.cancel();
     _releaseResources?.call();
   }
+}
+
+/// The delay to wait before a retryable re-POST: the collector's `Retry-After`
+/// when it is a non-negative delta-seconds count, else [fallback].
+///
+/// Only the numeric delta-seconds form (RFC 9110 §10.2.3) is honored, not the
+/// HTTP-date form: a collector throttling a client uses seconds in practice, and
+/// a bogus or date value simply falls back to the fixed backoff rather than
+/// failing the send.
+Duration _retryDelay(String? retryAfter, Duration fallback) {
+  final seconds = retryAfter == null ? null : int.tryParse(retryAfter.trim());
+  if (seconds != null && seconds >= 0) return Duration(seconds: seconds);
+  return fallback;
 }
 
 /// Encodes [spans] into an OTLP/JSON `ExportTraceServiceRequest` body.

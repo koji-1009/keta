@@ -118,7 +118,7 @@ void main() {
         'keta_requests_total{method="GET",route="/users/:id",status="200"} 2',
       ),
     );
-    expect(body, contains('keta_request_duration_ms_sum{method="GET"'));
+    expect(body, contains('keta_request_duration_seconds_sum{method="GET"'));
   });
 
   test('encodeOtlp carries the service name', () {
@@ -179,6 +179,85 @@ void main() {
         },
       );
     }
+  });
+
+  group('otelSpanKey exposure', () {
+    test(
+      'otel exposes the current trace identity to the handler, continuing a '
+      'valid incoming traceparent',
+      () async {
+        final captured = <String>[];
+        final exporter = OtlpExporter((p) async => captured.add(p));
+        addTearDown(exporter.close);
+        OtelSpanContext? seen;
+        final app = App<Env>()..use(otel(exporter: exporter));
+        app.get('/x', (c) {
+          seen = c.get(otelSpanKey);
+          return c.text('ok');
+        });
+
+        await TestClient(app, Env()).get(
+          '/x',
+          headers: {
+            'traceparent':
+                '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+          },
+        );
+        await exporter.flush();
+
+        // The handler saw the trace identity: the traceId continues the
+        // incoming header (core's hardened parse accepted it), and the spanId
+        // is the fresh 16-hex id otel minted — not any value the header carried.
+        expect(seen, isNotNull);
+        expect(seen!.traceId, '0af7651916cd43dd8448eb211c80319c');
+        expect(seen!.spanId, matches(RegExp(r'^[0-9a-f]{16}$')));
+
+        // The very ids the handler read are the ones on the exported span, so a
+        // handler that logged them can be correlated with the span downstream.
+        final span = _firstSpan(captured);
+        expect(span['traceId'], seen!.traceId);
+        expect(span['spanId'], seen!.spanId);
+      },
+    );
+
+    test('a root request exposes a minted traceId and spanId', () async {
+      OtelSpanContext? seen;
+      final app = App<Env>()..use(otel());
+      app.get('/x', (c) {
+        seen = c.get(otelSpanKey);
+        return c.text('ok');
+      });
+      await TestClient(app, Env()).get('/x');
+
+      expect(seen, isNotNull);
+      expect(seen!.traceId, matches(RegExp(r'^[0-9a-f]{32}$')));
+      expect(seen!.spanId, matches(RegExp(r'^[0-9a-f]{16}$')));
+    });
+  });
+
+  group('/metrics exposition', () {
+    test('metricsHandler serves the Prometheus text content-type', () async {
+      final metrics = MetricsRegistry();
+      final app = App<Env>()..use(otel(metrics: metrics));
+      app.get('/x', (c) => c.text('ok'));
+      app.get('/metrics', metricsHandler(metrics));
+      final client = TestClient(app, Env());
+
+      await client.get('/x');
+      final res = await client.get('/metrics');
+
+      expect(
+        res.headers['content-type'],
+        'text/plain; version=0.0.4; charset=utf-8',
+      );
+      // Conformance-renamed families: a seconds-unit summary, no `_ms` name.
+      expect(res.text(), contains('# TYPE keta_request_duration_seconds summary'));
+      expect(
+        res.text(),
+        contains('keta_request_duration_seconds_sum{method="GET"'),
+      );
+      expect(res.text(), isNot(contains('keta_request_duration_ms')));
+    });
   });
 
   group('span status', () {
@@ -395,9 +474,11 @@ void main() {
         ),
       );
       expect(body, isNot(contains('BOGUS-')));
-      // Exactly one series for the (other) label, not one per bogus verb:
-      // one line in the count metric, one in the duration-sum metric.
-      expect('(other)'.allMatches(body).length, 2);
+      // Exactly one series for the (other) label, not one per bogus verb. Three
+      // lines now carry it, not two: keta_requests_total, plus the duration
+      // summary's `_sum` and its `_count` (the conformance rename added the
+      // summary's own count line alongside the sum).
+      expect('(other)'.allMatches(body).length, 3);
     });
 
     test(
@@ -474,7 +555,7 @@ void main() {
       await TestClient(app, Env()).get('/x');
 
       final match = RegExp(
-        r'keta_request_duration_ms_sum\{method="GET",route="/x",'
+        r'keta_request_duration_seconds_sum\{method="GET",route="/x",'
         r'status="200"\} (\S+)',
       ).firstMatch(metrics.prometheus());
       expect(match, isNotNull);

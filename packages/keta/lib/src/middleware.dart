@@ -388,16 +388,66 @@ class TraceContext {
   final String parentId;
   final int flags;
 
-  /// Parses `version-traceId-parentId-flags`, returning null if malformed.
+  /// Parses `version-traceId-parentId-flags` (W3C Trace Context §3.2), returning
+  /// null on *any* violation so the caller treats a bad header as absent — never
+  /// as an error. A garbage header must never surface as a 500; and since
+  /// batching landed, a single malformed id that slipped through into an OTLP
+  /// batch is enough for a strict collector to reject the whole batch, not just
+  /// the one span, so this is deliberately strict rather than best-effort.
+  ///
+  /// Every field is enforced, not just the two lengths the old code checked:
+  /// - version, traceId, parentId must be *lowercase* hex of their exact widths
+  ///   (2/32/16) — the header is defined in lowercase, and echoing a mixed-case
+  ///   or non-hex id (e.g. 32 `g`s) back downstream is exactly what a collector
+  ///   rejects;
+  /// - the all-zero traceId and all-zero parentId are the spec's reserved
+  ///   "invalid" sentinels (§3.2.2.3), a present-but-meaningless id — rejected;
+  /// - version `ff` is reserved/forbidden — rejected;
+  /// - flags is exactly two hex digits. A bare `int.tryParse(radix: 16)` admits
+  ///   a signed `-5` and a lone-digit `-5`-style width, none of which is a valid
+  ///   8-bit flags octet, so the width/charset is checked before the parse.
   static TraceContext? parse(String header) {
     final parts = header.split('-');
     if (parts.length != 4) return null;
+    final version = parts[0];
     final traceId = parts[1];
     final parentId = parts[2];
-    if (traceId.length != 32 || parentId.length != 16) return null;
-    final flags = int.tryParse(parts[3], radix: 16);
-    if (flags == null) return null;
-    return TraceContext(traceId, parentId, flags);
+    final flagsHex = parts[3];
+    // Version `ff` is reserved (a valid parser must reject it); every other
+    // two-digit lowercase-hex version is accepted.
+    if (!_isLowerHex(version, 2) || version == 'ff') return null;
+    // traceId / parentId: exact-width lowercase hex, and never the reserved
+    // all-zero sentinel that means "invalid id present".
+    if (!_isLowerHex(traceId, 32) || _isAllZero(traceId)) return null;
+    if (!_isLowerHex(parentId, 16) || _isAllZero(parentId)) return null;
+    if (!_isLowerHex(flagsHex, 2)) return null;
+    // Width and charset already verified above, so this parse cannot fail and
+    // cannot be negative — exactly the two-hex-digit octet the spec defines.
+    return TraceContext(traceId, parentId, int.parse(flagsHex, radix: 16));
+  }
+
+  /// True when [s] is exactly [length] characters, each a *lowercase* hex digit
+  /// (`0`-`9` / `a`-`f`). Uppercase is intentionally rejected: the traceparent
+  /// grammar is lowercase-only, and being lenient here would let a mixed-case id
+  /// propagate into an OTLP batch a collector then rejects wholesale.
+  static bool _isLowerHex(String s, int length) {
+    if (s.length != length) return false;
+    for (var i = 0; i < s.length; i++) {
+      final c = s.codeUnitAt(i);
+      final isDigit = c >= 0x30 && c <= 0x39; // 0-9
+      final isLowerAf = c >= 0x61 && c <= 0x66; // a-f
+      if (!isDigit && !isLowerAf) return false;
+    }
+    return true;
+  }
+
+  /// True when every character of [s] is `0` — the reserved all-zero traceId /
+  /// parentId the spec defines as invalid, which a conforming parser rejects.
+  static bool _isAllZero(String s) {
+    for (var i = 0; i < s.length; i++) {
+      if (s.codeUnitAt(i) != 0x30) return false;
+    }
+    return true;
   }
 }
 

@@ -43,6 +43,38 @@ String _foldMethod(String method) {
   return _knownMethods.contains(upper) ? upper : _unknownMethod;
 }
 
+/// The trace identity `otel()` established for the current request, exposed to
+/// handlers under [otelSpanKey].
+///
+/// It carries the two ids a handler needs to correlate its own work with the
+/// server span: the [traceId] — continued from an incoming `traceparent` or
+/// freshly minted for a root request — and the [spanId] this middleware
+/// generated for the span it records. A handler reads these to stamp the same
+/// trace/span into its own log lines, or to build an outbound `traceparent`
+/// (`00-$traceId-$spanId-01`) so a downstream service continues the trace.
+///
+/// This is keta_otel's counterpart to core's `tracing()`/`traceKey`, and the two
+/// answer *different* questions. `tracing()` needs no otel dependency and
+/// exposes the *incoming* context verbatim — the caller's ids from the
+/// `traceparent` header, or nothing when there was none. [OtelSpanContext]
+/// exposes the *current* span: the same traceId, but the span id minted here,
+/// which no incoming header contains and which becomes the parent of anything
+/// this request calls out to. Read `traceKey` for "who called me"; read
+/// [otelSpanKey] for "what span am I".
+class OtelSpanContext {
+  const OtelSpanContext({required this.traceId, required this.spanId});
+
+  /// The 32-hex trace id shared by every span in this trace.
+  final String traceId;
+
+  /// The 16-hex id of the span `otel()` recorded for this request.
+  final String spanId;
+}
+
+/// The key under which [otel] exposes the current request's [OtelSpanContext].
+/// See [OtelSpanContext] for how it relates to core's `traceKey`.
+final Key<OtelSpanContext> otelSpanKey = Key<OtelSpanContext>('otel.span');
+
 /// Records one server span per request and, optionally, request metrics.
 ///
 /// The span continues an incoming `traceparent` when present (otherwise it
@@ -69,6 +101,11 @@ Middleware<E> otel<E>({
     final startNano = _unixNano();
     final watch = Stopwatch()..start();
     final incoming = c.header('traceparent');
+    // One traceparent parser for the whole stack: core's hardened
+    // `TraceContext.parse` (keta is already a dependency), not a second copy
+    // here. It rejects every malformed/uppercase/all-zero/reserved-version
+    // header, so a garbage id can never reach `traceId` below and from there
+    // an OTLP batch a collector would reject wholesale.
     final parent = incoming == null ? null : TraceContext.parse(incoming);
     // Honor the upstream sampling decision: a valid parent whose sampled bit
     // (traceparent flags bit 0) is clear means "not sampled", so this span is
@@ -78,6 +115,12 @@ Middleware<E> otel<E>({
         exportUnsampled || parent == null || (parent.flags & 0x01) != 0;
     final traceId = parent?.traceId ?? _hex(16);
     final spanId = _hex(8);
+    // Expose this request's trace identity to handlers *before* the chain runs,
+    // so a handler can read `c.get(otelSpanKey)` to log the ids or propagate
+    // them outbound. This is the one place that knows both the (possibly
+    // continued) traceId and the span id minted here; core's `tracing()` only
+    // ever sees the incoming header, never this span.
+    c.set(otelSpanKey, OtelSpanContext(traceId: traceId, spanId: spanId));
 
     void finish(int status) {
       watch.stop();
@@ -87,13 +130,13 @@ Middleware<E> otel<E>({
         method: method,
         route: template ?? unmatchedRoute,
         status: status,
-        // Fractional, not `elapsedMilliseconds`: most in-process handlers
-        // finish in well under a millisecond, and `elapsedMilliseconds`
-        // truncates — recording 0 for nearly every fast route and
-        // systematically undercounting `keta_request_duration_ms_sum`.
-        // `elapsedMicroseconds` carries the same resolution the wall-clock
-        // span timestamps below already use, just divided down to ms.
-        durationMs: watch.elapsedMicroseconds / 1000,
+        // Seconds (Prometheus's base time unit), fractional: most in-process
+        // handlers finish in well under a millisecond, so `elapsedMilliseconds`
+        // would truncate to 0 for nearly every fast route and systematically
+        // undercount the duration sum. `elapsedMicroseconds` carries the same
+        // resolution the wall-clock span timestamps below use, divided down to
+        // seconds so `keta_request_duration_seconds_sum` reads in base units.
+        durationSeconds: watch.elapsedMicroseconds / 1e6,
       );
       final export = exporter;
       if (export != null && sampled) {
@@ -139,8 +182,18 @@ Middleware<E> otel<E>({
 
 /// A handler that renders [registry] in Prometheus text format. Mount it at
 /// `/metrics`.
-Handler<E> metricsHandler<E>(MetricsRegistry registry) =>
-    (Context<E> c) => c.text(registry.prometheus());
+///
+/// The content type is the Prometheus text exposition media type
+/// (`text/plain; version=0.0.4; charset=utf-8`), not a bare `text/plain`: the
+/// `version=0.0.4` parameter is how a scraper recognizes the format, and
+/// omitting it leaves some scrapers guessing at the payload.
+Handler<E> metricsHandler<E>(MetricsRegistry registry) => (Context<E> c) =>
+    c.text(
+      registry.prometheus(),
+      headers: {
+        'content-type': const ['text/plain; version=0.0.4; charset=utf-8'],
+      },
+    );
 
 int _unixNano() => DateTime.now().microsecondsSinceEpoch * 1000;
 

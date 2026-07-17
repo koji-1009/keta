@@ -205,4 +205,97 @@ void main() {
       expect(hits, 3);
     },
   );
+
+  test(
+    'a 429 with Retry-After is retried, then the batch succeeds',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final statuses = <int>[];
+      server.listen((req) async {
+        await req.drain<void>();
+        // First attempt is throttled with a Retry-After the client must honor;
+        // the retry lands on 200.
+        if (statuses.isEmpty) {
+          req.response.statusCode = 429;
+          req.response.headers.set('retry-after', '0');
+        } else {
+          req.response.statusCode = 200;
+        }
+        statuses.add(req.response.statusCode);
+        await req.response.close();
+      });
+
+      final exporter = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+        // Zero fallback keeps the test fast; Retry-After: 0 is honored as an
+        // immediate retry either way.
+        retryBackoff: Duration.zero,
+      );
+      addTearDown(exporter.close);
+
+      // export() completing (not throwing) is the whole assertion: a single
+      // attempt would have surfaced the 429 as an HttpException.
+      await exporter.export([
+        OtelSpan(
+          traceId: 'a' * 32,
+          spanId: 'b' * 16,
+          name: 'GET /x',
+          startUnixNano: 1,
+          endUnixNano: 2,
+        ),
+      ]);
+
+      expect(statuses, [429, 200]); // throttled once, then accepted.
+    },
+  );
+
+  test(
+    'a persistent 503 exhausts retries; the dropped batch is reported on the '
+    'next successful export',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      var hits = 0;
+      server.listen((req) async {
+        await req.drain<void>();
+        hits++;
+        // 503 for the first batch's every attempt (1 + maxRetries), then 200
+        // so a later batch succeeds and can surface the deferred drop report.
+        req.response.statusCode = hits <= 3 ? 503 : 200;
+        await req.response.close();
+      });
+
+      final warnings = <MapEntry<String, Map<String, Object?>>>[];
+      final exporter = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+        maxRetries: 2, // 3 attempts total for the doomed batch.
+        retryBackoff: Duration.zero,
+        onWarn: (msg, fields) => warnings.add(MapEntry(msg, fields)),
+      );
+      addTearDown(exporter.close);
+
+      final span = OtelSpan(
+        traceId: 'a' * 32,
+        spanId: 'b' * 16,
+        name: 'GET /x',
+        startUnixNano: 1,
+        endUnixNano: 2,
+      );
+
+      // Batch 1: 3 attempts, all 503 -> exhausted -> dropped (1 span). The drop
+      // is remembered, not reported yet (no successful export to carry it).
+      exporter.enqueue([span]);
+      await exporter.flush();
+      expect(hits, 3);
+      expect(warnings.any((w) => w.key == 'span export failed'), isTrue);
+      expect(warnings.any((w) => w.key == 'OTLP spans dropped'), isFalse);
+
+      // Batch 2 succeeds (4th request 200) and carries the deferred drop count.
+      exporter.enqueue([span]);
+      await exporter.flush();
+      final dropReport = warnings.firstWhere((w) => w.key == 'OTLP spans dropped');
+      expect(dropReport.value['dropped'], 1);
+    },
+  );
 }

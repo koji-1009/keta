@@ -14,27 +14,41 @@ library;
 class MetricsRegistry {
   final Map<_Key, int> _count = {};
   // `double`, not `int`: most in-process handlers finish in well under a
-  // millisecond, and truncating each sample to whole milliseconds before
-  // summing systematically undercounts (often to exactly 0) rather than
-  // just losing sub-ms precision on the total.
-  final Map<_Key, double> _durationMsSum = {};
+  // millisecond, and truncating each sample to whole seconds before summing
+  // would collapse essentially every sample to 0 rather than just losing
+  // sub-unit precision on the total.
+  final Map<_Key, double> _durationSecondsSum = {};
 
   void record({
     required String method,
     required String route,
     required int status,
-    required double durationMs,
+    required double durationSeconds,
   }) {
     final key = _Key(method, route, status);
     _count.update(key, (v) => v + 1, ifAbsent: () => 1);
-    _durationMsSum.update(
+    _durationSecondsSum.update(
       key,
-      (v) => v + durationMs,
-      ifAbsent: () => durationMs,
+      (v) => v + durationSeconds,
+      ifAbsent: () => durationSeconds,
     );
   }
 
   /// The Prometheus text exposition of the collected series.
+  ///
+  /// Two metric families: `keta_requests_total` (a counter) and
+  /// `keta_request_duration_seconds` (a *summary*). The duration was previously
+  /// mis-declared `# TYPE ... counter` on a `_sum`-suffixed, millisecond name —
+  /// two conformance lies at once: `_sum`/`_count` are the reserved suffixes of
+  /// the summary family (never a counter's), and Prometheus convention wants the
+  /// base time unit, seconds. Declaring it a `summary` and emitting the
+  /// `_sum`/`_count` pair in seconds is the conforming shape; a dashboard reads
+  /// mean latency as `rate(..._sum) / rate(..._count)` with no unit fixups.
+  ///
+  /// The summary's `_count` necessarily equals `keta_requests_total` (both count
+  /// requests per series); a summary is required to carry its own `_count`, and
+  /// a scraper reads the two names as independent series, so emitting both is
+  /// correct, not redundant.
   String prometheus() {
     final buffer = StringBuffer()
       ..writeln('# HELP keta_requests_total Total HTTP requests.')
@@ -44,12 +58,14 @@ class MetricsRegistry {
     });
     buffer
       ..writeln(
-        '# HELP keta_request_duration_ms_sum '
-        'Total request duration in milliseconds.',
+        '# HELP keta_request_duration_seconds Request duration in seconds.',
       )
-      ..writeln('# TYPE keta_request_duration_ms_sum counter');
-    _durationMsSum.forEach((key, sum) {
-      buffer.writeln('keta_request_duration_ms_sum${key.labels} $sum');
+      ..writeln('# TYPE keta_request_duration_seconds summary');
+    _durationSecondsSum.forEach((key, sum) {
+      buffer.writeln('keta_request_duration_seconds_sum${key.labels} $sum');
+    });
+    _count.forEach((key, count) {
+      buffer.writeln('keta_request_duration_seconds_count${key.labels} $count');
     });
     return buffer.toString();
   }
