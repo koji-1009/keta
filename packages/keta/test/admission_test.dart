@@ -302,6 +302,26 @@ void main() {
       expect(limiter.inFlight, 0);
     });
 
+    test('releases the slot on a non-KetaException throw too (no leak) — the '
+        'release path covers success, KetaException, OR any other error', () {
+      final limiter = ConcurrencyLimiter<Env>(maxInFlight: 1);
+      final mw = limiter.middleware;
+
+      expect(
+        () => mw(testContext(newEnv()), (_) => throw StateError('boom')),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        limiter.inFlight,
+        0,
+        reason: 'a plain (non-KetaException) error still frees its slot',
+      );
+
+      // The freed slot admits the next request.
+      final ok = mw(testContext(newEnv()), (_) => Response.text('ok'));
+      expect((ok as Response).status, 200);
+    });
+
     test('a streaming response releases its slot when produced, not when the '
         'stream ends', () async {
       final limiter = ConcurrencyLimiter<Env>(maxInFlight: 1);
@@ -349,6 +369,34 @@ void main() {
       final shed = await client.get('/slow'); // over cap → 503
       expect(shed.status, 503);
       expect(shed.json(), {'error': 'server at capacity'});
+
+      gate.complete();
+      expect((await first).status, 200);
+    });
+
+    test('the shed 503 carries no Retry-After — contrast rateLimit\'s 429, '
+        'whose refill time is knowable', () async {
+      final limiter = ConcurrencyLimiter<Env>(maxInFlight: 1);
+      final mw = limiter.middleware;
+      final gate = Completer<void>();
+
+      final first = Future.value(
+        mw(testContext(newEnv()), (_) async {
+          await gate.future;
+          return Response.text('ok');
+        }),
+      );
+      await pumpEventQueue();
+
+      final shed = await Future.value(
+        mw(testContext(newEnv()), (_) => Response.text('never')),
+      );
+      expect(shed.status, 503);
+      expect(
+        shed.headers.containsKey('retry-after'),
+        isFalse,
+        reason: 'a free-slot time is unknowable, so no header is emitted',
+      );
 
       gate.complete();
       expect((await first).status, 200);

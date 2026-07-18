@@ -1,7 +1,9 @@
 /// Owns WebSocket upgrade end-to-end over H1 and in-process TestClient: the
 /// handshake and echo/close lifecycle, the security gate and 426 refusals,
 /// graceful shutdown of open sockets, the watch-only drop-not-buffer channel,
-/// and an upgrade response surviving a middleware rebuild.
+/// an upgrade response surviving a middleware rebuild, and the maxIdle/
+/// maxLifetime lifetime bounds (construction validation, firing on a real
+/// socket, and the expiry-vs-client-close race).
 @TestOn('vm')
 library;
 
@@ -785,5 +787,33 @@ void main() {
         expect(handlerDone.isCompleted, isTrue);
       },
     );
+
+    test('no double teardown when a lifetime expiry races a client-initiated '
+        'close', () async {
+      final handlerDone = Completer<void>();
+      final app = App<Env>();
+      app.get(
+        '/race-ws-life',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {});
+          channel.done.then((_) {
+            if (!handlerDone.isCompleted) handlerDone.complete();
+          });
+        }, maxLifetime: const Duration(milliseconds: 30)),
+      );
+      final client = TestClient(app, await boot());
+
+      final up = await client.connect('/race-ws-life');
+      // Close from the client right around when maxLifetime is also due to
+      // fire — a race between the two teardown triggers.
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await up.socket!.close();
+
+      await handlerDone.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => fail('channel.done never fired after the race'),
+      );
+      expect(handlerDone.isCompleted, isTrue);
+    });
   });
 }
