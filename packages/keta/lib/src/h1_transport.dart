@@ -155,7 +155,7 @@ class _H1Server implements TransportServer {
     // throw from it is a handler defect — report it and close the socket so a
     // half-initialized connection does not linger.
     unawaited(
-      Future.sync(() => upgrade.onConnected(channel)).then(
+      Future.sync(() => realizeUpgrade(upgrade, channel)).then(
         (_) {},
         onError: (Object error, StackTrace stack) {
           _onError(error, stack);

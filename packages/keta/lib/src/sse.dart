@@ -146,28 +146,76 @@ extension SseResponses<E> on Context<E> {
   /// caller did not ask for. When null, no timer is ever created — nothing can
   /// pin the isolate.
   ///
-  /// Lifecycle: the [events] subscription and the keep-alive timer are torn
-  /// down when the stream completes, errors, the client disconnects (the
-  /// transport cancels the body subscription on a failed write), or the request
-  /// aborts ([aborted]) — whichever comes first. None outlives the response.
+  /// [maxIdle] and [maxLifetime] are opt-in lifetime bounds (E-21a): `timeout()`
+  /// only bounds time-to-*first*-byte, so once a stream starts, a long-lived SSE
+  /// connection otherwise has no self-defense against a dead or abandoned peer.
+  /// Both are null (no bound, current behavior unchanged) by default, for the
+  /// same reason [keepAlive] is — keta never starts a timer the caller did not
+  /// ask for.
+  ///
+  /// [maxIdle] fires when no *application* event (one delivered from [events])
+  /// has gone out for that long. A `keepAlive` comment deliberately does NOT
+  /// reset this clock: it is server-originated filler, not evidence the app is
+  /// still producing, so if it did reset the clock, `maxIdle` could never fire
+  /// on exactly the case it exists to catch — an app that has stopped feeding
+  /// the stream while the connection is nominally still open. The two options
+  /// compose rather than conflict: `keepAlive` stops an intermediary from
+  /// killing a quiet-but-alive stream; `maxIdle` reaps a stream the app itself
+  /// has abandoned.
+  ///
+  /// [maxLifetime] is an absolute cap measured from when the response starts
+  /// streaming, regardless of activity — it fires even if events (or
+  /// keep-alives) are still flowing right up to the deadline.
+  ///
+  /// Either duration, if given, must be positive; a non-positive [maxIdle] or
+  /// [maxLifetime] is an authoring defect and throws [ArgumentError]
+  /// immediately, the same posture [SseEvent]'s constructor takes for a
+  /// malformed field.
+  ///
+  /// On expiry (either bound), the stream ends through the exact same path a
+  /// client disconnect or server shutdown already uses: the body controller is
+  /// closed normally, so the chunked response ends on a clean boundary (never
+  /// mid-event) and the source subscription is torn down via the controller's
+  /// single `onCancel` seam — there is no separate expiry-teardown code path to
+  /// fall out of sync with that one.
+  ///
+  /// Lifecycle: the [events] subscription and every timer ([keepAlive],
+  /// [maxIdle], [maxLifetime]) are torn down when the stream completes, errors,
+  /// the client disconnects (the transport cancels the body subscription on a
+  /// failed write), the request aborts ([aborted]), or a bound expires —
+  /// whichever comes first. None outlives the response.
   Response sse(
     Stream<SseEvent> events, {
     Duration? keepAlive,
+    Duration? maxIdle,
+    Duration? maxLifetime,
     Map<String, List<String>>? headers,
-  }) => Response(
-    200,
-    headers: {
-      'content-type': const ['text/event-stream; charset=utf-8'],
-      'cache-control': const ['no-cache'],
-      ...?headers,
-    },
-    body: _sseBody(events, keepAlive, aborted),
-  );
+  }) {
+    if (maxIdle != null && maxIdle <= Duration.zero) {
+      throw ArgumentError.value(maxIdle, 'maxIdle', 'maxIdle must be positive');
+    }
+    if (maxLifetime != null && maxLifetime <= Duration.zero) {
+      throw ArgumentError.value(
+        maxLifetime,
+        'maxLifetime',
+        'maxLifetime must be positive',
+      );
+    }
+    return Response(
+      200,
+      headers: {
+        'content-type': const ['text/event-stream; charset=utf-8'],
+        'cache-control': const ['no-cache'],
+        ...?headers,
+      },
+      body: _sseBody(events, keepAlive, maxIdle, maxLifetime, aborted),
+    );
+  }
 }
 
 /// Wraps [events] into the byte stream the transport writes, owning the
-/// keep-alive timer and guaranteeing teardown of both it and the source
-/// subscription.
+/// keep-alive, [maxIdle], and [maxLifetime] timers and guaranteeing teardown of
+/// all three and the source subscription.
 ///
 /// A [StreamController] with explicit `onCancel`, not an `async*` generator:
 /// only the controller gives a single, deterministic cleanup point that fires
@@ -179,52 +227,87 @@ extension SseResponses<E> on Context<E> {
 Stream<List<int>> _sseBody(
   Stream<SseEvent> events,
   Duration? keepAlive,
+  Duration? maxIdle,
+  Duration? maxLifetime,
   Future<void> aborted,
 ) {
   late final StreamController<List<int>> controller;
   StreamSubscription<SseEvent>? sub;
-  Timer? timer;
+  Timer? keepAliveTimer;
+  Timer? idleTimer;
+  Timer? lifetimeTimer;
 
-  void cancelTimer() {
-    timer?.cancel();
-    timer = null;
+  // THE single close path for every form of stream end — normal completion,
+  // source error, client disconnect/abort/shutdown, and now a `maxIdle` or
+  // `maxLifetime` expiry: they all just close the controller normally. That
+  // single call is what keeps the chunked response ending on a clean boundary
+  // (a proper terminator, never a mid-event cut) and is also what drives
+  // `onCancel` below (done delivery auto-cancels the listener), so expiry needs
+  // no teardown code of its own — it reuses this exactly like abort already
+  // does. The `isClosed` guard makes it safe to call from more than one place
+  // at once (e.g. `maxIdle` firing the same tick the source also completes).
+  void endStream() {
+    if (!controller.isClosed) controller.close();
   }
 
   // A single-shot timer re-armed after every emission gives precise "no event
-  // for `keepAlive`" semantics: each event resets the idle clock, and a purely
-  // idle stream heartbeats exactly every `keepAlive`.
+  // for `keepAlive`" semantics: each event resets the heartbeat clock, and a
+  // purely idle stream heartbeats exactly every `keepAlive`.
   void armKeepAlive() {
     if (keepAlive == null) return;
-    timer?.cancel();
-    timer = Timer(keepAlive, () {
+    keepAliveTimer?.cancel();
+    keepAliveTimer = Timer(keepAlive, () {
       if (controller.isClosed || controller.isPaused) return;
       controller.add(_keepAliveBytes);
       armKeepAlive();
+      // Deliberately does NOT touch `idleTimer`: a keep-alive comment is
+      // server-originated filler, not an application event, so it must never
+      // reset `maxIdle`'s clock — see the doc on `SseResponses.sse`.
     });
+  }
+
+  // Re-armed only when a real event goes out (never by a keep-alive), so
+  // `maxIdle` measures true application silence.
+  void armIdle() {
+    if (maxIdle == null) return;
+    idleTimer?.cancel();
+    idleTimer = Timer(maxIdle, endStream);
   }
 
   controller = StreamController<List<int>>(
     onListen: () {
       armKeepAlive();
+      armIdle();
+      // A one-shot absolute cap from stream start: never re-armed by activity
+      // (unlike `keepAlive`/`maxIdle`) and never paused/resumed with the
+      // subscription below — it is a wall-clock bound, not an activity one.
+      if (maxLifetime != null) {
+        lifetimeTimer = Timer(maxLifetime, endStream);
+      }
       sub = events.listen(
         (event) {
           if (controller.isClosed) return;
           controller.add(event.encode());
-          armKeepAlive(); // an event just went out — reset the idle clock
+          armKeepAlive();
+          armIdle(); // a real event just went out — reset the idle clock
         },
         onError: (Object e, StackTrace st) {
           // Surface the source error to the transport (which destroys the
           // connection, truncating the response) and stop: no more heartbeats,
           // and close so `onCancel` runs the single teardown path.
-          cancelTimer();
+          keepAliveTimer?.cancel();
+          idleTimer?.cancel();
+          lifetimeTimer?.cancel();
           if (!controller.isClosed) {
             controller.addError(e, st);
             controller.close();
           }
         },
         onDone: () {
-          cancelTimer();
-          if (!controller.isClosed) controller.close();
+          keepAliveTimer?.cancel();
+          idleTimer?.cancel();
+          lifetimeTimer?.cancel();
+          endStream();
         },
       );
       // Cooperative cancellation: a timeout, a client disconnect, or a server
@@ -238,29 +321,36 @@ Stream<List<int>> _sseBody(
       // close. Closing here also triggers `onCancel`, which cancels the source
       // subscription. No extra byte is emitted: the wire ends exactly on the
       // last event the source produced, the invariant the abort tests pin.
-      unawaited(
-        aborted.then((_) {
-          if (!controller.isClosed) controller.close();
-        }),
-      );
+      unawaited(aborted.then((_) => endStream()));
     },
     // THE cleanup seam. Fires on an explicit listener cancel (the transport's
     // failed-write path) and after a normal close (done delivery auto-cancels
-    // the subscription). Idempotent: cancelling a spent subscription is a no-op.
+    // the subscription). Idempotent: cancelling a spent subscription is a
+    // no-op. Cancels every timer — including `lifetimeTimer`, which nothing
+    // else above ever touches — so nothing outlives the connection.
     onCancel: () {
-      cancelTimer();
+      keepAliveTimer?.cancel();
+      idleTimer?.cancel();
+      lifetimeTimer?.cancel();
       return sub?.cancel();
     },
     // Preserve backpressure: when the transport pauses the body, stop pulling
-    // the source and hold off heartbeats; resume both together. A heartbeat
-    // added while paused would defeat the pause, so it waits for the resume.
+    // the source and hold off the keep-alive and idle clocks; resume all three
+    // together. A heartbeat added while paused would defeat the pause, and a
+    // paused stream isn't producing anyway, so pausing must not by itself run
+    // `maxIdle` out — that would punish a slow *reader*, not an idle *app*.
+    // `maxLifetime` is deliberately left running through a pause: it is an
+    // absolute cap "regardless of activity", and backpressure is exactly
+    // activity, just held back.
     onPause: () {
-      cancelTimer();
+      keepAliveTimer?.cancel();
+      idleTimer?.cancel();
       sub?.pause();
     },
     onResume: () {
       sub?.resume();
       armKeepAlive();
+      armIdle();
     },
   );
 

@@ -134,7 +134,7 @@ class TestClient<E> {
     // mirror of the transport closing a socket whose handler blew up.
     unawaited(
       Future.sync(
-        () => upgrade.onConnected(_ServerChannel(link)),
+        () => realizeUpgrade(upgrade, _ServerChannel(link)),
       ).then((_) {}, onError: (Object _) => link._close()),
     );
     return TestUpgrade._(TestSocket._(link), null);

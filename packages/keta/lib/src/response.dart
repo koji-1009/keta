@@ -125,6 +125,12 @@ class Response {
   /// [subprotocol], when given, is the WebSocket subprotocol to negotiate; the
   /// client must have offered it.
   ///
+  /// [maxIdle] and [maxLifetime] are E-21a's opt-in lifetime bounds on the
+  /// switched connection — see [Upgrade.maxIdle] and [Upgrade.maxLifetime] for
+  /// their exact semantics (what resets the idle clock, the close code used on
+  /// expiry). Both null by default: no bound, current behavior unchanged.
+  /// Non-positive values throw [ArgumentError] (an authoring defect).
+  ///
   /// A transport that cannot switch protocols must reject this loudly (the shelf
   /// bridge raises a `StateError`; `TestClient` routes it to an in-process
   /// channel or a rejection). Handshake response headers belong to the
@@ -132,7 +138,17 @@ class Response {
   factory Response.upgrade(
     FutureOr<void> Function(UpgradedChannel channel) onConnected, {
     String? subprotocol,
-  }) => Response(101, upgrade: Upgrade(onConnected, subprotocol: subprotocol));
+    Duration? maxIdle,
+    Duration? maxLifetime,
+  }) => Response(
+    101,
+    upgrade: Upgrade(
+      onConnected,
+      subprotocol: subprotocol,
+      maxIdle: maxIdle,
+      maxLifetime: maxLifetime,
+    ),
+  );
 
   /// Returns a copy with only the named fields replaced; every field left
   /// unnamed — including [upgrade] — is carried over unchanged.

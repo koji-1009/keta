@@ -561,4 +561,229 @@ void main() {
       },
     );
   });
+
+  group('lifetime bounds (E-21a)', () {
+    test('maxIdle and maxLifetime reject non-positive durations', () {
+      expect(
+        () => Response.upgrade((_) {}, maxIdle: Duration.zero),
+        throwsArgumentError,
+      );
+      expect(
+        () =>
+            Response.upgrade((_) {}, maxIdle: const Duration(milliseconds: -1)),
+        throwsArgumentError,
+      );
+      expect(
+        () => Response.upgrade((_) {}, maxLifetime: Duration.zero),
+        throwsArgumentError,
+      );
+      expect(
+        () => Response.upgrade(
+          (_) {},
+          maxLifetime: const Duration(milliseconds: -1),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('without maxIdle/maxLifetime a silent connection stays open '
+        '(defaults-off, unchanged behavior)', () async {
+      final app = App<Env>();
+      app.get(
+        '/ws',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {});
+        }),
+      );
+      final client = TestClient(app, await boot());
+
+      final up = await client.connect('/ws');
+      var doneFired = false;
+      unawaited(up.socket!.done.then((_) => doneFired = true));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        doneFired,
+        isFalse,
+        reason: 'no bound was set, so silence alone must never end it',
+      );
+
+      await up.socket!.close();
+    });
+
+    test('sending frames alone does not reset maxIdle — only inbound traffic '
+        'proves the peer is alive', () async {
+      Timer? pusher;
+      final app = App<Env>();
+      app.get(
+        '/ws',
+        (c) => Response.upgrade((channel) {
+          // Never reads `channel.messages`, only ever sends. If `send()`
+          // reset the idle clock, this would never expire.
+          pusher = Timer.periodic(
+            const Duration(milliseconds: 5),
+            (_) => channel.send('x'),
+          );
+        }, maxIdle: const Duration(milliseconds: 30)),
+      );
+      final client = TestClient(app, await boot());
+
+      final up = await client.connect('/ws');
+      up.socket!.messages.listen((_) {}); // drain, doesn't matter to maxIdle
+      await up.socket!.done.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () =>
+            fail('maxIdle did not fire despite only outbound traffic'),
+      );
+      pusher?.cancel();
+    });
+
+    test(
+      'inbound frames reset maxIdle: an actively-communicating peer is never '
+      'reaped',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/ws',
+          (c) => Response.upgrade((channel) {
+            // Must listen for an inbound frame to count as a reset — a
+            // frame that would be dropped (no subscriber) cannot prove
+            // liveness to a handler that never sees it.
+            channel.messages.listen((_) {});
+          }, maxIdle: const Duration(milliseconds: 40)),
+        );
+        final client = TestClient(app, await boot());
+
+        final up = await client.connect('/ws');
+        var n = 0;
+        final pinger = Timer.periodic(const Duration(milliseconds: 10), (_) {
+          up.socket!.send('ping ${n++}');
+        });
+        var doneFired = false;
+        unawaited(up.socket!.done.then((_) => doneFired = true));
+
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        expect(
+          doneFired,
+          isFalse,
+          reason: 'continuous inbound frames must keep resetting maxIdle',
+        );
+        expect(n, greaterThan(1));
+
+        pinger.cancel();
+        await up.socket!.close();
+      },
+    );
+
+    test('maxLifetime fires despite continuous inbound activity', () async {
+      final app = App<Env>();
+      app.get(
+        '/ws',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {});
+        }, maxLifetime: const Duration(milliseconds: 60)),
+      );
+      final client = TestClient(app, await boot());
+
+      final up = await client.connect('/ws');
+      var n = 0;
+      final pinger = Timer.periodic(const Duration(milliseconds: 10), (_) {
+        up.socket!.send('ping ${n++}');
+      });
+
+      await up.socket!.done.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () =>
+            fail('maxLifetime did not fire despite continuous activity'),
+      );
+      expect(
+        n,
+        greaterThan(1),
+        reason: 'inbound frames were still flowing when the cap fired',
+      );
+      pinger.cancel();
+    });
+
+    test('idle expiry closes a real socket with WebSocket close code 1001 '
+        '(Going Away)', () async {
+      final app = App<Env>();
+      app.get(
+        '/idle-ws',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {});
+        }, maxIdle: const Duration(milliseconds: 60)),
+      );
+      final server = await app.serve(boot, port: 8140);
+
+      final ws = await WebSocket.connect('ws://127.0.0.1:8140/idle-ws');
+      final closed = Completer<void>();
+      ws.listen((_) {}, onDone: () => closed.complete());
+      await closed.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => fail('idle expiry never closed the real socket'),
+      );
+      expect(ws.closeCode, 1001);
+
+      await ws.close();
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    });
+
+    test('lifetime expiry closes a real socket with WebSocket close code 1001 '
+        '(Going Away), despite continuous inbound traffic', () async {
+      final app = App<Env>();
+      app.get(
+        '/life-ws',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {});
+        }, maxLifetime: const Duration(milliseconds: 60)),
+      );
+      final server = await app.serve(boot, port: 8141);
+
+      final ws = await WebSocket.connect('ws://127.0.0.1:8141/life-ws');
+      final pinger = Timer.periodic(
+        const Duration(milliseconds: 10),
+        (_) => ws.add('ping'),
+      );
+      final closed = Completer<void>();
+      ws.listen((_) {}, onDone: () => closed.complete());
+      await closed.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => fail('lifetime expiry never closed the real socket'),
+      );
+      pinger.cancel();
+      expect(ws.closeCode, 1001);
+
+      await ws.close();
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    });
+
+    test(
+      'no double teardown when an idle expiry races a client-initiated close',
+      () async {
+        final handlerDone = Completer<void>();
+        final app = App<Env>();
+        app.get(
+          '/race-ws',
+          (c) => Response.upgrade((channel) {
+            channel.messages.listen((_) {});
+            channel.done.then((_) {
+              if (!handlerDone.isCompleted) handlerDone.complete();
+            });
+          }, maxIdle: const Duration(milliseconds: 30)),
+        );
+        final client = TestClient(app, await boot());
+
+        final up = await client.connect('/race-ws');
+        // Close from the client right around when maxIdle is also due to
+        // fire — a race between the two teardown triggers.
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await up.socket!.close();
+
+        await handlerDone.future.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => fail('channel.done never fired after the race'),
+        );
+        expect(handlerDone.isCompleted, isTrue);
+      },
+    );
+  });
 }
