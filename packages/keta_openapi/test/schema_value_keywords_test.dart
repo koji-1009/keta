@@ -558,17 +558,26 @@ void main() {
       expect(s.validate(big), [ceilingViolation(big.length)]);
     });
 
-    test('an array at the ceiling is still scanned (boundary is inclusive)', () {
-      const s = Schema('Unbounded', {
-        'type': 'array',
-        'items': {'type': 'integer'},
-        'uniqueItems': true,
-      });
-      // Exactly 8192 distinct elements: at the ceiling, so the scan still runs
-      // and finds no collision. Pins that the ceiling is `> ceiling`, not `>=`.
-      final atCeiling = List<Object?>.generate(8192, (i) => i);
-      expect(s.validate(atCeiling), isEmpty);
-    });
+    test(
+      'the ceiling boundary is exact: 8192 scanned, 8193 reported by length',
+      () {
+        const s = Schema('Unbounded', {
+          'type': 'array',
+          'items': {'type': 'integer'},
+          'uniqueItems': true,
+        });
+        // Exactly 8192 distinct elements: at the ceiling, so the scan still runs
+        // and finds no collision. One more element is over the ceiling and is
+        // reported by length without being scanned. This adjacent pair pins the
+        // exact `> ceiling` boundary (not `>=`), mirroring the pattern ceiling's
+        // 4096/4097 pin — a regression that shifted the ceiling anywhere in
+        // [8193, ...] would otherwise pass silently.
+        final atCeiling = List<Object?>.generate(8192, (i) => i);
+        expect(s.validate(atCeiling), isEmpty);
+        final overByOne = List<Object?>.generate(8193, (i) => i);
+        expect(s.validate(overByOne), [ceilingViolation(8193)]);
+      },
+    );
 
     test('a maxItems below the ceiling still governs (the ceiling is only a '
         'backstop for the omitted-maxItems case)', () {
