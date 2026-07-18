@@ -24,6 +24,7 @@ import 'package:analyzer/error/error.dart';
 import '../canonical.dart';
 import '../diagnostic.dart';
 import '../internal_await.dart';
+import '../key_lint.dart';
 import '../package_path.dart';
 import '../query_lint.dart';
 import '../routes_lint.dart';
@@ -80,6 +81,11 @@ const _txOutsideRecover = LintCode(
 );
 const _internalAwait = LintCode(
   'keta_internal_await',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
+const _keyInline = LintCode(
+  'keta_key_inline',
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
@@ -227,6 +233,26 @@ class KetaTxOrderRule extends _KetaRule {
   Map<String, LintCode> get _codes => const {
     'keta_tx_outside_recover': _txOutsideRecover,
   };
+}
+
+/// `keta_key_inline` — a `Key(...)` constructed inline as the argument to a
+/// Context get/tryGet/set call. `Key` compares by identity, so an inline
+/// instance can never match a value stored under another instance.
+class KetaKeyRule extends _KetaRule {
+  KetaKeyRule()
+    : super(
+        name: 'keta_key_inline',
+        description:
+            'A Key passed to get/tryGet/set must be a shared top-level or '
+            'static field, not constructed inline — Key compares by identity.',
+      );
+
+  @override
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      keyDiagnosticsUnit(unit.unit, file: file);
+
+  @override
+  Map<String, LintCode> get _codes => const {'keta_key_inline': _keyInline};
 }
 
 /// `keta_internal_await` — `await` on the framework's synchronous path. Opt-in

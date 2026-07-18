@@ -23,6 +23,7 @@ void main() {
     defineReflectiveTests(KetaQueryRuleTest);
     defineReflectiveTests(KetaCanonicalRuleTest);
     defineReflectiveTests(KetaTxOrderRuleTest);
+    defineReflectiveTests(KetaKeyRuleTest);
     defineReflectiveTests(KetaInternalAwaitRuleTest);
   });
 }
@@ -350,6 +351,79 @@ dynamic tx() => null;
 dynamic recover() => null;
 void f(dynamic app) {
   app..use(recover())..use(tx());
+}
+''');
+  }
+}
+
+@reflectiveTest
+class KetaKeyRuleTest extends AnalysisRuleTest {
+  @override
+  void setUp() {
+    rule = KetaKeyRule();
+    super.setUp();
+  }
+
+  static const _stubs = '''
+class Key<T> {
+  Key(this.name);
+  final String name;
+}
+''';
+
+  Future<void> test_inlineKey_inGet_fires() async {
+    await assertDiagnostics(
+      '''
+$_stubs
+void f(dynamic c) {
+  c.get(Key<String>('reqId'));
+}
+''',
+      [
+        lint(
+          85,
+          20,
+          name: 'keta_key_inline',
+          messageContainsAll: [
+            _idPrefix,
+            'Key compares by identity',
+            'top-level or static',
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> test_inlineKey_inSet_fires() async {
+    await assertDiagnostics(
+      '''
+$_stubs
+void f(dynamic c) {
+  c.set(Key('reqId'), 'v');
+}
+''',
+      [
+        lint(85, 12, name: 'keta_key_inline', messageContainsAll: [_idPrefix]),
+      ],
+    );
+  }
+
+  Future<void> test_identifierKey_isClean() async {
+    await assertNoDiagnostics('''
+$_stubs
+final reqIdKey = Key<String>('reqId');
+void f(dynamic c) {
+  c.get(reqIdKey);
+}
+''');
+  }
+
+  Future<void> test_localVariableKey_isClean() async {
+    await assertNoDiagnostics('''
+$_stubs
+void f(dynamic c) {
+  final k = Key('x');
+  c.get(k);
 }
 ''');
   }

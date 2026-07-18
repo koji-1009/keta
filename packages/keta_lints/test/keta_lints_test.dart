@@ -1,8 +1,9 @@
 /// The small, independent lint rules that don't belong to the canonical/
 /// scaffold/drift cluster (route captures, internal `await`, tx-ordering,
-/// declared query parameters), plus the shared infra they and the CLI sit on:
-/// stable diagnostic ids (including cross-checkout portability), Dart literal
-/// escaping, and loading a YAML document into plain collections.
+/// declared query parameters, inline Context keys), plus the shared infra
+/// they and the CLI sit on: stable diagnostic ids (including cross-checkout
+/// portability), Dart literal escaping, and loading a YAML document into
+/// plain collections.
 library;
 
 import 'dart:io';
@@ -262,6 +263,61 @@ void register(app) {
 }
 ''';
       expect(queryDiagnostics(source), isEmpty);
+    });
+  });
+
+  group('keyDiagnostics', () {
+    test('an inline Key in c.get is keta_key_inline', () {
+      const source = '''
+void f(dynamic c) {
+  c.get(Key<String>('reqId'));
+}
+''';
+      final d = keyDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_key_inline');
+      expect(d.single.message, contains('identity'));
+      expect(d.single.message, contains('top-level or static'));
+    });
+
+    test('an inline Key in c.tryGet is flagged', () {
+      const source = "void f(dynamic c) { c.tryGet(Key<int>('x')); }";
+      final d = keyDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_key_inline');
+    });
+
+    test('an inline Key as the key argument of c.set is flagged', () {
+      const source = "void f(dynamic c) { c.set(Key('x'), 1); }";
+      final d = keyDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_key_inline');
+    });
+
+    test('a key referenced via a top-level identifier is clean', () {
+      const source = '''
+final reqIdKey = Key<String>('reqId');
+void f(dynamic c) {
+  c.get(reqIdKey);
+}
+''';
+      expect(keyDiagnostics(source), isEmpty);
+    });
+
+    test('a key built inline then bound to a local before use is clean — a '
+        'documented non-goal (data-flow, not syntactic)', () {
+      const source = '''
+void f(dynamic c) {
+  final k = Key('x');
+  c.get(k);
+}
+''';
+      expect(keyDiagnostics(source), isEmpty);
+    });
+
+    test('an untargeted (receiver-less) call is not flagged', () {
+      const source = "void f() { get(Key('x')); }";
+      expect(keyDiagnostics(source), isEmpty);
     });
   });
 }

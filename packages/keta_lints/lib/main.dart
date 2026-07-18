@@ -14,8 +14,8 @@
 ///   #       keta_internal_await: true
 /// ```
 ///
-/// The four route/query/canonical/tx rules are warnings — enabled by default
-/// once the plugin is on. They surface the same ids and messages as
+/// The five route/query/canonical/tx/key rules are warnings — enabled by
+/// default once the plugin is on. They surface the same ids and messages as
 /// `dart run keta_lints:check`. Cross-file checks (route conflicts, contract
 /// drift) remain CLI-authoritative and are not part of the plugin.
 library;
@@ -39,6 +39,7 @@ class KetaPlugin extends Plugin {
     registry.registerWarningRule(KetaQueryRule());
     registry.registerWarningRule(KetaCanonicalRule());
     registry.registerWarningRule(KetaTxOrderRule());
+    registry.registerWarningRule(KetaKeyRule());
     // Opt-in (analyzer "lint"): only meaningful over keta's own source.
     registry.registerLintRule(KetaInternalAwaitRule());
   }
