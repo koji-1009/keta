@@ -1,3 +1,7 @@
+/// `MetricsRegistry`'s Prometheus text exposition: label escaping, summary
+/// aggregation, and the conformance-renamed duration family.
+library;
+
 import 'package:keta_otel/keta_otel.dart';
 import 'package:test/test.dart';
 

@@ -1,3 +1,8 @@
+/// `parts()`'s multipart/form-data contract: field/file yielding, boundary
+/// and content-type validation, Content-Disposition parsing, size/count
+/// limits, and out-of-order/partial-consumption safety against `package:mime`.
+library;
+
 import 'dart:convert';
 
 import 'package:keta/keta.dart';
@@ -44,86 +49,93 @@ void main() {
     ]);
   });
 
-  test('a non-multipart request is a BadRequest', () {
-    expect(
-      parts(ctx(utf8.encode('x'), contentType: 'application/json')).toList(),
-      throwsA(isA<BadRequest>()),
+  group('content-type validation', () {
+    test('a non-multipart request is a BadRequest', () {
+      expect(
+        parts(ctx(utf8.encode('x'), contentType: 'application/json')).toList(),
+        throwsA(isA<BadRequest>()),
+      );
+    });
+
+    test(
+      'a content-type that merely shares the multipart/form-data prefix is a '
+      'BadRequest, not accepted',
+      () {
+        // A `startsWith` gate would let a wholly distinct media type through.
+        // The media type is now parsed and compared for equality instead.
+        expect(
+          parts(
+            ctx(
+              utf8.encode('x'),
+              contentType: 'multipart/form-data-x; boundary=B',
+            ),
+          ).toList(),
+          throwsA(isA<BadRequest>()),
+        );
+      },
     );
   });
 
-  test('a content-type that merely shares the multipart/form-data prefix is a '
-      'BadRequest, not accepted', () {
-    // A `startsWith` gate would let a wholly distinct media type through.
-    // The media type is now parsed and compared for equality instead.
-    expect(
-      parts(
-        ctx(utf8.encode('x'), contentType: 'multipart/form-data-x; boundary=B'),
-      ).toList(),
-      throwsA(isA<BadRequest>()),
-    );
-  });
+  group('size and count limits', () {
+    test('a part over maxPartBytes is PayloadTooLarge', () {
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="big"', 'x' * 100),
+      ]);
+      expect(() async {
+        await for (final p in parts(
+          ctx(raw),
+          limits: const MultipartLimits(maxPartBytes: 10),
+        )) {
+          await p.bytes();
+        }
+      }(), throwsA(isA<PayloadTooLarge>()));
+    });
 
-  test('a case-insensitive Boundary= parameter name is honored', () async {
-    final raw = body('B', [
-      ('Content-Disposition: form-data; name="greeting"', 'hello'),
-    ]);
-    final collected = <(String?, String)>[];
-    await for (final p in parts(
-      ctx(raw, contentType: 'multipart/form-data; Boundary=B'),
-    )) {
-      collected.add((p.name, await p.text()));
-    }
-    expect(collected, [('greeting', 'hello')]);
-  });
+    test('Part.stream enforces maxPartBytes', () {
+      // The unbuffered path used to bypass the per-part cap entirely — a
+      // second pin alongside the buffered `.bytes()` case above, since the
+      // two go through different code paths.
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="big"', 'x' * 100),
+      ]);
+      expect(() async {
+        await for (final p in parts(
+          ctx(raw),
+          limits: const MultipartLimits(maxPartBytes: 10),
+        )) {
+          await for (final _ in p.stream) {}
+        }
+      }(), throwsA(isA<PayloadTooLarge>()));
+    });
 
-  test('a missing boundary is a BadRequest', () {
-    expect(
-      parts(ctx(utf8.encode('x'), contentType: 'multipart/form-data')).toList(),
-      throwsA(isA<BadRequest>()),
-    );
-  });
+    test('exceeding maxParts is a BadRequest, not PayloadTooLarge', () {
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="a"', '1'),
+        ('Content-Disposition: form-data; name="b"', '2'),
+      ]);
+      expect(() async {
+        await for (final p in parts(
+          ctx(raw),
+          limits: const MultipartLimits(maxParts: 1),
+        )) {
+          await p.bytes();
+        }
+      }(), throwsA(isA<BadRequest>()));
+    });
 
-  test('a part over maxPartBytes is PayloadTooLarge', () {
-    final raw = body('B', [
-      ('Content-Disposition: form-data; name="big"', 'x' * 100),
-    ]);
-    expect(() async {
-      await for (final p in parts(
-        ctx(raw),
-        limits: const MultipartLimits(maxPartBytes: 10),
-      )) {
-        await p.bytes();
-      }
-    }(), throwsA(isA<PayloadTooLarge>()));
-  });
-
-  test('exceeding maxParts is a BadRequest, not PayloadTooLarge', () {
-    final raw = body('B', [
-      ('Content-Disposition: form-data; name="a"', '1'),
-      ('Content-Disposition: form-data; name="b"', '2'),
-    ]);
-    expect(() async {
-      await for (final p in parts(
-        ctx(raw),
-        limits: const MultipartLimits(maxParts: 1),
-      )) {
-        await p.bytes();
-      }
-    }(), throwsA(isA<BadRequest>()));
-  });
-
-  test('exceeding maxTotalBytes is PayloadTooLarge', () {
-    final raw = body('B', [
-      ('Content-Disposition: form-data; name="a"', 'x' * 100),
-    ]);
-    expect(() async {
-      await for (final p in parts(
-        ctx(raw),
-        limits: const MultipartLimits(maxTotalBytes: 20),
-      )) {
-        await p.bytes();
-      }
-    }(), throwsA(isA<PayloadTooLarge>()));
+    test('exceeding maxTotalBytes is PayloadTooLarge', () {
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="a"', 'x' * 100),
+      ]);
+      expect(() async {
+        await for (final p in parts(
+          ctx(raw),
+          limits: const MultipartLimits(maxTotalBytes: 20),
+        )) {
+          await p.bytes();
+        }
+      }(), throwsA(isA<PayloadTooLarge>()));
+    });
   });
 
   group('Content-Disposition parsing', () {
@@ -222,6 +234,28 @@ void main() {
   });
 
   group('boundary parsing', () {
+    test('a case-insensitive Boundary= parameter name is honored', () async {
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="greeting"', 'hello'),
+      ]);
+      final collected = <(String?, String)>[];
+      await for (final p in parts(
+        ctx(raw, contentType: 'multipart/form-data; Boundary=B'),
+      )) {
+        collected.add((p.name, await p.text()));
+      }
+      expect(collected, [('greeting', 'hello')]);
+    });
+
+    test('a missing boundary is a BadRequest', () {
+      expect(
+        parts(
+          ctx(utf8.encode('x'), contentType: 'multipart/form-data'),
+        ).toList(),
+        throwsA(isA<BadRequest>()),
+      );
+    });
+
     test('a quoted boundary containing a semicolon is honored', () async {
       final raw = body('a;b', [
         ('Content-Disposition: form-data; name="x"', 'val'),
@@ -342,21 +376,6 @@ void main() {
         }
       }(), throwsA(isA<PayloadTooLarge>()));
     });
-  });
-
-  test('Part.stream enforces maxPartBytes', () {
-    // The unbuffered path used to bypass the per-part cap entirely.
-    final raw = body('B', [
-      ('Content-Disposition: form-data; name="big"', 'x' * 100),
-    ]);
-    expect(() async {
-      await for (final p in parts(
-        ctx(raw),
-        limits: const MultipartLimits(maxPartBytes: 10),
-      )) {
-        await for (final _ in p.stream) {}
-      }
-    }(), throwsA(isA<PayloadTooLarge>()));
   });
 
   group('package:mime integration edges', () {

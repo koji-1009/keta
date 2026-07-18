@@ -1,3 +1,8 @@
+/// The `otel` middleware's contract: trace-context propagation, span status
+/// and attributes, metrics recording, method/route cardinality guards, and
+/// the exporter's batching/sampling lifecycle.
+library;
+
 import 'dart:async';
 import 'dart:convert';
 

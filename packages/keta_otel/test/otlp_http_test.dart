@@ -1,3 +1,5 @@
+/// `OtlpExporter.http` against a real socket: request framing, timeouts,
+/// retry/backoff (including Retry-After clamping), and shutdown draining.
 @TestOn('vm')
 library;
 

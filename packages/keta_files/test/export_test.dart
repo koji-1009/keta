@@ -1,3 +1,9 @@
+/// `Exported`/`Serve` binding a discovered route file to the app: method
+/// slots, capture typing, directory-scope middleware nesting, and the
+/// runtime template-to-path translation (`routeSegments`) that binding
+/// itself uses.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_files/keta_files.dart';
@@ -227,5 +233,40 @@ void main() {
     const a = Exported<Env>(get: Serve(_ok), captures: {'index': integer});
     const b = Exported<Env>(get: Serve(_ok), captures: {'index': integer});
     expect(identical(a, b), isTrue, reason: 'canonicalized, so really const');
+  });
+
+  // Moved verbatim from manifest_test.dart: `routeSegments` is `bind`'s own
+  // template-to-path translation (export.dart is its only caller), not a
+  // manifest-emission concern, so its direct unit tests belong in this
+  // file's charter rather than manifest_test.dart's.
+  group('routeSegments turns a template into a path', () {
+    test('a capture the file does not mention is a string', () {
+      final segments = routeSegments(const ['users', ':id']);
+      expect((segments[0] as LiteralSegment).value, 'users');
+      final capture = (segments[1] as CaptureSegment).capture;
+      expect(capture.name, 'id');
+      expect(capture.schema, {'type': 'string'});
+    });
+
+    test('a declared capture supplies the type, and is named by the tree', () {
+      final segments = routeSegments(
+        const [':index'],
+        const {'index': integer},
+      );
+      final capture = (segments.single as CaptureSegment).capture;
+      // The name comes from the file's location; the declaration is about the
+      // type alone, so the two cannot disagree.
+      expect(capture.name, 'index');
+      expect(capture.schema, {'type': 'integer'});
+    });
+
+    test('a declaration for a part the tree does not have is inert', () {
+      final segments = routeSegments(const ['users'], const {'id': integer});
+      expect(segments.single, isA<LiteralSegment>());
+    });
+
+    test('the root is no segments', () {
+      expect(routeSegments(const []), isEmpty);
+    });
   });
 }

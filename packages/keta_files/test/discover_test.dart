@@ -1,3 +1,9 @@
+/// Filesystem discovery of the routes tree: file-to-URL mapping, alias
+/// generation, directory-scoped middleware chains and their orphan check,
+/// and symlink-cycle safety. (Binding/export and manifest emission have
+/// their own files, export_test.dart and manifest_test.dart.)
+library;
+
 import 'dart:io';
 
 import 'package:keta_files/keta_files.dart';
@@ -270,19 +276,15 @@ void main() {
       expect(orphanMiddleware(found.routes, found.middleware), isEmpty);
     });
 
-    test('a middleware file is not a route, so it is never unregistered', () {
-      // The strict-set check reports route files the manifest does not serve. A
-      // middleware file is not a route, so an empty manifest against a tree of
-      // only scopes-and-routes reports the routes, never the scope.
-      final found = discover(
-        tree({'admin/_middleware.dart': _any, 'admin/ping.dart': _any}).path,
-      );
-      const empty =
-          '// keta_files:imports\n// keta_files:end\n'
-          '// keta_files:routes\n// keta_files:end\n';
-      final missing = unregistered(empty, found.routes);
-      expect(missing.map((f) => f.url), ['/admin/ping']);
-    });
+    // DUPLICATE removed: "a middleware file is not a route, so it is never
+    // unregistered" round-tripped this same tree through manifest.dart's
+    // `unregistered()` to re-prove a fact already pinned directly above by
+    // "_middleware.dart is a scope, never a route" (found.routes excludes
+    // the middleware file), while `unregistered()`'s own contract — that a
+    // manifest missing a route is reported — is separately and more simply
+    // pinned by manifest_test.dart's "a file bound nowhere is reported". The
+    // combination proved nothing beyond what those two already cover, and
+    // `unregistered` is manifest.dart's function, out of this file's charter.
   });
 
   group('a symlink into the tree is not walked', () {

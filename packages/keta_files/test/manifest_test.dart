@@ -1,5 +1,10 @@
+/// Manifest source generation and drift detection: `syncManifest`'s emitted
+/// import/binding regions (including scope nesting and CRLF/LF handling),
+/// its refusal to touch what it cannot parse, and `unregistered`'s reporting
+/// of routes the manifest does not yet serve.
+library;
+
 import 'package:analyzer/dart/analysis/utilities.dart';
-import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:test/test.dart';
 
@@ -470,34 +475,7 @@ void main() {
     });
   });
 
-  group('routeSegments turns a template into a path', () {
-    test('a capture the file does not mention is a string', () {
-      final segments = routeSegments(const ['users', ':id']);
-      expect((segments[0] as LiteralSegment).value, 'users');
-      final capture = (segments[1] as CaptureSegment).capture;
-      expect(capture.name, 'id');
-      expect(capture.schema, {'type': 'string'});
-    });
-
-    test('a declared capture supplies the type, and is named by the tree', () {
-      final segments = routeSegments(
-        const [':index'],
-        const {'index': integer},
-      );
-      final capture = (segments.single as CaptureSegment).capture;
-      // The name comes from the file's location; the declaration is about the
-      // type alone, so the two cannot disagree.
-      expect(capture.name, 'index');
-      expect(capture.schema, {'type': 'integer'});
-    });
-
-    test('a declaration for a part the tree does not have is inert', () {
-      final segments = routeSegments(const ['users'], const {'id': integer});
-      expect(segments.single, isA<LiteralSegment>());
-    });
-
-    test('the root is no segments', () {
-      expect(routeSegments(const []), isEmpty);
-    });
-  });
+  // `routeSegments` unit tests moved to export_test.dart: it is `bind`'s own
+  // template-to-path translation (export.dart's only caller), not a
+  // manifest-emission concern.
 }
