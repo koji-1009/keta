@@ -57,4 +57,52 @@ void main() {
     // The arbitrary-status factory keeps its status.
     expect(const KetaException.status(418, 'teapot').status, 418);
   });
+
+  test('TransientFailure is a 503 KetaException, distinct from Unavailable', () {
+    const e = TransientFailure(
+      'the transaction conflicted; retry',
+      'detail 40001',
+    );
+    // 503-family, and the detail is operator-only exactly like its siblings.
+    expect(e.status, 503);
+    expect(e.detail, 'detail 40001');
+    expect(
+      e.toString(),
+      'KetaException(503, the transaction conflicted; retry)',
+    );
+    // Retryability is carried by the type, not a flag: a caller keys off `is
+    // TransientFailure`. It shares 503 with Unavailable but is a separate type,
+    // so the two are never conflated by an `is` check.
+    expect(e, isA<KetaException>());
+    expect(e, isA<TransientFailure>());
+    expect(e, isNot(isA<Unavailable>()));
+    expect(const Unavailable('x'), isNot(isA<TransientFailure>()));
+  });
+
+  test(
+    'recover renders a TransientFailure as a 503 without leaking detail',
+    () async {
+      final env = newEnv();
+      final app = App<Env>()
+        ..use(recover())
+        ..get(
+          '/x',
+          (c) => throw const TransientFailure(
+            'retry the request',
+            'deadlock 40P01',
+          ),
+        );
+      final r = await TestClient(app, env).get('/x');
+      expect(r.status, 503);
+      expect(r.json(), {'error': 'retry the request'});
+      // The SQLSTATE-bearing detail is the operator's, never the client's.
+      expect(r.text(), isNot(contains('40P01')));
+      // A declared status is a warn, not an error incident; its detail reaches
+      // the operator exactly like the Conflict case above.
+      final line = (env.log as MemLog).lines.single;
+      expect(line['level'], 'warn');
+      expect(line['status'], 503);
+      expect(line['detail'], 'deadlock 40P01');
+    },
+  );
 }

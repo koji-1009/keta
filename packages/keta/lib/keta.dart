@@ -46,6 +46,7 @@ export 'src/response.dart'
         UnprocessableEntity,
         NotImplementedYet,
         Unavailable,
+        TransientFailure,
         GatewayTimeout;
 export 'src/routing.dart'
     show

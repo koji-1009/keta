@@ -2,17 +2,42 @@ library;
 
 import 'dart:io' show SocketException;
 
-import 'package:keta/keta.dart' show Conflict, Unavailable;
+import 'package:keta/keta.dart'
+    show Conflict, TransientFailure, Unavailable, UnprocessableEntity;
 import 'package:postgres/postgres.dart'
     show PgException, ServerException, Severity;
 
-/// The SQLSTATE codes keta_rds translates into keta's vocabulary. Everything
-/// not listed here is the app's own bug (a NOT NULL, CHECK, or FOREIGN KEY
-/// violation) and is left exactly as the driver threw it: the 500 it earns is
-/// the honest answer, and a 409 would tell the client to retry something that
-/// can never succeed. This is the [DbConn] floor — an adapter may translate
-/// more, never less.
+/// The SQLSTATE codes keta_rds translates into keta's vocabulary, grouped by the
+/// keta exception they become. This is the [DbConn] floor for a SQLSTATE-classed
+/// engine — an adapter may translate more, never less. Everything not listed
+/// here (a syntax error, a data-type mismatch, an undefined column, …) is the
+/// app's own bug and is left exactly as the driver threw it: the 500 it earns is
+/// the honest answer.
+///
+/// The three integrity violations split by who is at fault and what a retry
+/// would achieve:
+///
+/// - a *uniqueness* collision (23505) or a *foreign-key* violation (23503) is a
+///   conflict with the current state of other rows — a duplicate key, or a
+///   parent that is absent or still referenced. The same request may succeed
+///   once that state changes, so it is a [Conflict] (409), not a bare 500.
+/// - a *NOT NULL* (23502) or *CHECK* (23514) violation is a well-formed request
+///   carrying a value the schema rejects on its own terms — no other row is
+///   involved and no retry of the identical request can pass. That is
+///   [UnprocessableEntity] (422): client-caused, and permanently so for this
+///   input.
+/// - a *serialization failure* (40001) or *deadlock* (40P01) is neither party's
+///   data being wrong: two healthy transactions raced and the engine aborted
+///   this one to break the tie. Replaying the identical request is exactly the
+///   right move — so it is a [TransientFailure] (503). keta does not retry it
+///   for you (idempotency is unknowable here); the type exists so the app can.
 const uniqueViolation = '23505'; // unique_violation → 409 Conflict
+const foreignKeyViolation = '23503'; // foreign_key_violation → 409 Conflict
+const notNullViolation =
+    '23502'; // not_null_violation → 422 UnprocessableEntity
+const checkViolation = '23514'; // check_violation → 422 UnprocessableEntity
+const serializationFailure = '40001'; // serialization_failure → 503 Transient
+const deadlockDetected = '40P01'; // deadlock_detected → 503 TransientFailure
 const lockNotAvailable = '55P03'; // lock_not_available (lock_timeout) → 503
 const tooManyConnections = '53300'; // too_many_connections → 503
 const cannotConnectNow = '57P03'; // cannot_connect_now → 503
@@ -40,9 +65,15 @@ const socketClosedMessage =
 /// what went wrong (and does not break when the same app is pointed at another
 /// engine):
 ///
-/// - a uniqueness violation (SQLSTATE 23505) → [Conflict], the driver's rich
-///   message (constraint, table, column, key) carried in `detail` for the
-///   operator's logs and withheld from the client by KetaException.toString();
+/// - a uniqueness (23505) or foreign-key (23503) violation → [Conflict], the
+///   driver's rich message (constraint, table, column, key) carried in `detail`
+///   for the operator's logs and withheld from the client by
+///   KetaException.toString();
+/// - a NOT NULL (23502) or CHECK (23514) violation → [UnprocessableEntity]
+///   (422): the request is well-formed but carries a value the schema rejects;
+/// - a serialization failure (40001) or deadlock (40P01) → [TransientFailure]
+///   (503): the transaction lost a concurrency race and retrying the identical
+///   request is reasonable (keta does not retry for you — see [TransientFailure]);
 /// - a lock that could not be taken in time (55P03), the server refusing new
 ///   work or tearing down the session (53300 too_many_connections, 57P03
 ///   cannot_connect_now, 57P01 admin_shutdown, 57P02 crash_shutdown), or the
@@ -59,6 +90,24 @@ Future<T> translating<T>(Future<T> Function() action) async {
     switch (e.code) {
       case uniqueViolation:
         throw Conflict('row already exists', e.toString());
+      case foreignKeyViolation:
+        throw Conflict(
+          'related row is missing or still referenced',
+          e.toString(),
+        );
+      case notNullViolation:
+        throw UnprocessableEntity('a required value was missing', e.toString());
+      case checkViolation:
+        throw UnprocessableEntity(
+          'a value failed a check constraint',
+          e.toString(),
+        );
+      case serializationFailure:
+      case deadlockDetected:
+        throw TransientFailure(
+          'the transaction conflicted; retry the request',
+          e.toString(),
+        );
       case lockNotAvailable:
       case tooManyConnections:
       case cannotConnectNow:

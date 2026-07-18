@@ -5,7 +5,13 @@ library;
 
 import 'dart:io' show SocketException;
 
-import 'package:keta/keta.dart' show Conflict, KetaException, Unavailable;
+import 'package:keta/keta.dart'
+    show
+        Conflict,
+        KetaException,
+        TransientFailure,
+        Unavailable,
+        UnprocessableEntity;
 import 'package:keta_rds/src/errors.dart';
 // Reaching into the driver's internals is deliberate here: it is the only way
 // to synthesize a realistic ServerException (its constructors are private)
@@ -79,6 +85,110 @@ void main() {
         }
       },
     );
+
+    test('a foreign-key violation (23503) becomes a Conflict', () async {
+      await expectLater(
+        throwing<void>(
+          serverException(
+            foreignKeyViolation,
+            message:
+                'insert or update on table "orders" violates foreign '
+                'key constraint "orders_user_fk"',
+            constraint: 'orders_user_fk',
+          ),
+        ),
+        throwsA(
+          isA<Conflict>()
+              .having((e) => e.status, 'status', 409)
+              .having(
+                (e) => e.message,
+                'message',
+                'related row is missing or still referenced',
+              )
+              // The constraint name rides in detail for the operator, kept
+              // out of the client-facing toString().
+              .having(
+                (e) => e.detail.toString(),
+                'detail',
+                contains('orders_user_fk'),
+              ),
+        ),
+      );
+    });
+
+    test('a NOT NULL violation (23502) becomes UnprocessableEntity', () async {
+      await expectLater(
+        throwing<void>(
+          serverException(
+            notNullViolation,
+            message: 'null value in column "name" violates not-null constraint',
+          ),
+        ),
+        throwsA(
+          isA<UnprocessableEntity>()
+              .having((e) => e.status, 'status', 422)
+              .having(
+                (e) => e.message,
+                'message',
+                'a required value was missing',
+              ),
+        ),
+      );
+    });
+
+    test('a CHECK violation (23514) becomes UnprocessableEntity', () async {
+      await expectLater(
+        throwing<void>(
+          serverException(
+            checkViolation,
+            message:
+                'new row for relation "t" violates check constraint "c_age"',
+            constraint: 'c_age',
+          ),
+        ),
+        throwsA(
+          isA<UnprocessableEntity>()
+              .having((e) => e.status, 'status', 422)
+              .having(
+                (e) => e.message,
+                'message',
+                'a value failed a check constraint',
+              ),
+        ),
+      );
+    });
+
+    test(
+      'a serialization failure (40001) becomes a TransientFailure',
+      () async {
+        await expectLater(
+          throwing<void>(
+            serverException(
+              serializationFailure,
+              message: 'could not serialize access due to concurrent update',
+            ),
+          ),
+          throwsA(
+            isA<TransientFailure>()
+                .having((e) => e.status, 'status', 503)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  'the transaction conflicted; retry the request',
+                ),
+          ),
+        );
+      },
+    );
+
+    test('a deadlock (40P01) becomes a TransientFailure', () async {
+      await expectLater(
+        throwing<void>(
+          serverException(deadlockDetected, message: 'deadlock detected'),
+        ),
+        throwsA(isA<TransientFailure>().having((e) => e.status, 'status', 503)),
+      );
+    });
 
     test('lock_not_available (55P03) becomes Unavailable', () async {
       await expectLater(
@@ -177,12 +287,17 @@ void main() {
   group(
     'conditions left raw (the floor is not a ceiling in the wrong direction)',
     () {
-      test('a NOT NULL violation (23502) passes through untranslated', () async {
+      test('a syntax error (42601) passes through untranslated', () async {
+        // The app wrote broken SQL: not a condition any client can act on, so
+        // it stays the driver's own ServerException and earns its 500. (23502
+        // NOT NULL and 23503 FK, once left raw here, are now translated — see
+        // the "translated conditions" group above; this pins that the floor did
+        // not swallow *everything* on the way up.)
         await expectLater(
-          throwing<void>(serverException('23502', message: 'null value')),
+          throwing<void>(serverException('42601', message: 'syntax error')),
           throwsA(
             isA<ServerException>()
-                .having((e) => e.code, 'code', '23502')
+                .having((e) => e.code, 'code', '42601')
                 // Emphatically NOT a KetaException: narrowing to ServerException
                 // alone would still pass if translation had swallowed it.
                 .having((e) => e, 'not keta', isNot(isA<KetaException>())),
@@ -191,12 +306,12 @@ void main() {
       });
 
       test(
-        'a foreign-key violation (23503) passes through untranslated',
+        'an undefined-column error (42703) passes through untranslated',
         () async {
           await expectLater(
-            throwing<void>(serverException('23503')),
+            throwing<void>(serverException('42703')),
             throwsA(
-              isA<ServerException>().having((e) => e.code, 'code', '23503'),
+              isA<ServerException>().having((e) => e.code, 'code', '42703'),
             ),
           );
         },

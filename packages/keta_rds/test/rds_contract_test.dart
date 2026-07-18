@@ -5,7 +5,8 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:keta/keta.dart' show Conflict, KetaException;
+import 'package:keta/keta.dart'
+    show Conflict, KetaException, UnprocessableEntity;
 import 'package:keta_db/keta_db.dart';
 import 'package:keta_rds/keta_rds.dart';
 import 'package:postgres/postgres.dart' show ServerException;
@@ -212,37 +213,70 @@ void main() {
 
   group('error translation', () {
     test(
-      'a duplicate key is a Conflict; a NOT NULL stays the driver\'s',
+      'the integrity violations each land on their contracted keta exception',
       () async {
         final db = _connect();
         addTearDown(db.close);
         final t = _table('conflict');
         await db.writer.execute('drop table if exists $t');
         await db.writer.execute(
-          'create table $t (id text primary key, n integer not null)',
+          'create table $t '
+          '(id text primary key, n integer not null, age integer check (age >= 0))',
         );
-        await db.writer.execute('insert into $t values (?, ?)', ['1', 1]);
+        await db.writer.execute('insert into $t values (?, ?, ?)', [
+          '1',
+          1,
+          30,
+        ]);
 
-        // The one condition a caller can act on, in keta's vocabulary.
+        // A duplicate primary key: a Conflict (409).
         await expectLater(
-          db.writer.execute('insert into $t values (?, ?)', ['1', 2]),
+          db.writer.execute('insert into $t values (?, ?, ?)', ['1', 2, 30]),
           throwsA(isA<Conflict>().having((e) => e.status, 'status', 409)),
         );
 
-        // NOT NULL is the app inserting wrong data — its own bug, left raw so a
-        // 409 never invites retrying the unretryable.
+        // NOT NULL: a well-formed request the schema rejects → 422, not a raw
+        // 500 (this reverses the pre-E-17 "left raw" behaviour deliberately).
         await expectLater(
-          db.writer.execute('insert into $t values (?, ?)', ['2', null]),
+          db.writer.execute('insert into $t values (?, ?, ?)', ['2', null, 30]),
           throwsA(
-            isA<ServerException>().having(
-              (e) => e,
-              'not keta',
-              isNot(isA<KetaException>()),
-            ),
+            isA<UnprocessableEntity>().having((e) => e.status, 'status', 422),
+          ),
+        );
+
+        // CHECK: also 422.
+        await expectLater(
+          db.writer.execute('insert into $t values (?, ?, ?)', ['3', 1, -5]),
+          throwsA(
+            isA<UnprocessableEntity>().having((e) => e.status, 'status', 422),
           ),
         );
       },
     );
+
+    test('a foreign-key violation is a Conflict', () async {
+      final db = _connect();
+      addTearDown(db.close);
+      final parent = _table('fk_parent');
+      final child = _table('fk_child');
+      await db.writer.execute('drop table if exists $child');
+      await db.writer.execute('drop table if exists $parent');
+      await db.writer.execute('create table $parent (id integer primary key)');
+      await db.writer.execute(
+        'create table $child '
+        '(id integer primary key, parent_id integer references $parent(id))',
+      );
+      addTearDown(() async {
+        await db.writer.execute('drop table if exists $child');
+        await db.writer.execute('drop table if exists $parent');
+      });
+
+      // Inserting a child whose parent does not exist violates the FK.
+      await expectLater(
+        db.writer.execute('insert into $child values (?, ?)', [1, 999]),
+        throwsA(isA<Conflict>().having((e) => e.status, 'status', 409)),
+      );
+    });
 
     test(
       'inside a transaction a duplicate is still a Conflict, and rolls back',
@@ -392,6 +426,42 @@ void main() {
         await expectLater(db.verifyMigrations(dir.path), completes);
       },
     );
+  });
+
+  group('statement timeout', () {
+    test('a statement that outruns the cap is cancelled as a raw 500 (57014), '
+        'not a keta exception', () async {
+      // A 50ms cap on every pooled connection; a 2s sleep must trip it.
+      final db = RdsDb.url(
+        _pgUrl!,
+        statementTimeout: const Duration(milliseconds: 50),
+      );
+      addTearDown(db.close);
+
+      // PostgreSQL cancels the statement server-side with SQLSTATE 57014.
+      // keta_rds deliberately does NOT translate 57014 (outside E-17's remit),
+      // so it stays the driver's own ServerException and earns a plain 500 —
+      // emphatically not a TransientFailure or Unavailable, which would invite
+      // a blind retry of a statement that blew its own deadline.
+      await expectLater(
+        db.reader.query('select pg_sleep(2)'),
+        throwsA(
+          isA<ServerException>()
+              .having((e) => e.code, 'code', '57014')
+              .having((e) => e, 'not keta', isNot(isA<KetaException>())),
+        ),
+      );
+    });
+
+    test('a statement within the cap runs normally', () async {
+      final db = RdsDb.url(
+        _pgUrl!,
+        statementTimeout: const Duration(seconds: 30),
+      );
+      addTearDown(db.close);
+      final row = (await db.reader.query('select 1 as n')).single;
+      expect(row['n'], 1);
+    });
   });
 
   group('lifecycle', () {

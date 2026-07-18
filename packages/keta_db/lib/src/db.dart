@@ -16,11 +16,28 @@ library;
 /// Errors are keta's, not the engine's. An adapter translates the conditions a
 /// caller can act on into keta's sealed `KetaException` family, so a handler
 /// never imports a driver package to find out what went wrong, and does not
-/// break when the same app is pointed at a different engine. The contract every
-/// adapter must honour:
+/// break when the same app is pointed at a different engine.
+///
+/// The floor every adapter must honour, on every engine:
 ///
 /// - a uniqueness violation (duplicate primary key or unique index) → `Conflict`
 /// - the database unreachable, or its lock unobtainable in time → `Unavailable`
+///
+/// Adapters over an engine that classifies errors by SQL-standard SQLSTATE (the
+/// PostgreSQL family) must additionally honour, because that engine reports each
+/// as a distinct, actionable condition:
+///
+/// - a foreign-key violation (a parent absent or still referenced) → `Conflict`
+/// - a NOT NULL or CHECK violation (a well-formed request the schema rejects on
+///   its own terms) → `UnprocessableEntity`
+/// - a serialization failure or deadlock (two healthy transactions raced and one
+///   was aborted to break the tie) → `TransientFailure`
+///
+/// The second tier is scoped to SQLSTATE-classed engines on purpose: an engine
+/// with a different error model or concurrency model does not necessarily raise
+/// these as distinct conditions (SQLite, single-writer, has no serialization
+/// failure or deadlock to translate at all), so binding it to the same list
+/// would demand a mapping it cannot honestly produce.
 ///
 /// Anything else is the app's own bug and is left as the driver threw it, where
 /// the 500 and its log are the honest answer. This is a floor, not a ceiling:

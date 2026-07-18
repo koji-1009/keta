@@ -30,6 +30,13 @@ import 'values.dart';
 /// and per pool — behind a proxy such as RDS Proxy, keep them small, and size
 /// the sum across isolates against the server's limit (spec §3).
 ///
+/// **Statement timeout.** When `statementTimeout` is passed to a constructor,
+/// keta_rds issues a session-level `SET statement_timeout` on every connection
+/// its pools open, so no single statement can run longer than that duration.
+/// The cap fires server-side (SQLSTATE 57014, query_canceled) and surfaces as a
+/// plain 500 — keta_rds does not translate 57014, and a statement that blew its
+/// own deadline is deliberately not retryable. See [_openWithTimeout].
+///
 /// **Disconnect recovery.** A connection the driver tears down mid-session
 /// (dead socket, server-initiated shutdown) is disposed rather than returned
 /// to the pool — see [translating] — and the next `acquire` opens a fresh one.
@@ -50,15 +57,24 @@ class RdsDb implements Db {
   /// each pool (see the class doc); the defaults mirror keta_sqlite's 30s lock
   /// wait and a conservative ceiling suited to a per-isolate pool behind a
   /// proxy.
+  ///
+  /// [statementTimeout], when given, caps how long any single statement may run
+  /// on a pooled connection (see the class doc and [_openWithTimeout]); a
+  /// non-positive or sub-millisecond value is rejected here at construction.
   factory RdsDb(
     Endpoint endpoint, {
     Endpoint? readerEndpoint,
     ConnectionSettings? settings,
     int maxConnections = 10,
     Duration acquireTimeout = const Duration(seconds: 30),
+    Duration? statementTimeout,
   }) {
+    _validateStatementTimeout(statementTimeout);
     Pool<Connection> poolFor(Endpoint e) => Pool<Connection>(
-      () => Connection.open(e, settings: settings),
+      () => _openWithTimeout(
+        () => Connection.open(e, settings: settings),
+        statementTimeout,
+      ),
       (c) => c.close(),
       maxConnections: maxConnections,
       acquireTimeout: acquireTimeout,
@@ -76,16 +92,18 @@ class RdsDb implements Db {
   /// Connects using a `postgres://user:pass@host:port/db` URL (the form the
   /// `KETA_DB` environment variable carries; see `bin/migrate.dart`). Connection
   /// options such as `sslmode` ride as URL query parameters. [readerUrl], when
-  /// given, points reads at a replica. See [RdsDb] for [maxConnections] and
-  /// [acquireTimeout].
+  /// given, points reads at a replica. See [RdsDb] for [maxConnections],
+  /// [acquireTimeout], and [statementTimeout].
   factory RdsDb.url(
     String url, {
     String? readerUrl,
     int maxConnections = 10,
     Duration acquireTimeout = const Duration(seconds: 30),
+    Duration? statementTimeout,
   }) {
+    _validateStatementTimeout(statementTimeout);
     Pool<Connection> poolFor(String u) => Pool<Connection>(
-      () => Connection.openFromUrl(u),
+      () => _openWithTimeout(() => Connection.openFromUrl(u), statementTimeout),
       (c) => c.close(),
       maxConnections: maxConnections,
       acquireTimeout: acquireTimeout,
@@ -96,6 +114,61 @@ class RdsDb implements Db {
     final writer = poolFor(url);
     final reader = readerUrl == null ? writer : poolFor(readerUrl);
     return RdsDb._(writer, reader);
+  }
+
+  /// Rejects a [statementTimeout] that could never mean "cap statements at this
+  /// duration". A non-positive value is a plain mistake; a positive but
+  /// sub-millisecond value is worse than a mistake, because PostgreSQL's
+  /// `statement_timeout` is expressed in whole milliseconds and rounds it to
+  /// `0`, which PostgreSQL reads as *disabled* — the exact opposite of the
+  /// caller's intent. Both are refused loudly at construction rather than
+  /// silently opening connections with no cap.
+  static void _validateStatementTimeout(Duration? statementTimeout) {
+    if (statementTimeout == null) return;
+    if (statementTimeout <= Duration.zero) {
+      throw ArgumentError.value(
+        statementTimeout,
+        'statementTimeout',
+        'must be a positive duration (a non-positive timeout caps nothing)',
+      );
+    }
+    if (statementTimeout.inMilliseconds < 1) {
+      throw ArgumentError.value(
+        statementTimeout,
+        'statementTimeout',
+        'must be at least 1 millisecond; PostgreSQL rounds a sub-millisecond '
+            'statement_timeout to 0, which disables the cap entirely',
+      );
+    }
+  }
+
+  /// Opens a connection via [open] and, when [statementTimeout] is set, pins a
+  /// session-level `statement_timeout` on it before it is ever handed out, so
+  /// every connection any pool opens carries the cap. Issued at open time (not
+  /// per query) because it is a session GUC that survives for the connection's
+  /// life; a pooled connection therefore inherits it once and keeps it.
+  ///
+  /// When the cap fires, PostgreSQL cancels the running statement server-side
+  /// with SQLSTATE 57014 (query_canceled). keta_rds does NOT translate 57014
+  /// (that is outside this option's remit): it surfaces as the driver's own
+  /// `ServerException`, which — like any untranslated server error — becomes a
+  /// plain 500. It is deliberately neither a [Unavailable] nor a
+  /// [TransientFailure]: a statement that blew its own deadline is not something
+  /// to blindly retry.
+  static Future<Connection> _openWithTimeout(
+    Future<Connection> Function() open,
+    Duration? statementTimeout,
+  ) async {
+    final conn = await open();
+    if (statementTimeout != null) {
+      // A whole-number millisecond literal; PostgreSQL reads a bare integer as
+      // milliseconds. Not a placeholder-bound value: SET does not accept
+      // parameters, and the integer is framework-computed, never user input.
+      await conn.execute(
+        'SET statement_timeout = ${statementTimeout.inMilliseconds}',
+      );
+    }
+    return conn;
   }
 
   final Pool<Connection> _writerPool;

@@ -284,6 +284,31 @@ final class Unavailable extends KetaException {
   int get status => 503;
 }
 
+/// 503 — the operation raced or deadlocked and retrying the *same* request is a
+/// reasonable next move (a serialization failure or a deadlock the engine broke
+/// by aborting this transaction). The retryability is the type: there is no
+/// `retryable` flag and no `Retryable` marker — a caller keys off `is
+/// TransientFailure`, and the exhaustive `switch` over [KetaException] makes the
+/// case impossible to forget.
+///
+/// keta deliberately does NOT retry for you. Whether replaying the request is
+/// safe depends on its idempotency, which is unknowable at this layer (the same
+/// R-12 posture the disconnect path takes — an in-flight query is never
+/// silently re-run). [TransientFailure] exists so the *application*, which does
+/// know whether the operation is safe to repeat, can decide to retry.
+///
+/// Distinct from [Unavailable], though both are 503: [Unavailable] means the
+/// database could not be reached or served the request at all (unreachable
+/// server, exhausted pool, a lock never taken) — nothing happened and the
+/// system is momentarily unusable. [TransientFailure] means the request *did*
+/// reach a working database and lost a concurrency race there; the system is
+/// healthy and the very same request may well succeed on a second try.
+final class TransientFailure extends KetaException {
+  const TransientFailure(super.message, [super.detail]);
+  @override
+  int get status => 503;
+}
+
 /// 504 — `timeout()`.
 final class GatewayTimeout extends KetaException {
   const GatewayTimeout(super.message, [super.detail]);
