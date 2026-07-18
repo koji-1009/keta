@@ -94,7 +94,7 @@ void register(App<Env> app) {
 
 ## The CI gate
 
-`dart run keta_files:check` exits non-zero when the manifest and the tree disagree, so drift fails CI:
+`dart run keta_files:check` exits non-zero when the manifest and the tree disagree. This repo's own CI runs it for the `examples/files` tree (`.github/workflows/ci.yml`), so drift there fails CI; a consuming project must wire the same command into its own CI for the guarantee to hold on its tree:
 
 - **not served** — a route file the manifest does not bind. Its URL would 404 despite the file compiling and the tests passing. `run keta_files:sync` to bind it.
 - **scopes no route** — a `_middleware.dart` guarding nothing beneath it.

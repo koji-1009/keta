@@ -34,6 +34,11 @@ jobs:
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze --fatal-infos
+      # keta_files' own CI gate: fails when examples/files' lib/routes/ tree
+      # and its generated manifest (lib/routes.dart) disagree, e.g. a route
+      # file added but never synced — see packages/keta_files/README.md.
+      - name: keta_files:check (examples/files)
+        run: (cd examples/files && dart run keta_files:check)
       - name: Test every package and example
         run: |
           for d in packages/*/ examples/*/; do

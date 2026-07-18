@@ -6,6 +6,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:keta_otel/keta_otel.dart';
+// A debug-only seam (mirrors keta's `debugWebSocketChannel`): not part of the
+// public API, so it is imported straight from `src/` rather than re-exported.
+import 'package:keta_otel/src/otlp.dart' show debugActiveSleepCount;
 import 'package:test/test.dart';
 
 void main() {
@@ -394,5 +397,59 @@ void main() {
     // The cut batch failed like any rejected send, so its span is folded
     // into the dropped count and surfaced as an export failure.
     expect(warnings.any((w) => w.key == 'span export failed'), isTrue);
+  });
+
+  test('many sequential clamped retries never grow the active-sleep set past '
+      'the single in-flight sleep, and it settles to empty', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    // Always 429, no Retry-After: every retry falls back to the fixed
+    // (tiny) retryBackoff, so several real sleeps fire back-to-back.
+    server.listen((req) async {
+      await req.drain<void>();
+      req.response.statusCode = 429;
+      await req.response.close();
+    });
+
+    final exporter = OtlpExporter.http(
+      Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+      maxRetries: 6,
+      retryBackoff: const Duration(milliseconds: 5),
+      maxRetryDelay: const Duration(milliseconds: 5),
+      // Draining happens only via the explicit flush() below.
+      exportInterval: Duration.zero,
+      onWarn: (_, _) {},
+    );
+    addTearDown(exporter.close);
+
+    exporter.enqueue([
+      OtelSpan(
+        traceId: 'a' * 32,
+        spanId: 'b' * 16,
+        name: 'GET /x',
+        startUnixNano: 1,
+        endUnixNano: 2,
+      ),
+    ]);
+
+    // Sample the debug seam throughout the retry storm (6 back-to-back
+    // sleeps), not just at the end — an earlier version of `_sleepUnless`
+    // registered a `.then` listener on the shared `closing` future per
+    // sleep, and a Dart Future never releases a listener until it
+    // completes, so those would have piled up for the exporter's whole
+    // lifetime instead of clearing between retries.
+    var maxSeen = 0;
+    final sampler = Timer.periodic(const Duration(milliseconds: 1), (_) {
+      final n = debugActiveSleepCount(exporter);
+      if (n > maxSeen) maxSeen = n;
+    });
+    await exporter.flush();
+    sampler.cancel();
+
+    // This exporter retries one batch at a time in a loop rather than
+    // running sleeps concurrently, so at most one is ever in flight — and
+    // every one of them is gone once it settles.
+    expect(maxSeen, lessThanOrEqualTo(1));
+    expect(debugActiveSleepCount(exporter), 0);
   });
 }

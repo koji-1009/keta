@@ -49,9 +49,13 @@ class MultipartLimits {
 /// caller (charged to `maxTotalBytes`) the moment it advances past it,
 /// whether the body was untouched or merely claimed-but-unlistened. So: read
 /// eagerly, or not at all — a stream stashed away to listen to "later"
-/// (after the loop has moved on) sees an already-drained source and yields
-/// nothing. Either way, consumption (in order, out of order, or skipped
-/// outright) can neither deadlock nor smuggle uncounted bytes.
+/// (after the loop has moved on) does NOT quietly see an already-drained
+/// source and yield nothing: the drain already subscribed to the
+/// single-subscription source out from under it, so the late `.listen()`
+/// instead surfaces a `StateError` ('Stream has already been listened to')
+/// as an error event, followed by done. Either way, consumption (in order,
+/// out of order, or skipped outright) can neither deadlock nor smuggle
+/// uncounted bytes.
 class Part {
   Part._(this._source, this._maxBytes);
   final MimeMultipart _source;

@@ -471,6 +471,21 @@ void main() {
       ).get('/token', headers: {'host': 'evil.com#frag'});
       expect(res.status, 400);
     });
+
+    test('rejects a Host header smuggling a path as 400', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'evil.com/inject'});
+      expect(res.status, 400);
+    });
   });
 
   group('_ShelfRequest.remoteAddress', () {

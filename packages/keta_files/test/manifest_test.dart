@@ -403,6 +403,48 @@ void main() {
       final synced = syncManifest(mostlyCrlf, [f]);
       expect(syncManifest(synced, [f]), synced, reason: 'settled');
     });
+
+    test('an exact CRLF/LF tie resolves to LF, and is idempotent', () {
+      // Not merely "mostly" one convention like the four tests above: exactly
+      // half of `_imports`' line endings are flipped to CRLF, so
+      // crlfCount == bareLfCount precisely. `crlfCount > bareLfCount` is
+      // false on an equal count, so the tie must settle on LF per the doc
+      // comment on `syncManifest`.
+      final importsCrlf = _imports.replaceAll('\n', '\r\n');
+      final total = '\r\n'.allMatches(importsCrlf).length;
+      var tied = importsCrlf;
+      for (var i = 0; i < total ~/ 2; i++) {
+        tied = tied.replaceFirst('\r\n', '\n');
+      }
+      expect('\r\n'.allMatches(tied).length, total ~/ 2); // the tie is exact
+
+      final out = syncManifest(tied, [f]);
+      expect(out, isNot(contains('\r')));
+      expect(syncManifest(out, [f]), out, reason: 'settled');
+    });
+
+    test('a single-line manifest (no newline at all) is an unambiguous 0-vs-0 '
+        'tie, and fails on its missing end marker rather than on the EOL '
+        'count itself', () {
+      // The doc comment on `syncManifest` calls out "the all-`\n`-free
+      // case of a single-line or empty file" as part of the very same tie
+      // rule as the tests above — 0 == 0 is as much a tie as 3 == 3. A
+      // manifest this short can never carry a start marker AND its end
+      // marker as two distinct lines, so it is necessarily malformed; what
+      // this pins down is that the 0-vs-0 tie computation is inert on such
+      // an input — the failure is the ordinary missing-end-marker check,
+      // not a crash from counting newlines in a newline-free string.
+      expect(
+        () => syncManifest('// keta_files:imports', const []),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('has no "// keta_files:end"'),
+          ),
+        ),
+      );
+    });
   });
 
   group('drift is caught', () {

@@ -74,8 +74,10 @@ class OtlpExporter implements Disposable {
     required this.maxBatchSize,
     required Duration exportInterval,
     Completer<void>? closing,
+    Set<Timer>? activeSleeps,
     this._onWarn,
-  }) : _closing = closing ?? Completer<void>() {
+  }) : _closing = closing ?? Completer<void>(),
+       _activeSleeps = activeSleeps ?? <Timer>{} {
     if (exportInterval > Duration.zero) {
       _timer = Timer.periodic(exportInterval, (_) => _drainNextBatch());
     }
@@ -131,6 +133,14 @@ class OtlpExporter implements Disposable {
     // promptly rather than pinning `flush()` for its remaining delay. Shared
     // with the instance below via the private constructor's `closing:`.
     final closing = Completer<void>();
+    // Every sleep currently in flight, so `close()` can cancel and resolve
+    // them directly instead of each one registering a `.then` listener on
+    // `closing.future` — a Future never releases a `.then` listener until it
+    // completes, and `closing` completes only once, at `close()`, so under
+    // sustained throttling those listeners would otherwise pile up for the
+    // exporter's whole lifetime. Shared with the instance below via the
+    // private constructor's `activeSleeps:`.
+    final activeSleeps = <Timer>{};
 
     // One POST attempt, guarded by [timeout]. Returns the delay to wait before
     // retrying when the collector answered with a *retryable* status (429/503)
@@ -210,7 +220,7 @@ class OtlpExporter implements Disposable {
         // bounded when a batch is mid-retry-sleep. Abandoning throws the same
         // failure shape a rejected send does, so `_drainNextBatch` folds the
         // batch into the drop count rather than losing it silently.
-        if (await _sleepUnless(delay, closing.future)) {
+        if (await _sleepUnless(delay, closing, activeSleeps)) {
           throw StateError('OTLP export abandoned: exporter closing');
         }
       }
@@ -224,6 +234,7 @@ class OtlpExporter implements Disposable {
       maxBatchSize: maxBatchSize,
       exportInterval: exportInterval,
       closing: closing,
+      activeSleeps: activeSleeps,
       onWarn: onWarn,
     );
   }
@@ -281,6 +292,12 @@ class OtlpExporter implements Disposable {
   /// so a batch parked mid-retry is cut loose promptly instead of holding
   /// [flush]/[close] for its remaining (already clamped) delay.
   final Completer<void> _closing;
+
+  /// Every retry-sleep [Timer] currently in flight, added by [_sleepUnless]
+  /// and removed either when it fires naturally or when [close] cancels it.
+  /// This is what lets [close] cut a mid-retry batch loose without any
+  /// per-sleep listener on [_closing]'s future — see [_sleepUnless].
+  final Set<Timer> _activeSleeps;
 
   Timer? _timer;
 
@@ -392,16 +409,25 @@ class OtlpExporter implements Disposable {
   /// process from exiting. Safe to call from `Server.shutdown` via
   /// [Disposable].
   ///
-  /// The `_closing` signal is fired *before* the flush: a batch parked in a
-  /// retry sleep is racing that signal (see `OtlpExporter.http`), so firing it
-  /// first cuts such a batch loose immediately — otherwise `flush()`'s
-  /// `Future.wait` would block on the sleeping batch future for its remaining
-  /// (clamped) delay. A cut batch fails like any other, so its spans are
-  /// counted as dropped. This is what makes `close()` bounded regardless of
-  /// how a collector answers.
+  /// The `_closing` signal is fired *before* the flush, and every sleep still
+  /// in [_activeSleeps] is cancelled right alongside it: a batch parked in a
+  /// retry sleep is racing that signal (see `OtlpExporter.http`), so cutting
+  /// it loose here — rather than waiting for its own `.then` on `_closing` to
+  /// fire — is what keeps `flush()`'s `Future.wait` from blocking on the
+  /// sleeping batch future for its remaining (clamped) delay. A cut batch
+  /// fails like any other, so its spans are counted as dropped. This is what
+  /// makes `close()` bounded regardless of how a collector answers.
   @override
   Future<void> close() async {
     if (!_closing.isCompleted) _closing.complete();
+    // Snapshot first: each `cancel()` below resolves that sleep's completer
+    // as aborted, but never touches `_activeSleeps` itself, so clearing it
+    // once after the loop (rather than depending on each cancelled sleep to
+    // remove itself) is the whole cleanup.
+    for (final timer in _activeSleeps.toList()) {
+      timer.cancel();
+    }
+    _activeSleeps.clear();
     await flush();
     _timer?.cancel();
     _releaseResources?.call();
@@ -431,29 +457,68 @@ Duration _retryDelay(String? retryAfter, Duration fallback, Duration maxDelay) {
   return fallback;
 }
 
-/// Sleeps for [delay], unless [abort] completes first. Returns `true` if
-/// [abort] won the race (the caller should give up), `false` if the full delay
-/// elapsed.
+/// Sleeps for [delay], unless [closing] has already completed (or [close]
+/// cancels this sleep via [activeSleeps] before the delay elapses). Returns
+/// `true` if the sleep was aborted (the caller should give up), `false` if
+/// the full delay elapsed.
 ///
-/// A bare `Future.delayed` cannot be cancelled, so a plain `Future.any` race
-/// would leave its timer running until [delay] elapses even after [abort] won —
-/// harmless per call, but this is the exporter's shutdown path, where the point
-/// is to *stop* waiting. Driving an explicit [Timer] lets the [abort] branch
-/// cancel it, so a shutdown truly ends the sleep then and there rather than
-/// merely ignoring its result.
-Future<bool> _sleepUnless(Duration delay, Future<void> abort) {
+/// This registers nothing on `closing.future` itself — no `.then`, no
+/// listener. An earlier version raced a `.then` callback on the shared
+/// `closing.future` for every single sleep; a Dart [Future] never releases a
+/// `.then` listener until it completes, and `closing` completes exactly once,
+/// at [close] — so under sustained 429/503 throttling, every retry sleep left
+/// one of these behind for the exporter's entire remaining lifetime. Instead:
+/// a sleep already too late to matter (`closing` is already complete) bails
+/// immediately, and one started in time is tracked in [activeSleeps] so
+/// [close] can reach in and cancel/resolve it directly — zero listeners
+/// accumulate either way.
+Future<bool> _sleepUnless(
+  Duration delay,
+  Completer<void> closing,
+  Set<Timer> activeSleeps,
+) {
+  if (closing.isCompleted) return Future.value(true);
   final done = Completer<bool>();
-  final timer = Timer(delay, () {
+  late final Timer timer;
+  final real = Timer(delay, () {
+    activeSleeps.remove(timer);
     if (!done.isCompleted) done.complete(false);
   });
-  abort.then((_) {
-    if (!done.isCompleted) {
-      timer.cancel();
-      done.complete(true);
-    }
-  });
+  timer = _RetryTimer(real, done);
+  activeSleeps.add(timer);
   return done.future;
 }
+
+/// A retry sleep's [Timer], as tracked in [OtlpExporter._activeSleeps]:
+/// wraps the real timer together with the [Completer] its elapsing would
+/// complete, so [cancel] can do both jobs [close] needs in one call — stop
+/// the timer AND resolve the still-pending sleep as aborted. [Timer.cancel]
+/// alone would only do the former, leaving the `await` on [done] hanging
+/// forever, since nothing else would ever complete it.
+class _RetryTimer implements Timer {
+  _RetryTimer(this._real, this._done);
+  final Timer _real;
+  final Completer<bool> _done;
+
+  @override
+  void cancel() {
+    _real.cancel();
+    if (!_done.isCompleted) _done.complete(true);
+  }
+
+  @override
+  bool get isActive => _real.isActive;
+
+  @override
+  int get tick => _real.tick;
+}
+
+/// The number of retry sleeps currently in flight — a debug seam for tests
+/// (mirrors `debugWebSocketChannel` in keta's h1_transport.dart): private
+/// state made observable on purpose, rather than guessed at from the
+/// outside via timing.
+int debugActiveSleepCount(OtlpExporter exporter) =>
+    exporter._activeSleeps.length;
 
 /// Encodes [spans] into an OTLP/JSON `ExportTraceServiceRequest` body.
 Map<String, Object?> encodeOtlp(List<OtelSpan> spans, String serviceName) => {
