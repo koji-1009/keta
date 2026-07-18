@@ -12,6 +12,10 @@ dev_dependencies:
   lints: ^6.0.0
 
 workspace:
+  # Rule: workspace-internal dependencies are declared hosted-style —
+  # `^x.y.z` when the target has a version, `any` for versionless example
+  # packages — never `path:` (resolution is identical inside the workspace;
+  # one spelling keeps the tree canonical).
   - packages/keta
   - packages/keta_db
   - packages/keta_sqlite
