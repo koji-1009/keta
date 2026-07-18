@@ -16,7 +16,7 @@ Every `Bus` delivers **at-most-once**, exactly like a broadcast `Stream`. A publ
 
 ## Messages are canonical JSON values
 
-A message is a canonical JSON value — `null`, `bool`, `num`, `String`, a `List` of JSON values, or a `Map` with `String` keys and JSON values (the `Object?` model keta already uses for JSON bodies). This is precisely the shape that survives an isolate boundary, so **the same contract holds for `InMemoryBus` and `IsolateBus`** — code written against one runs unchanged against the other. Publishing a non-JSON value (a `Map` with non-string keys, or any other object) throws `ArgumentError` at the `publish` call, naming the offending path (e.g. `message.user[2]`). The check is structural, not a `jsonEncode` round-trip. Enforcing it in `InMemoryBus` too means the single-isolate seam cannot silently accept something the multi-isolate one would reject.
+A message is a canonical JSON value — `null`, `bool`, `num`, `String`, a `List` of JSON values, or a `Map` with `String` keys and JSON values (the `Object?` model keta already uses for JSON bodies). This is precisely the shape that survives an isolate boundary, so **the same contract holds for `InMemoryBus` and `IsolateBus`** — code written against one runs unchanged against the other. Publishing a non-JSON value (a `Map` with non-string keys, or any other object) throws `ArgumentError` at the `publish` call, naming the offending path (e.g. `message.user[2]`). A non-finite number — `NaN`, `Infinity`, or `-Infinity` — is rejected the same way: `jsonEncode` throws on it, so the bus accepts exactly what `jsonEncode` can serialize and the "canonical JSON" promise stays true. The check is structural, not a `jsonEncode` round-trip. Enforcing it in `InMemoryBus` too means the single-isolate seam cannot silently accept something the multi-isolate one would reject.
 
 ## Topics
 
@@ -43,23 +43,31 @@ The hub fans every message out to every connection; each isolate filters locally
 
 ## Multi-isolate wiring sketch
 
-The bus is created and closed by the **application** (keta_bus does not touch `Env`). The shape mirrors keta's own `serve(isolates: n)` handshake — a `SendPort` handed to each worker at spawn:
+The hub is created and closed by the **application's boot code** (keta_bus does not touch `Env`), *outside* any `Env`, because it outlives every isolate's `Env`. Each isolate — **including isolate 0**, the one `serve` is called from — attaches as its own connection; the connection is the `Bus` an `Env` owns and closes. The shape mirrors keta's own `serve(isolates: n)` handshake — a `SendPort` handed to each worker at spawn:
 
 ```dart
-// Main isolate — create the hub, capture its port.
+// Boot code (before serve) — create the hub outside any Env, capture its port.
 final hub = IsolateBus.hub();
 final SendPort busPort = hub.connectPort;   // SendPort-transferable to workers
 
-// Spawn each worker with busPort in its boot arguments; in the worker:
-final bus = IsolateBus.connect(busPort);    // this isolate is now on the bus
+// serve runs `boot` in every isolate it owns, isolate 0 included. Each boot
+// attaches its own connection — the Bus that isolate's Env holds:
+Future<Env> boot() async => Env(bus: IsolateBus.connect(busPort), /* ... */);
+final server = await app.serve(boot, port: port, isolates: n);
 
-// Wire the bus into your Env so handlers reach it, and close it on shutdown.
-// If Env implements keta's Disposable, close the bus (hub in the main isolate,
-// each connection in its worker) from Env.close() — the same Env-owned
-// lifecycle keta_otel's exporter uses.
+// Each Env closes its OWN connection on shutdown. If Env implements keta's
+// Disposable, close the connection from Env.close() — the same Env-owned
+// lifecycle keta_otel's exporter uses. Server.shutdown() drives those closes.
+await server.shutdown();
+
+// The hub belongs to no Env — it was created here, before any isolate booted —
+// so the boot code closes it after the servers stop. In an orderly shutdown
+// every connection has already detached; this closes the hub itself and tells
+// any connection that somehow missed its own close to terminate too.
+await hub.close();
 ```
 
-The hub instance is itself a working `Bus` for the main isolate's own subscribers, so the main isolate does not need a separate connection.
+Isolate 0 is **not** special: it connects like every worker rather than using the hub directly as its `Bus`. This keeps one rule — every `Env` owns a connection, the hub is owned by the boot code — instead of a main-isolate exception. The shipped register example (`examples/register`) is wired exactly this way.
 
 ## Lifecycle
 
@@ -79,9 +87,10 @@ The project gate is that each documented invariant has a test. The map:
 |---|---|
 | fan-out to every subscriber, topic isolation, reentrant publish | `test/in_memory_bus_test.dart` |
 | at-most-once: no live listener drops; late subscriber sees nothing earlier | `test/in_memory_bus_test.dart` |
+| a topic's controller is reclaimed at zero listeners (no unbounded growth over a client-driven topic namespace); resubscribe recreates it; a deliver racing removal is a safe no-op drop; two subscribers keep the topic while one stays | `test/local_delivery_test.dart`, `test/in_memory_bus_test.dart`, `test/isolate_bus_test.dart` |
 | close ends streams; publish/subscribe after close throw; idempotent | `test/in_memory_bus_test.dart`, `test/isolate_bus_test.dart` |
 | non-empty topic rule, on publish and subscribe, both implementations | `test/topic_rules_test.dart` |
-| JSON-value constraint enforced identically by both, with path in the error | `test/json_value_test.dart` |
+| JSON-value constraint enforced identically by both, with path in the error; a non-finite number (NaN / ±Infinity) is rejected so the bus accepts exactly what `jsonEncode` can serialize | `test/json_value_test.dart` |
 | cross-isolate fan-out both directions (real spawned isolate) | `test/isolate_bus_test.dart` |
 | hub close terminates connections; connection close ends its own streams | `test/isolate_bus_test.dart` |
 | a killed connection is not detected but does not break the hub | `test/isolate_bus_test.dart` |

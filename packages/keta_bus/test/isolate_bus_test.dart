@@ -77,6 +77,37 @@ void main() {
       expect(onConnection, ['yes']);
     });
 
+    test(
+      'reclaim holds per isolate: re-subscribing a reclaimed topic delivers',
+      () async {
+        // Each side of IsolateBus owns its own LocalDelivery, so the
+        // zero-listener reclaim must not break the hub's fan-out path nor a
+        // connection's local delivery. Cancel every listener (reclaiming the
+        // topic on both sides), then re-subscribe and prove delivery still
+        // works in both directions.
+        final warmHub = hub.subscribe('t').listen((_) {});
+        final warmConn = connection.subscribe('t').listen((_) {});
+        await pumpEventQueue();
+        await warmHub.cancel();
+        await warmConn.cancel();
+        await pumpEventQueue();
+
+        final onHub = <Object?>[];
+        final onConnection = <Object?>[];
+        final s1 = hub.subscribe('t').listen(onHub.add);
+        final s2 = connection.subscribe('t').listen(onConnection.add);
+        addTearDown(s1.cancel);
+        addTearDown(s2.cancel);
+        await pumpEventQueue();
+
+        connection.publish('t', 'revived');
+        await pumpEventQueue();
+
+        expect(onHub, ['revived']);
+        expect(onConnection, ['revived']);
+      },
+    );
+
     test('hub close terminates connection subscriptions', () async {
       var done = false;
       final sub = connection

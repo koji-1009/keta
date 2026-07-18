@@ -70,6 +70,39 @@ void main() {
     expect(received, isEmpty);
   });
 
+  test('re-subscribing a reclaimed topic still delivers', () async {
+    // After the last listener cancels, the topic's controller is reclaimed;
+    // subscribing again must recreate it and deliver normally (the leak fix
+    // must not break the resubscribe path).
+    final first = bus.subscribe('t').listen((_) {});
+    await first.cancel();
+
+    final received = <Object?>[];
+    final second = bus.subscribe('t').listen(received.add);
+    addTearDown(second.cancel);
+
+    bus.publish('t', 'after-reclaim');
+    await pumpEventQueue();
+
+    expect(received, ['after-reclaim']);
+  });
+
+  test('one of two subscribers cancelling leaves the other live', () async {
+    final a = <Object?>[];
+    final b = <Object?>[];
+    final subA = bus.subscribe('t').listen(a.add);
+    final subB = bus.subscribe('t').listen(b.add);
+    addTearDown(subB.cancel);
+
+    await subA.cancel();
+
+    bus.publish('t', 'still-here');
+    await pumpEventQueue();
+
+    expect(a, isEmpty);
+    expect(b, ['still-here']);
+  });
+
   test('a late subscriber never sees earlier messages', () async {
     bus.publish('t', 'before');
     final received = <Object?>[];

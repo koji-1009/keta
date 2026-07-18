@@ -28,6 +28,7 @@ void main() {
           true,
           42,
           3.14,
+          -0.0,
           'text',
           <Object?>[1, 'two', null],
           <String, Object?>{
@@ -37,6 +38,67 @@ void main() {
         ]) {
           expect(() => bus.publish('t', value), returnsNormally);
         }
+      });
+
+      test('accepts finite doubles and ints (jsonEncode-safe)', () {
+        for (final value in <num>[
+          0,
+          1,
+          -1,
+          3.14,
+          -2.5,
+          1e308,
+          double.maxFinite,
+        ]) {
+          expect(() => bus.publish('t', value), returnsNormally);
+        }
+      });
+
+      test('rejects NaN at the top level', () {
+        expect(
+          () => bus.publish('t', double.nan),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('finite'), contains('message')),
+            ),
+          ),
+        );
+      });
+
+      test('rejects +Infinity and -Infinity at the top level', () {
+        expect(() => bus.publish('t', double.infinity), throwsArgumentError);
+        expect(
+          () => bus.publish('t', double.negativeInfinity),
+          throwsArgumentError,
+        );
+      });
+
+      test('rejects a non-finite number nested in a list, naming the path', () {
+        expect(
+          () => bus.publish('t', <Object?>[1, double.infinity]),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('finite'), contains('message[1]')),
+            ),
+          ),
+        );
+      });
+
+      test('rejects a non-finite number nested in a map, naming the path', () {
+        expect(
+          () => bus.publish('t', <String, Object?>{'k': double.nan}),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('finite'), contains('message.k')),
+            ),
+          ),
+        );
       });
 
       test('rejects a non-JSON leaf', () {

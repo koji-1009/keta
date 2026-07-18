@@ -74,8 +74,24 @@ void checkTopic(String topic) {
 /// is exactly the invariant that lets a message cross an isolate boundary
 /// unchanged. [path] seeds the location reported in the error (e.g.
 /// `message.user[2]`).
+///
+/// A non-finite [double] — `NaN`, `Infinity`, or `-Infinity` — is rejected:
+/// `jsonEncode` throws on it, so accepting it would break the "canonical JSON
+/// value" promise (what the bus accepts is exactly what `jsonEncode` can
+/// serialize). All finite [num]s, [int]s included, are accepted.
 void checkJsonValue(Object? value, [String path = 'message']) {
-  if (value == null || value is bool || value is num || value is String) {
+  if (value == null || value is bool || value is String) {
+    return;
+  }
+  if (value is num) {
+    if (!value.isFinite) {
+      throw ArgumentError.value(
+        value,
+        path,
+        'not a finite JSON number (NaN and Infinity cannot be JSON-encoded) '
+        'at $path',
+      );
+    }
     return;
   }
   if (value is List) {
