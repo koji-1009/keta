@@ -252,14 +252,19 @@ void main() {
         res.headers['content-type'],
         'text/plain; version=0.0.4; charset=utf-8',
       );
-      // Conformance-renamed families: a seconds-unit summary, no `_ms` name.
+      // Conformance-renamed, histogram-shaped family: a seconds-unit
+      // histogram, no `_ms` name and no summary.
       expect(
         res.text(),
-        contains('# TYPE keta_request_duration_seconds summary'),
+        contains('# TYPE keta_request_duration_seconds histogram'),
       );
       expect(
         res.text(),
         contains('keta_request_duration_seconds_sum{method="GET"'),
+      );
+      expect(
+        res.text(),
+        contains('keta_request_duration_seconds_bucket{method="GET"'),
       );
       expect(res.text(), isNot(contains('keta_request_duration_ms')));
     });
@@ -479,11 +484,16 @@ void main() {
         ),
       );
       expect(body, isNot(contains('BOGUS-')));
-      // Exactly one series for the (other) label, not one per bogus verb. Three
-      // lines now carry it, not two: keta_requests_total, plus the duration
-      // summary's `_sum` and its `_count` (the conformance rename added the
-      // summary's own count line alongside the sum).
-      expect('(other)'.allMatches(body).length, 3);
+      // Exactly one series for the (other) label, not one per bogus verb.
+      // `(other)` appears once per line that carries this key: the
+      // `keta_requests_total` line, plus the duration histogram's per-key
+      // lines (one `_bucket` line per configured boundary, the implicit
+      // `+Inf` bucket, `_sum`, and `_count`) — `1 + buckets.length + 3`
+      // lines, not one per dispatched bogus verb.
+      expect(
+        '(other)'.allMatches(body).length,
+        1 + MetricsRegistry.defaultBuckets.length + 3,
+      );
     });
 
     test(
