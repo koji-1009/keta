@@ -2500,4 +2500,333 @@ class Dto {
       expect(canonicalDiagnostics(fixed), isEmpty);
     });
   });
+
+  // --- enum-accessor drift: the enum axis of type drift --------------------
+
+  group('enum-accessor drift', () {
+    // An enhanced (wire-mapped) enum whose wire strings differ from its Dart
+    // names — so `.name`/`values.byName` and `.wire`/`fromWire` are NOT
+    // interchangeable, and a DTO that picks the wrong pair breaks the wire.
+    const enhanced = '''
+import 'package:keta/keta.dart';
+enum Role {
+  admin('admin'),
+  superUser('super-user');
+  const Role(this.wire);
+  final String wire;
+  static Role fromWire(String wire) => values.firstWhere(
+        (v) => v.wire == wire,
+        orElse: () => throw BadRequest('unknown Role wire value: \$wire'),
+      );
+}
+''';
+
+    test('the blind spot now fires: an enhanced enum read through the '
+        'name-based accessor drifts on keta_type_drift, and the fix repairs '
+        'BOTH mappers to the wire accessor', () {
+      const source =
+          '$enhanced'
+          '''
+class UserDto {
+  final String id;
+  final Role role;
+  UserDto({required this.id, required this.role});
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, role: Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {'id': id, 'role': role.name};
+}
+''';
+      // Keys all line up, and there is no bare-cast drift, so the only finding
+      // is the enum-accessor axis — previously invisible (zero diagnostics,
+      // no-op fix). It reports under keta_type_drift (a contract drift).
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_type_drift');
+      expect(
+        d.single.message,
+        contains('role: fromJson uses the wrong enum accessor'),
+      );
+      expect(
+        d.single.message,
+        contains('role: toJson uses the wrong enum accessor'),
+      );
+      final fixed = applyCanonicalFix(source);
+      // Both mappers now route through the wire vocabulary.
+      expect(fixed, contains('role: Role.fromWire('));
+      expect(fixed, contains("'role': role.wire,"));
+      expect(fixed, isNot(contains('values.byName')));
+      expect(fixed, isNot(contains('role.name')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('the manufactured inconsistency is repaired to a consistent pair: a '
+        'sibling toJson key-drift no longer regenerates toJson alone (→ wire) '
+        'while leaving fromJson on the name accessor', () {
+      // toJson both drops `id` (key drift) AND writes role via `.name`; fromJson
+      // reads role via `values.byName`. The old per-member fix would rewrite
+      // only toJson (→ role.wire), stranding fromJson on the name accessor and
+      // making the DTO throw ArgumentError on its own output.
+      const source =
+          '$enhanced'
+          '''
+class UserDto {
+  final String id;
+  final Role role;
+  UserDto({required this.id, required this.role});
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, role: Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {'role': role.name};
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      // The pair is consistent: BOTH sides speak wire. The load-bearing
+      // assertion is that fromJson was regenerated too (no `values.byName`
+      // survives) — the axis that catches the manufactured hazard.
+      expect(fixed, contains('role: Role.fromWire('));
+      expect(fixed, contains("'role': role.wire,"));
+      expect(fixed, isNot(contains('values.byName')));
+      expect(fixed, isNot(contains('role.name')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a plain (non-enhanced) enum via .name/values.byName stays clean — no '
+        'false positive on the accessor axis', () {
+      const source = '''
+enum Role { admin, member }
+class Dto {
+  final Role role;
+  Dto({required this.role});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(role: Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {'role': role.name};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a nullable enhanced enum via fromWire/!.wire (behind the null guard) '
+        'is clean — the guard and null-assert shapes are recognized', () {
+      const source =
+          '$enhanced'
+          '''
+class Dto {
+  final Role? role;
+  Dto({this.role});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(role: json['role'] == null ? null : Role.fromWire(json['role'] as String));
+  Map<String, Object?> toJson() => {if (role != null) 'role': role!.wire};
+}
+''';
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a nullable enhanced enum read via the name accessor still drifts and '
+        'is repaired (the null-guard/!-assert paths carry the axis too)', () {
+      const source =
+          '$enhanced'
+          '''
+class Dto {
+  final Role? role;
+  Dto({this.role});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(role: json['role'] == null ? null : Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {if (role != null) 'role': role!.name};
+}
+''';
+      expect(
+        canonicalDiagnostics(source).single.rule,
+        'keta_type_drift',
+      );
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains('Role.fromWire('));
+      expect(fixed, contains('role!.wire'));
+      expect(fixed, isNot(contains('values.byName')));
+      expect(fixed, isNot(contains('role!.name')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+  });
+
+  // --- schema drift reachable past a hand-modified/refused mapper -----------
+
+  group('schema drift is independent of the mappers', () {
+    test('a spread (hand-modified) toJson no longer suppresses a stale-Schema '
+        'finding: check reports keta_schema_drift and fix reconciles the '
+        'Schema while leaving the refused mapper untouched', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id, 'name': name, ...extra};
+}
+const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], 'properties': {'id': {'type': 'string'}, 'stale': {'type': 'string'}}});
+''';
+      // The spread makes toJson unrecognizable (the fixer refuses the mappers),
+      // but the Schema-vs-fields comparison is independent — so the stale
+      // `stale` property is still flagged (previously: zero diagnostics).
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_schema_drift');
+      expect(d.single.message, contains('fields not in schema: name'));
+      expect(d.single.message, contains('run keta_lints:fix'));
+      final fixed = applyCanonicalFix(source);
+      // The Schema is reconciled...
+      expect(fixed, isNot(contains("'stale'")));
+      expect(fixed, contains("'name': {'type': 'string'}"));
+      // ...while the hand-modified toJson (its spread) is left byte-untouched.
+      expect(fixed, contains('...extra'));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('a positional-ctor DTO with ONLY schema drift is told to run the fix '
+        'for the Schema (fix #3 made Schema repair ctor-independent), NOT to '
+        'reconcile by hand naming the ctor blocker', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class P {
+  final String a;
+  final String b;
+  P(this.a, this.b);
+  factory P.fromJson(Map<String, Object?> json) => P(json['a'] as String, json['b'] as String);
+  Map<String, Object?> toJson() => {'a': a, 'b': b};
+}
+const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properties': {'a': {'type': 'string'}, 'stale': {'type': 'string'}}});
+''';
+      // The positional ctor blocks the MAPPER repairs, but the Schema repair is
+      // independent, so the advice must recommend the fix — not send the user
+      // to do it by hand behind a ctor blocker that no longer applies here.
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_schema_drift');
+      expect(d.single.message, contains('run keta_lints:fix'));
+      expect(d.single.message, isNot(contains('positional constructor')));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(contains("'stale'")));
+      expect(fixed, contains("'b': {'type': 'string'}"));
+      // The positional mappers are left exactly as written.
+      expect(
+        fixed,
+        contains("P(json['a'] as String, json['b'] as String)"),
+      );
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('an unresolvable field type still blocks the Schema repair (negative: '
+        'isSchemaFixable is not a blanket yes) — the advice names the blocker', () {
+      const source = '''
+import 'package:keta_openapi/keta_openapi.dart';
+class D {
+  final DateTime when;
+  final String id;
+  D({required this.when, required this.id});
+  factory D.fromJson(Map<String, Object?> json) =>
+      D(when: DateTime.parse(json['when'] as String), id: json['id'] as String);
+  Map<String, Object?> toJson() => {'when': when.toIso8601String(), 'id': id};
+}
+const dSchema = Schema('D', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
+''';
+      final d = canonicalDiagnostics(source);
+      final schemaDrift = d.where((e) => e.rule == 'keta_schema_drift');
+      expect(schemaDrift, hasLength(1));
+      expect(
+        schemaDrift.single.message,
+        contains('field type outside the canonical subset'),
+      );
+      expect(schemaDrift.single.message, isNot(contains('run keta_lints:fix')));
+      // And the fix must not touch the Schema (regenerating from the resolvable
+      // subset would drop the `when` property).
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(contains("'when': {")));
+    });
+  });
+
+  // --- inline back-compat fallback fromJson (docstring parity) --------------
+
+  group('inline fallback fromJson', () {
+    test('an inline `??` back-compat alias is treated as hand-modified: no '
+        'destructive recommendation, and the fix leaves fromJson byte-identical '
+        '(the block-form promise now holds for the inline spelling too)', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: (json['id'] ?? json['legacy_id']) as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      // No "unknown keys: legacy_id" nag, no fix recommendation that would
+      // delete the alias.
+      expect(canonicalDiagnostics(source), isEmpty);
+      // The fix refuses to touch it: byte-identical output.
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a genuinely-canonical single-key fromJson is still recognized and '
+        'repaired (negative: the fallback gate did not over-reject)', () {
+      const source = '''
+class Dto {
+  final String uuid;
+  Dto({required this.uuid});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(uuid: json['id'] as String);
+  Map<String, Object?> toJson() => {'uuid': uuid};
+}
+''';
+      expect(canonicalDiagnostics(source), hasLength(1));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("uuid: json['uuid'] as String,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+  });
+
+  // --- keta_canonical_missing names every axis the fix rewrites ------------
+
+  group('missing-mapper message names the sibling drift', () {
+    test('missing toJson + a drifted (present) fromJson names BOTH axes, since '
+        'one fix run rewrites both', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as int);
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('no toJson method'));
+      expect(d.single.message, contains('fromJson has also drifted'));
+      expect(d.single.message, contains('run keta_lints:fix'));
+      // And the fix genuinely rewrites both: it materializes toJson AND repairs
+      // the stale fromJson cast.
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("id: json['id'] as String,"));
+      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
+
+    test('missing toJson + a clean (present) fromJson names only the missing '
+        'side (negative: no spurious sibling mention)', () {
+      const source = '''
+class Dto {
+  final String id;
+  Dto({required this.id});
+  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d.single.rule, 'keta_canonical_missing');
+      expect(d.single.message, contains('no toJson method'));
+      expect(d.single.message, isNot(contains('has also drifted')));
+    });
+  });
 }

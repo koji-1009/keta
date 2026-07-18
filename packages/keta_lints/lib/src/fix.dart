@@ -72,17 +72,43 @@ void _fixClass(
 ) {
   final dto = CanonicalClass.of(node, context);
   if (dto == null) return;
-  // Every reason the fixer must not touch a class — an unresolvable field type,
-  // a positional ctor, a hand-modified/spread-carrying mapper — is folded into
-  // this one verdict, shared with the `check` diagnostic so both agree.
-  if (!dto.isFixable) return;
 
   final className = dto.className;
+  final schema = context.schemas[className];
+
+  // --- Schema reconciliation (independent of the mappers) ------------------
+  // The Schema-vs-fields comparison doesn't depend on the mapper shape at all,
+  // and regenerating the Schema needs only the resolvable field model — so a
+  // class whose MAPPERS the fixer refuses (a positional ctor, a hand-modified/
+  // spread toJson) still gets its drifted Schema reconciled, instead of the old
+  // behavior where any mapper blocker suppressed the Schema fix and shipped a
+  // stale contract. The guard is [isSchemaFixable] (only an unresolvable field
+  // type blocks it), NOT [isFixable]. The Schema edit spans the top-level
+  // initializer, disjoint from every mapper edit (which live inside the class
+  // body), so the non-overlap invariant holds — _applyEdits verifies it.
+  if (schema != null &&
+      dto.isSchemaFixable &&
+      !setEquals(schemaPropertyNames(schema), dto.allFinalFieldNames)) {
+    edits.add(
+      _Edit(
+        schema.offset,
+        schema.end,
+        _schemaSource(className, dto.fields, schema, source),
+      ),
+    );
+  }
+
+  // Every reason the fixer must not touch the MAPPERS — an unresolvable field
+  // type, a positional ctor, a hand-modified/spread-carrying mapper — is folded
+  // into this one verdict, shared with the `check` diagnostic so both agree.
+  // (The Schema above is deliberately gated separately, on [isSchemaFixable].)
+  if (!dto.isFixable) return;
+
   final fields = dto.fields;
   final fromJson = dto.fromJson;
   final toJson = dto.toJson;
   final fieldNames = dto.fieldNames;
-  final schema = context.schemas[className];
+  final enumDrift = dto.enumAccessorDrifts;
 
   // D-2: decide drift PER MEMBER, and regenerate ONLY the member(s) that
   // actually drifted, so a non-drifted member is left byte-for-byte untouched
@@ -92,12 +118,23 @@ void _fixClass(
   // now independent:
   //
   //  * fromJson drifts when it is missing, reads a key set other than the
-  //    fields, OR carries a stale `as T` cast (type drift — invisible to a
-  //    key-set diff, and repaired by regenerating fromJson from the field
-  //    types, which is what keeps check/fix symmetry for keta_type_drift).
-  //  * toJson drifts when it is missing or writes a key set other than the
-  //    fields.
-  //  * the Schema drifts when its `properties` key set differs from the fields.
+  //    fields, carries a stale `as T` cast (type drift — invisible to a key-set
+  //    diff), OR routes an enum through the wrong accessor (`values.byName` on
+  //    an enhanced enum) — the last invisible to BOTH the key-set and cast
+  //    diffs because an enum mapper is a wrapped call, yet still wire-breaking.
+  //  * toJson drifts when it is missing, writes a key set other than the
+  //    fields, OR routes an enum through the wrong accessor (`.name` on an
+  //    enhanced enum).
+  //  * the Schema is handled above, independently of the mappers.
+  //
+  // Folding each enum-accessor side into its OWN member's flag is what keeps the
+  // regenerated PAIR consistent: a member that regenerates emits the accessor
+  // matching the enum's enhanced-ness, and a member left alone must already have
+  // matched it (else its side would be flagged here) — so both mappers always
+  // end on the same wire vocabulary, even when only one regenerates (the
+  // manufactured hazard: a sibling key-drift regenerates toJson to `.wire` while
+  // fromJson still reads `values.byName`; catching fromJson's wrong accessor
+  // here regenerates it too, so the pair can't be left half-wire).
   //
   // The `!` on toJsonKeys is safe: isFixable guarantees a present toJson is a
   // recognizable key set (else it would have been refused as hand-modified).
@@ -108,13 +145,14 @@ void _fixClass(
   final fromJsonDrifted =
       fromJson == null ||
       !setEquals(fromJsonKeys(fromJson), fieldNames) ||
-      dto.typeDrifts.isNotEmpty;
+      dto.typeDrifts.isNotEmpty ||
+      enumDrift.fromJson.isNotEmpty;
   final toJsonDrifted =
-      toJson == null || !setEquals(toJsonKeys(toJson)!, fieldNames);
-  final schemaDrifted =
-      schema != null && !setEquals(schemaPropertyNames(schema), fieldNames);
-  if (!fromJsonDrifted && !toJsonDrifted && !schemaDrifted) {
-    return; // already canonical.
+      toJson == null ||
+      !setEquals(toJsonKeys(toJson)!, fieldNames) ||
+      enumDrift.toJson.isNotEmpty;
+  if (!fromJsonDrifted && !toJsonDrifted) {
+    return; // mappers already canonical (the Schema was handled above).
   }
 
   final insertions = <String>[];
@@ -132,15 +170,6 @@ void _fixClass(
   if (insertions.isNotEmpty) {
     final at = node.body.end - 1; // before the class's closing brace
     edits.add(_Edit(at, at, '\n${insertions.join('\n\n')}\n'));
-  }
-  if (schemaDrifted) {
-    edits.add(
-      _Edit(
-        schema.offset,
-        schema.end,
-        _schemaSource(className, fields, schema, source),
-      ),
-    );
   }
 }
 

@@ -10,8 +10,11 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-/// The SDK binary the task pins; the CLIs run under the same VM.
-const _dart = '/Users/koji/flutter/bin/cache/dart-sdk/bin/dart';
+/// The Dart VM running this test — the CLIs run under the *same* SDK, whatever
+/// it is, so the suite is portable to any CI checkout (no hardcoded SDK path).
+/// [Platform.resolvedExecutable] is the `dart` binary itself, which takes a
+/// script path (`dart bin/check.dart …`) exactly as a pinned SDK binary would.
+final _dart = Platform.resolvedExecutable;
 
 /// `bin/<name>` resolved against the package root (the cwd under `dart test`).
 String _script(String name) => p.join(Directory.current.path, 'bin', name);

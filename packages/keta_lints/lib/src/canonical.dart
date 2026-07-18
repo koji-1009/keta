@@ -91,13 +91,64 @@ void _checkClass(
         : '$handVerb by hand ($reason keeps keta_lints:fix from doing it)';
   }
 
+  // The Schema clause uses its OWN fixability verdict: reconciling the Schema is
+  // independent of the mappers and the ctor (fix.dart repairs it even when it
+  // refuses the mappers), so a positional ctor / hand-modified mapper must NOT
+  // steer the user away from the fix here — only an unresolvable field type,
+  // which is the sole thing that blocks Schema regeneration, may.
+  String adviseSchema() {
+    final reason = dto.schemaRefusalReason;
+    return reason == null
+        ? 'run keta_lints:fix to reconcile the Schema'
+        : 'reconcile the Schema by hand '
+              '($reason keeps keta_lints:fix from doing it)';
+  }
+
+  // --- schema drift (checked independently of the mappers) -----------------
+  // The Schema constant is the source of the emitted OpenAPI document. Its
+  // `properties` are compared to the fields with no regard for the mappers'
+  // shape — and fix reconciles it even on a class whose (hand-modified/spread)
+  // mappers it refuses — so this check must run BEFORE the mapper early-returns
+  // below, or a spread toJson would suppress a stale-Schema finding entirely
+  // (CI shipping a wrong contract). A distinct rule id (not keta_canonical_drift)
+  // keeps the mapper and schema findings — and their stable ids — separate when
+  // a class has drifted on both.
+  final schema = context.schemas[className];
+  if (schema != null) {
+    final props = schemaPropertyNames(schema);
+    final fields = dto.allFinalFieldNames;
+    if (!setEquals(props, fields)) {
+      final missing = fields.difference(props);
+      final extra = props.difference(fields);
+      final schemaParts = [
+        if (missing.isNotEmpty) 'fields not in schema: ${missing.join(', ')}',
+        if (extra.isNotEmpty)
+          'schema properties not fields: ${extra.join(', ')}',
+      ];
+      diagnostics.add(
+        make(
+          'keta_schema_drift',
+          'class $className Schema constant has drifted '
+              '(${schemaParts.join('; ')}); ${adviseSchema()}',
+        ),
+      );
+    }
+  }
+
   // --- missing mapper ------------------------------------------------------
   if (dto.fromJson == null || dto.toJson == null) {
     final side = dto.fromJson == null ? 'fromJson factory' : 'toJson method';
+    // When one mapper is missing but the OTHER (present) one has itself
+    // drifted, a single fix run rewrites BOTH — so name both axes rather than
+    // only the missing side, which would under-report what fix touches.
+    final sibling = _presentMapperDrifted(dto, className)
+        ? ' (its ${dto.fromJson == null ? 'toJson' : 'fromJson'} has also '
+              'drifted, so the fix rewrites both)'
+        : '';
     diagnostics.add(
       make(
         'keta_canonical_missing',
-        'class $className has final fields but no $side; '
+        'class $className has final fields but no $side$sibling; '
             '${advise('materialize the canonical mapper', 'materialize it')}',
       ),
     );
@@ -154,49 +205,56 @@ void _checkClass(
   // so whatever type drift is flagged here its whole-fromJson rewrite repairs —
   // check/fix symmetry by construction. (On a non-fixable class the recommended
   // action would be a no-op, so we stay silent, exactly as elsewhere.)
+  // The enum-accessor axis rides here too (same rule id, same fixability gate):
+  // an enum mapper is a wrapped call, so a wrong accessor — `values.byName`/
+  // `.name` on an *enhanced* enum whose wire strings differ from its names —
+  // slips past both the key-set diff and the bare-cast [typeDrifts], round-trips
+  // through the wrong vocabulary, and silently breaks the wire contract. It IS a
+  // type-contract drift, so it reports under keta_type_drift; the fix folds each
+  // side into its member's drift flag, so whatever this flags, fix repairs.
   if (dto.isFixable) {
-    final drifts = dto.typeDrifts;
-    if (drifts.isNotEmpty) {
-      String describe(TypeDrift d) =>
-          '${d.field}: fromJson casts as ${d.cast} but the field is '
-          '${d.declared}';
-      final parts = [for (final d in drifts) describe(d)];
+    final castDrifts = dto.typeDrifts;
+    final enumDrift = dto.enumAccessorDrifts;
+    final parts = [
+      for (final d in castDrifts)
+        '${d.field}: fromJson casts as ${d.cast} but the field is ${d.declared}',
+      for (final f in enumDrift.fromJson)
+        '$f: fromJson uses the wrong enum accessor for its wire mapping',
+      for (final f in enumDrift.toJson)
+        '$f: toJson uses the wrong enum accessor for its wire mapping',
+    ];
+    if (parts.isNotEmpty) {
       diagnostics.add(
         make(
           'keta_type_drift',
-          'class $className has a fromJson cast that disagrees with its field '
-              'type (${parts.join('; ')}); '
+          'class $className has a mapper that disagrees with its field type '
+              '(${parts.join('; ')}); '
               '${advise('reconcile the mapper', 'reconcile it')}',
         ),
       );
     }
   }
+}
 
-  // --- schema drift --------------------------------------------------------
-  // The Schema constant is the source of the emitted OpenAPI document. If its
-  // `properties` no longer match the fields, `check` was previously green while
-  // `fix` would rewrite the Schema — CI shipped a wrong contract. Report it so
-  // check flags exactly what fix reconciles. A distinct rule id (not
-  // keta_canonical_drift) keeps the mapper and schema findings — and their
-  // stable ids — separate when a class has drifted on both.
-  final schema = context.schemas[className];
-  if (schema != null) {
-    final props = schemaPropertyNames(schema);
-    if (!setEquals(props, fields)) {
-      final schemaParts = [
-        if (fields.difference(props).isNotEmpty)
-          'fields not in schema: ${fields.difference(props).join(', ')}',
-        if (props.difference(fields).isNotEmpty)
-          'schema properties not fields: ${props.difference(fields).join(', ')}',
-      ];
-      diagnostics.add(
-        make(
-          'keta_schema_drift',
-          'class $className Schema constant has drifted '
-              '(${schemaParts.join('; ')}); '
-              '${advise('reconcile the Schema', 'reconcile the Schema')}',
-        ),
-      );
-    }
+/// When exactly one mapper is present, whether that present mapper has itself
+/// drifted (a key-set, cast, or enum-accessor mismatch the fixer would repair
+/// in the same run that materializes the missing one). Mirrors the fixer's
+/// per-member drift predicates so the missing-mapper message names every axis
+/// the fix touches. A hand-modified present mapper (unrecognizable key set /
+/// non-canonical fromJson) is left untouched by the fixer, so it does not count.
+bool _presentMapperDrifted(CanonicalClass dto, String className) {
+  final fields = dto.allFinalFieldNames;
+  final enumDrift = dto.enumAccessorDrifts;
+  if (dto.fromJson == null && dto.toJson != null) {
+    final keys = toJsonKeys(dto.toJson!);
+    if (keys == null) return false; // hand-modified — fixer leaves it
+    return !setEquals(keys, fields) || enumDrift.toJson.isNotEmpty;
   }
+  if (dto.toJson == null && dto.fromJson != null) {
+    if (!isCanonicalFromJson(dto.fromJson!, className)) return false;
+    return !setEquals(fromJsonKeys(dto.fromJson!), fields) ||
+        dto.typeDrifts.isNotEmpty ||
+        enumDrift.fromJson.isNotEmpty;
+  }
+  return false; // both missing: nothing else to rewrite
 }

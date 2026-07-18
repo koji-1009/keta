@@ -207,6 +207,51 @@ class CanonicalClass {
   /// Whether the fixer would act on this class (materialize or reconcile).
   bool get isFixable => refusalReason == null;
 
+  /// Why the fixer would decline to reconcile this DTO's *Schema* constant, or
+  /// null if it can. Schema regeneration is independent of the mappers and the
+  /// constructor — it needs only the resolvable field model — so the mapper/
+  /// ctor blockers in [refusalReason] do NOT apply here. The one thing that
+  /// does block it is a field type the model can't express: regenerating the
+  /// Schema from the resolvable subset would silently drop that field's
+  /// property, so we refuse instead. (A DTO with zero final fields regenerates
+  /// to empty `properties`, which is correct, so it is not a blocker.) This is
+  /// what lets the fixer reconcile a drifted Schema on a class whose mappers it
+  /// refuses (a positional ctor, a hand-modified/spread toJson).
+  String? get schemaRefusalReason =>
+      unresolvableField ? 'a field type outside the canonical subset' : null;
+
+  /// Whether the fixer would reconcile this DTO's Schema constant — see
+  /// [schemaRefusalReason]. Weaker than [isFixable]: a mapper/ctor blocker
+  /// stops the mapper repairs but not the Schema repair.
+  bool get isSchemaFixable => schemaRefusalReason == null;
+
+  /// The enum-accessor drift axis — the enum sibling of [typeDrifts], invisible
+  /// to both the key-set diff and the bare-cast [typeDrifts] because an enum
+  /// mapper is a *wrapped call* (`Role.fromWire(json['role'] as String)` /
+  /// `role.wire`), never a bare `as T`. A DTO that reads an *enhanced* enum
+  /// through the name-based `values.byName`/`.name` (or a *plain* enum through
+  /// `fromWire`/`.wire`) round-trips through the wrong wire vocabulary and
+  /// silently breaks the contract, yet drifts on neither existing axis.
+  ///
+  /// Reported per member (fromJson / toJson) precisely so the fixer can fold
+  /// each side into its own drift flag: regenerating a mismatched member emits
+  /// the accessor matching the enum's enhanced-ness, and a member that is NOT
+  /// flagged already matches it — so however the pair regenerates, both sides
+  /// end on the same vocabulary and the post-fix pair is never inconsistent.
+  EnumAccessorDrifts get enumAccessorDrifts {
+    final enumFields = <String, _EnumType>{
+      for (final f in fields)
+        if (f.type is _EnumType) f.name: f.type as _EnumType,
+    };
+    if (enumFields.isEmpty) return const EnumAccessorDrifts({}, {});
+    return EnumAccessorDrifts(
+      fromJson == null
+          ? const {}
+          : _fromJsonEnumAccessorDrifts(fromJson!, enumFields),
+      toJson == null ? const {} : _toJsonEnumAccessorDrifts(toJson!, enumFields),
+    );
+  }
+
   /// Fields whose fromJson `as T` cast disagrees with the declared field type —
   /// the syntactic *type*-drift axis, orthogonal to the key-set drift the round-
   /// trip check covers (keys can line up perfectly while a type has silently
@@ -262,6 +307,118 @@ List<TypeDrift> fromJsonTypeDrifts(
     }
   }
   return drifts;
+}
+
+/// The per-member enum-accessor drift verdict: the fields whose fromJson enum
+/// call, and the fields whose toJson enum entry, use the wrong accessor for the
+/// enum's enhanced-ness. Kept per member so the fixer folds each side into
+/// fromJsonDrifted / toJsonDrifted independently.
+class EnumAccessorDrifts {
+  const EnumAccessorDrifts(this.fromJson, this.toJson);
+
+  /// Field names whose fromJson uses the wrong accessor (`values.byName` on an
+  /// enhanced enum, or `fromWire` on a plain one).
+  final Set<String> fromJson;
+
+  /// Field names whose toJson uses the wrong accessor (`.name` on an enhanced
+  /// enum, or `.wire` on a plain one).
+  final Set<String> toJson;
+
+  bool get isEmpty => fromJson.isEmpty && toJson.isEmpty;
+}
+
+/// The enum-typed fields whose fromJson call routes through the wrong accessor
+/// for the enum's enhanced-ness. Only a call the fixer itself generates —
+/// `Name.fromWire(…)` or `Name.values.byName(…)`, possibly behind the nullable
+/// `json[k] == null ? null : …` guard — is judged; any other inner shape is
+/// left to the outer-shape gate, exactly as the rest of the recognizer never
+/// inspects an unrecognized inner expression.
+Set<String> _fromJsonEnumAccessorDrifts(
+  ConstructorDeclaration fromJson,
+  Map<String, _EnumType> enumFields,
+) {
+  final arguments = _fromJsonArguments(fromJson);
+  if (arguments == null) return const {};
+  final drifts = <String>{};
+  for (final argument in arguments) {
+    if (argument is! NamedArgument) continue;
+    final field = argument.name.lexeme;
+    final enumType = enumFields[field];
+    if (enumType == null) continue;
+    var expr = argument.argumentExpression;
+    // Unwrap the nullable guard the fixer emits for an optional enum field.
+    if (expr is ConditionalExpression) expr = expr.elseExpression;
+    if (expr is! MethodInvocation) continue; // unrecognized — leave alone
+    final usesWire = switch (expr.methodName.name) {
+      'fromWire' => true,
+      'byName' => false,
+      _ => null, // not an enum call we generate
+    };
+    if (usesWire != null && usesWire != enumType.enhanced) drifts.add(field);
+  }
+  return drifts;
+}
+
+/// The enum-typed fields whose toJson entry reads the wrong accessor. Matched on
+/// the value expression's referenced field (`role.wire` / `role!.wire`), so it
+/// is independent of the entry's key — a key drift is a separate axis.
+Set<String> _toJsonEnumAccessorDrifts(
+  MethodDeclaration toJson,
+  Map<String, _EnumType> enumFields,
+) {
+  final returned = _returnedMap(toJson);
+  if (returned == null) return const {};
+  final drifts = <String>{};
+  void visit(Iterable<CollectionElement> elements) {
+    for (final element in elements) {
+      switch (element) {
+        case MapLiteralEntry(:final value):
+          final field = _driftedEnumAccessorField(value, enumFields);
+          if (field != null) drifts.add(field);
+        case IfElement():
+          visit([element.thenElement]);
+          if (element.elseElement != null) visit([element.elseElement!]);
+        default:
+          break;
+      }
+    }
+  }
+
+  visit(returned.elements);
+  return drifts;
+}
+
+/// The field name if [value] is an enum accessor (`field.name`/`field.wire`,
+/// nullable `field!.name`/`field!.wire`) on an enum whose enhanced-ness the
+/// accessor contradicts, else null.
+String? _driftedEnumAccessorField(
+  Expression value,
+  Map<String, _EnumType> enumFields,
+) {
+  final ({String field, String accessor})? access = switch (value) {
+    // `role.wire` — a bare `a.b` is a PrefixedIdentifier.
+    PrefixedIdentifier(:final prefix, :final identifier) => (
+      field: prefix.name,
+      accessor: identifier.name,
+    ),
+    // `role!.wire` — the `!`-asserted target makes it a PropertyAccess.
+    PropertyAccess(
+      target: PostfixExpression(operand: SimpleIdentifier(:final name)),
+      :final propertyName,
+    ) =>
+      (field: name, accessor: propertyName.name),
+    _ => null,
+  };
+  if (access == null) return null;
+  final enumType = enumFields[access.field];
+  if (enumType == null) return null;
+  final usesWire = switch (access.accessor) {
+    'wire' => true,
+    'name' => false,
+    _ => null,
+  };
+  if (usesWire == null || usesWire == enumType.enhanced) return null;
+  return access.field;
 }
 
 /// The argument list of a canonical fromJson body (`ClassName(...)`), or null
@@ -472,18 +629,58 @@ bool hasMapper(ClassDeclaration node) {
 /// id);`), does not match and is treated as hand-modified — that is what makes
 /// a hand-written back-compat alias fromJson survive the fix instead of being
 /// silently collapsed to the naive one-liner.
+///
+/// The *inline* spelling of the same alias
+/// (`Dto(id: (json['id'] ?? json['legacy_id']) as String)`) satisfies the outer
+/// shape, so a further gate rejects any argument that carries a `??` fallback or
+/// reads more than its own single key: the fixer's whole-member regeneration
+/// would collapse it to the naive one-key cast, deleting the back-compat branch.
+/// Treating it as hand-modified — refused by the fixer, unflagged by the check —
+/// keeps the surviving-fallback promise for BOTH spellings, not just the block.
 bool isCanonicalFromJson(ConstructorDeclaration fromJson, String className) {
   final body = fromJson.body;
   if (body is! ExpressionFunctionBody) return false;
-  return switch (body.expression) {
-    InstanceCreationExpression(:final constructorName)
+  final ArgumentList arguments;
+  switch (body.expression) {
+    case InstanceCreationExpression(:final constructorName, :final argumentList)
         when constructorName.type.name.lexeme == className &&
-            constructorName.name == null =>
-      true,
-    MethodInvocation(:final methodName) when methodName.name == className =>
-      true,
-    _ => false,
-  };
+            constructorName.name == null:
+      arguments = argumentList;
+    case MethodInvocation(:final methodName, :final argumentList)
+        when methodName.name == className:
+      arguments = argumentList;
+    default:
+      return false;
+  }
+  for (final argument in arguments.arguments) {
+    final scan = _FallbackScan();
+    argument.argumentExpression.accept(scan);
+    // A canonical argument reads exactly one key (twice at most, for the
+    // nullable guard — same key), never coalesces; anything else is a
+    // hand-authored fallback/alias the fixer must not rewrite.
+    if (scan.coalesced || scan.keys.length > 1) return false;
+  }
+  return true;
+}
+
+/// Scans one fromJson argument for the hand-authored-fallback signals: a `??`
+/// coalesce, or reads of more than one distinct `json['key']`.
+class _FallbackScan extends RecursiveAstVisitor<void> {
+  final Set<String> keys = {};
+  bool coalesced = false;
+
+  @override
+  void visitIndexExpression(IndexExpression node) {
+    final index = node.index;
+    if (index is SimpleStringLiteral) keys.add(index.value);
+    super.visitIndexExpression(node);
+  }
+
+  @override
+  void visitBinaryExpression(BinaryExpression node) {
+    if (node.operator.lexeme == '??') coalesced = true;
+    super.visitBinaryExpression(node);
+  }
 }
 
 /// The string keys read via `…['key']` inside the fromJson factory (regardless
