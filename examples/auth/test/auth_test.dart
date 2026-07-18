@@ -9,7 +9,6 @@ import 'package:keta/test.dart';
 import 'package:keta_auth_example/app.dart';
 import 'package:keta_auth_example/auth.dart';
 import 'package:keta_auth_example/env.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
 
 TestClient<Env> newClient() =>
@@ -143,7 +142,7 @@ void main() {
 
   group('openapi conformance', () {
     test('the same declaration drives the OpenAPI output', () {
-      final doc = OpenApi.fromRoutes(buildApp().routes).toJson();
+      final doc = buildOpenApi().toJson();
       final op =
           ((doc['paths'] as Map)['/admin/whoami'] as Map)['get']
               as Map<String, Object?>;

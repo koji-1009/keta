@@ -125,3 +125,12 @@ App<Env> buildApp() {
 
   return app;
 }
+
+/// The OpenAPI document for [buildApp], with the same defaults the runtime gate
+/// enforces. Built here rather than in tool/openapi.dart so the contract test
+/// and the emitted file cannot disagree about what the API requires.
+OpenApi buildOpenApi() => OpenApi.fromRoutes(
+  buildApp().routes,
+  title: 'keta auth example',
+  version: '0.1.0',
+);
