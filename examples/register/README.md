@@ -26,11 +26,15 @@ The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting
 |--------|----------------------------|--------------------------------------|
 | GET    | `/health`                  | Liveness check                       |
 | GET    | `/users`                   | List users (`?limit`, `?role`); nested `UserList` |
+| GET    | `/users/by-role/:role`     | List users of one role (typed `Role` capture) |
+| GET    | `/users/events`            | Live feed of create/update/delete (SSE) |
 | POST   | `/users`                   | Create a user (validated; 201 + Location) |
 | GET    | `/users/:id`               | Fetch a user                         |
 | PUT    | `/users/:id`               | Replace a user (404 if absent)       |
 | DELETE | `/users/:id`               | Delete a user (204; 404 if absent)   |
 | GET    | `/users/:uid/tags/:index`  | Read one tag by index                |
+| GET    | `/whoami`                  | The authenticated caller             |
+| GET    | `/admin/ping`              | Admin-only liveness check (403 if not admin) |
 | POST   | `/uploads`                 | multipart/form-data upload (keta_multipart) |
 | GET    | `/metrics`                 | Prometheus-format request metrics    |
 

@@ -82,9 +82,12 @@ void register(App<Env> app) {
 }
 
 /// The OpenAPI document for [buildApp] — byte-identical to the register-based
-/// example's. That identity is now worth something: the tree has to denote
-/// exactly the same route set, so passing it says the file convention loses
-/// nothing, rather than saying both files were copy-pasted from each other.
+/// example's *on the routes both trees serve*. `../register` has since grown
+/// `/users/by-role/:role` and `/users/events`, neither mirrored here (see this
+/// package's README), so the two documents disagree as wholes; `test/
+/// files_test.dart`'s shared-surface test restricts `../register`'s document
+/// to this tree's path set and asserts deep equality on that subset, so the
+/// narrower claim stays a passing test rather than a comment nobody re-checks.
 OpenApi buildOpenApi() => OpenApi.fromRoutes(
   buildApp().routes,
   title: 'keta example',

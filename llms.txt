@@ -183,6 +183,11 @@ Wrap writes in a transaction with the `tx()` middleware and read the connection 
 
 ## Testing
 
+`TestClient`, `testContext`, `testBothModes`, `TestUpgrade`, and `TestSocket`
+all live in `package:keta/test.dart` — a separate import alongside
+`package:keta/keta.dart`, not re-exported by it; omit it and `TestClient` is an
+undefined name.
+
 `TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/
 delete/patch/head/options`, returning a `TestResponse` with `status`,
 `headers`, `text()`, `json()`. `testContext(env, ...)` builds a `Context` for a single handler.

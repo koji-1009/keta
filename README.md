@@ -62,7 +62,7 @@ These absences were judged, not overlooked — do not read them as gaps to fill:
 
 ## Status
 
-v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are roughly 790 tests across the workspace; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
+v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are roughly 880 tests across the workspace; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
 
 ## Quick start
 

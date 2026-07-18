@@ -24,3 +24,9 @@ dependencies:
 
 dev_dependencies:
   test: ^1.25.0
+  # Dev-time only, and one-directional: the shared-surface test
+  # (test/files_test.dart) builds ../register's OpenAPI document to diff
+  # against this tree's, so the "same routes agree" claim is a passing
+  # assertion rather than a comment nobody re-checks.
+  keta_register_example:
+    path: ../register

@@ -5,7 +5,18 @@ The same app as [`../register`](../register), registered by **file convention**
 exposes `register(app)`; `dart run keta_files:sync` materializes their imports
 and calls into the marked regions of `lib/routes.dart`. Everything else — the
 domain, the middleware stack, the routes, the security declarations — matches
-the register-based example, so the two emit **byte-identical OpenAPI**.
+the register-based example.
+
+This tree covers the CRUD surface, not all of it: `../register` has since grown
+`/users/by-role/:role` (a custom `Capture`) and `/users/events` (an SSE feed),
+and neither is mirrored here — that would need an events bus and a custom SSE
+capture in keta_files, a piece of work of its own, not a copy-paste. What is
+true, and enforced by `test/files_test.dart`'s `'the shared CRUD surface
+documents identically to ../register'`, is that the routes both examples serve
+emit **byte-identical OpenAPI** — the test builds both documents, restricts
+`../register`'s to exactly this tree's path set, and asserts deep equality on
+that subset, so the claim cannot silently rot the next time either side
+changes.
 
 How `/admin/ping`'s authorization is wired now matches too. `../register`
 scopes a `requireAdmin()` middleware over the whole `/admin` subtree with
