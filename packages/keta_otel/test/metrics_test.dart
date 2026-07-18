@@ -27,6 +27,16 @@ void main() {
     expect(registry.prometheus(), contains(r'route="/a\"b\\c\nd"'));
   });
 
+  test('a carriage return in a label value round-trips escaped, not raw', () {
+    final registry = MetricsRegistry()
+      ..record(method: 'GET', route: '/a\rb', status: 200, durationSeconds: 1);
+    final body = registry.prometheus();
+    // The CR is emitted as the two-character escape `\r`, never as a raw
+    // carriage return that a CRLF-framed scraper could desync on.
+    expect(body, contains(r'route="/a\rb"'));
+    expect(body, isNot(contains('\r')));
+  });
+
   test(
     'fractional durations accumulate exactly, not truncated to whole units',
     () {

@@ -91,7 +91,16 @@ class _Key {
   int get hashCode => Object.hash(method, route, status);
 }
 
+// Prometheus label values are a backslash-escaped, double-quoted string on a
+// single text-exposition line, so the three characters that would otherwise
+// break that framing — `\` (the escape char itself, first so it never
+// double-escapes the sequences added below), `"` (the delimiter), and `\n`
+// (the line terminator) — are escaped. `\r` gets the same treatment: a bare
+// carriage return is not a line terminator Prometheus recognizes, but a
+// scraper reading the exposition over a CRLF transport can still be desynced
+// by a raw CR inside a value, so it is escaped rather than emitted literally.
 String _escape(String value) => value
     .replaceAll(r'\', r'\\')
     .replaceAll('"', r'\"')
-    .replaceAll('\n', r'\n');
+    .replaceAll('\n', r'\n')
+    .replaceAll('\r', r'\r');

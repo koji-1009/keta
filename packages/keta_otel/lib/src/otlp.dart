@@ -73,8 +73,9 @@ class OtlpExporter implements Disposable {
     required this.maxQueueSize,
     required this.maxBatchSize,
     required Duration exportInterval,
+    Completer<void>? closing,
     this._onWarn,
-  }) {
+  }) : _closing = closing ?? Completer<void>() {
     if (exportInterval > Duration.zero) {
       _timer = Timer.periodic(exportInterval, (_) => _drainNextBatch());
     }
@@ -98,6 +99,19 @@ class OtlpExporter implements Disposable {
   /// the stuck kind) is not left dangling either. This per-POST protection
   /// is orthogonal to batching above it: batching changes when a POST is
   /// made, not how each individual POST is guarded.
+  ///
+  /// The *gap* between retryable attempts is bounded separately from the
+  /// per-POST [timeout]. A retryable response (429/503) may carry a
+  /// `Retry-After`; that value is attacker/collector-controlled, so the
+  /// honored delay is clamped to [maxRetryDelay] — an absurd `Retry-After`
+  /// (`2000000000`, a 63-year sleep) can never park a batch, and thus
+  /// `flush()`/`close()`, for longer than that cap. On top of the clamp, each
+  /// retry sleep races the exporter's own shutdown signal: [close] fires it
+  /// before awaiting in-flight work, so a batch parked in a retry sleep is cut
+  /// loose immediately instead of holding shutdown for the (already bounded)
+  /// remaining delay. Together these keep the whole retry loop — attempts and
+  /// sleeps alike — bounded in wall-clock time regardless of collector
+  /// behavior.
   factory OtlpExporter.http(
     Uri endpoint, {
     String serviceName = 'keta',
@@ -105,12 +119,18 @@ class OtlpExporter implements Disposable {
     Duration timeout = const Duration(seconds: 10),
     int maxRetries = defaultMaxRetries,
     Duration retryBackoff = defaultRetryBackoff,
+    Duration maxRetryDelay = defaultMaxRetryDelay,
     int maxQueueSize = defaultMaxQueueSize,
     int maxBatchSize = defaultMaxBatchSize,
     Duration exportInterval = defaultExportInterval,
     OtlpWarn? onWarn,
   }) {
     final client = HttpClient();
+    // Completed by `close()` the instant shutdown begins (before it awaits
+    // in-flight work). Retry sleeps race this so a mid-retry batch bails
+    // promptly rather than pinning `flush()` for its remaining delay. Shared
+    // with the instance below via the private constructor's `closing:`.
+    final closing = Completer<void>();
 
     // One POST attempt, guarded by [timeout]. Returns the delay to wait before
     // retrying when the collector answered with a *retryable* status (429/503)
@@ -145,7 +165,7 @@ class OtlpExporter implements Disposable {
         // config/auth error, a 500) is terminal: re-POSTing the same body just
         // earns the same rejection, so it fails the batch immediately.
         if (status == 429 || status == 503) {
-          return _retryDelay(retryAfter, retryBackoff);
+          return _retryDelay(retryAfter, retryBackoff, maxRetryDelay);
         }
         throw HttpException('OTLP export rejected: HTTP $status');
       }();
@@ -185,7 +205,14 @@ class OtlpExporter implements Disposable {
             'OTLP export still retryable after ${maxRetries + 1} attempts',
           );
         }
-        await Future<void>.delayed(delay);
+        // Wait out the (already [maxRetryDelay]-clamped) delay, but abandon it
+        // the moment `close()` fires `closing`: this is what keeps `close()`
+        // bounded when a batch is mid-retry-sleep. Abandoning throws the same
+        // failure shape a rejected send does, so `_drainNextBatch` folds the
+        // batch into the drop count rather than losing it silently.
+        if (await _sleepUnless(delay, closing.future)) {
+          throw StateError('OTLP export abandoned: exporter closing');
+        }
       }
     }
 
@@ -196,6 +223,7 @@ class OtlpExporter implements Disposable {
       maxQueueSize: maxQueueSize,
       maxBatchSize: maxBatchSize,
       exportInterval: exportInterval,
+      closing: closing,
       onWarn: onWarn,
     );
   }
@@ -218,6 +246,15 @@ class OtlpExporter implements Disposable {
   /// `Retry-After` to override it.
   static const Duration defaultRetryBackoff = Duration(milliseconds: 500);
 
+  /// The ceiling on a *honored* `Retry-After`. The header is collector- (and
+  /// so, for a compromised collector, attacker-) controlled, so its value is
+  /// clamped to this before it can park a batch: 5s is a small multiple of
+  /// [defaultRetryBackoff] and stays under the per-POST `timeout`, keeping a
+  /// batch's total retry time — and thus how long `flush()`/`close()` can wait
+  /// on it — on the order of one request rather than unbounded. The operator's
+  /// own `retryBackoff` fallback is trusted and never clamped.
+  static const Duration defaultMaxRetryDelay = Duration(seconds: 5);
+
   final OtlpSender _send;
   final String serviceName;
   final int maxQueueSize;
@@ -238,6 +275,12 @@ class OtlpExporter implements Disposable {
   /// backlog: losing data beats losing the server, but losing it silently
   /// is not on the menu).
   int _dropped = 0;
+
+  /// Completed by [close] the moment shutdown begins, before it awaits
+  /// in-flight work. The `OtlpExporter.http` sender's retry sleeps race this,
+  /// so a batch parked mid-retry is cut loose promptly instead of holding
+  /// [flush]/[close] for its remaining (already clamped) delay.
+  final Completer<void> _closing;
 
   Timer? _timer;
 
@@ -322,11 +365,16 @@ class OtlpExporter implements Disposable {
   ///
   /// Looping (rather than one pass over a snapshot) is what makes "drains
   /// spans enqueued mid-flush" true: a snapshot would miss a span appended
-  /// while this wait is already in progress — e.g. a request still
-  /// finishing during shutdown's drain window. It stays bounded because
-  /// each export races the sender's own timeout (see `OtlpExporter.http`),
-  /// so a stuck collector cannot make this loop over indefinitely, only
-  /// requests that keep enqueuing new spans forever can.
+  /// while this wait is already in progress — e.g. a request still finishing
+  /// during shutdown's drain window. It stays bounded because every export is
+  /// bounded in wall-clock time: each POST races the sender's own per-POST
+  /// timeout, and each inter-attempt retry sleep is clamped to `maxRetryDelay`
+  /// over a bounded number of retries (see `OtlpExporter.http`). So a stuck or
+  /// hostile collector — even one answering 429/503 with a giant `Retry-After`
+  /// — cannot make this loop run indefinitely; only requests that keep
+  /// enqueuing new spans forever can. When the caller is [close] rather than a
+  /// standalone `flush()`, the `_closing` signal additionally cuts any batch
+  /// mid-retry-sleep, so shutdown does not even wait out the clamped delay.
   Future<void> flush() async {
     while (_queue.isNotEmpty || _inFlight.isNotEmpty) {
       while (_queue.isNotEmpty) {
@@ -343,8 +391,17 @@ class OtlpExporter implements Disposable {
   /// `Timer` pins its isolate open, so a leaked one keeps a shut-down server
   /// process from exiting. Safe to call from `Server.shutdown` via
   /// [Disposable].
+  ///
+  /// The `_closing` signal is fired *before* the flush: a batch parked in a
+  /// retry sleep is racing that signal (see `OtlpExporter.http`), so firing it
+  /// first cuts such a batch loose immediately — otherwise `flush()`'s
+  /// `Future.wait` would block on the sleeping batch future for its remaining
+  /// (clamped) delay. A cut batch fails like any other, so its spans are
+  /// counted as dropped. This is what makes `close()` bounded regardless of
+  /// how a collector answers.
   @override
   Future<void> close() async {
+    if (!_closing.isCompleted) _closing.complete();
     await flush();
     _timer?.cancel();
     _releaseResources?.call();
@@ -358,10 +415,44 @@ class OtlpExporter implements Disposable {
 /// HTTP-date form: a collector throttling a client uses seconds in practice, and
 /// a bogus or date value simply falls back to the fixed backoff rather than
 /// failing the send.
-Duration _retryDelay(String? retryAfter, Duration fallback) {
+///
+/// The honored header value is clamped to [maxDelay]. `Retry-After` is
+/// collector-controlled, and a hostile or compromised collector answering
+/// 429/503 with a huge count (`2000000000` → a 63-year `Duration`) must not be
+/// able to park a batch — and, through it, `flush()`/`close()` — for that long.
+/// [fallback] is the operator's own configured backoff, trusted, so it is used
+/// as-is without clamping.
+Duration _retryDelay(String? retryAfter, Duration fallback, Duration maxDelay) {
   final seconds = retryAfter == null ? null : int.tryParse(retryAfter.trim());
-  if (seconds != null && seconds >= 0) return Duration(seconds: seconds);
+  if (seconds != null && seconds >= 0) {
+    final honored = Duration(seconds: seconds);
+    return honored > maxDelay ? maxDelay : honored;
+  }
   return fallback;
+}
+
+/// Sleeps for [delay], unless [abort] completes first. Returns `true` if
+/// [abort] won the race (the caller should give up), `false` if the full delay
+/// elapsed.
+///
+/// A bare `Future.delayed` cannot be cancelled, so a plain `Future.any` race
+/// would leave its timer running until [delay] elapses even after [abort] won —
+/// harmless per call, but this is the exporter's shutdown path, where the point
+/// is to *stop* waiting. Driving an explicit [Timer] lets the [abort] branch
+/// cancel it, so a shutdown truly ends the sleep then and there rather than
+/// merely ignoring its result.
+Future<bool> _sleepUnless(Duration delay, Future<void> abort) {
+  final done = Completer<bool>();
+  final timer = Timer(delay, () {
+    if (!done.isCompleted) done.complete(false);
+  });
+  abort.then((_) {
+    if (!done.isCompleted) {
+      timer.cancel();
+      done.complete(true);
+    }
+  });
+  return done.future;
 }
 
 /// Encodes [spans] into an OTLP/JSON `ExportTraceServiceRequest` body.

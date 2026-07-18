@@ -297,4 +297,105 @@ void main() {
       expect(dropReport.value['dropped'], 1);
     },
   );
+
+  test(
+    'a huge Retry-After is clamped: the retry waits the cap, not the header',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final statuses = <int>[];
+      server.listen((req) async {
+        await req.drain<void>();
+        // First attempt throttles with an absurd Retry-After (an hour). An
+        // unclamped client would honor it literally and park the batch for
+        // 3600s; the retry must instead fire after the small cap below.
+        if (statuses.isEmpty) {
+          req.response.statusCode = 429;
+          req.response.headers.set('retry-after', '3600');
+        } else {
+          req.response.statusCode = 200;
+        }
+        statuses.add(req.response.statusCode);
+        await req.response.close();
+      });
+
+      final exporter = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+        // 50ms cap: the honored 3600s Retry-After is clamped down to this, so
+        // the whole export completes in well under the 2s bound asserted below
+        // rather than in an hour.
+        maxRetryDelay: const Duration(milliseconds: 50),
+      );
+      addTearDown(exporter.close);
+
+      final sw = Stopwatch()..start();
+      await exporter.export([
+        OtelSpan(
+          traceId: 'a' * 32,
+          spanId: 'b' * 16,
+          name: 'GET /x',
+          startUnixNano: 1,
+          endUnixNano: 2,
+        ),
+      ]);
+      sw.stop();
+
+      expect(statuses, [429, 200]); // throttled once, then accepted.
+      // Proves the header was clamped, not honored: an honored 3600s would
+      // have blown far past this.
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    },
+  );
+
+  test(
+    'close() cuts a batch mid-retry-sleep: it completes promptly and the '
+    'batch is counted as dropped',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      // Always throttle with a large Retry-After: the batch can never succeed,
+      // so it sits in its (clamped) retry sleep until close() cuts it loose.
+      server.listen((req) async {
+        await req.drain<void>();
+        req.response.statusCode = 429;
+        req.response.headers.set('retry-after', '9999');
+        await req.response.close();
+      });
+
+      final warnings = <MapEntry<String, Map<String, Object?>>>[];
+      final exporter = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+        // A large clamp so the sleep would be long (30s) absent the shutdown
+        // cut — the wall-clock assertion below is meaningful only because the
+        // sleep it races is far longer than the bound.
+        maxRetryDelay: const Duration(seconds: 30),
+        maxRetries: 5,
+        exportInterval: const Duration(milliseconds: 20),
+        onWarn: (msg, fields) => warnings.add(MapEntry(msg, fields)),
+      );
+
+      exporter.enqueue([
+        OtelSpan(
+          traceId: 'a' * 32,
+          spanId: 'b' * 16,
+          name: 'GET /x',
+          startUnixNano: 1,
+          endUnixNano: 2,
+        ),
+      ]);
+
+      // Let the periodic timer drain the batch and park it in its retry sleep.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      final sw = Stopwatch()..start();
+      await exporter.close();
+      sw.stop();
+
+      // Bounded: close() cut the 30s sleep instead of waiting it out.
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+      // The cut batch failed like any rejected send, so its span is folded
+      // into the dropped count and surfaced as an export failure.
+      expect(warnings.any((w) => w.key == 'span export failed'), isTrue);
+    },
+  );
 }
