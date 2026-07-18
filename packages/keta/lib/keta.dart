@@ -4,6 +4,7 @@
 /// and the default HTTP/1.1 transport. Depends on nothing but the SDK.
 library;
 
+export 'src/admission.dart' show concurrencyLimit, rateLimit;
 export 'src/app.dart'
     show
         App,
