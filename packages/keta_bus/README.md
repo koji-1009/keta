@@ -95,3 +95,5 @@ The project gate is that each documented invariant has a test. The map:
 | hub close terminates connections; connection close ends its own streams | `test/isolate_bus_test.dart` |
 | a killed connection is not detected but does not break the hub | `test/isolate_bus_test.dart` |
 | `connectPort` is hub-only (a connection throws) | `test/topic_rules_test.dart` |
+| a publish that fans out before a connection's attach has reached the hub is dropped for that connection, not buffered | `test/isolate_bus_test.dart` |
+| a publish routed toward an already-closed connection is dropped silently, never thrown | `test/isolate_bus_test.dart` |

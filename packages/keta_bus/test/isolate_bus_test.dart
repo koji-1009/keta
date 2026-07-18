@@ -3,8 +3,11 @@
 /// with pumped event queues); and the real thing, spawning an actual worker
 /// isolate to prove fan-out in both directions over SendPorts. Also pins close
 /// semantics (hub close terminates connections; connection close ends its own
-/// streams) and the honest limit on death detection: a killed connection is not
-/// detected, but it must not break the hub.
+/// streams), the honest limit on death detection: a killed connection is not
+/// detected, but it must not break the hub, and the silent-drop windows around
+/// attach and close: a publish that fans out before a connection's attach has
+/// reached the hub, or one routed toward a connection that has already closed,
+/// is dropped rather than buffered or errored.
 library;
 
 import 'dart:async';
@@ -160,6 +163,82 @@ void main() {
       final hub = IsolateBus.hub();
       await hub.close();
       expect(() => hub.publish('t', 'x'), throwsStateError);
+    });
+  });
+
+  group('one isolate: silent drop (pre-attach, post-close)', () {
+    test(
+      'publish before attach has reached the hub is dropped, not buffered',
+      () async {
+        final hub = IsolateBus.hub();
+        addTearDown(hub.close);
+        // IsolateBus.connect sends the ('attach', port) envelope to the hub's
+        // inbox, but SendPort delivery always needs an event-loop turn to be
+        // processed by the hub's ReceivePort.listen callback (see
+        // pumpEventQueue's use of `Future(...)`, an event-loop-scheduled task,
+        // not a microtask). With no `await`/`pumpEventQueue()` between
+        // `connect` and `publish` below, the hub's `_connections` set is
+        // guaranteed to still exclude this connection's port at the moment of
+        // publish.
+        final connection = IsolateBus.connect(hub.connectPort);
+        addTearDown(connection.close);
+
+        final received = <Object?>[];
+        final sub = connection.subscribe('t').listen(received.add);
+        addTearDown(sub.cancel);
+
+        // Fans out before the hub has registered this connection.
+        hub.publish('t', 'too-early');
+
+        // Let the attach land, and give a (wrongly buffered) delivery every
+        // chance to arrive.
+        await pumpEventQueue();
+
+        expect(received, isEmpty);
+
+        // Prove the connection is otherwise wired correctly by now (attach did
+        // complete), so the empty result above is the pre-attach drop, not a
+        // broken connection.
+        hub.publish('t', 'after-attach');
+        await pumpEventQueue();
+
+        expect(received, ['after-attach']);
+      },
+    );
+
+    test('publish routed toward an already-closed connection is dropped '
+        'silently, not thrown', () async {
+      final hub = IsolateBus.hub();
+      addTearDown(hub.close);
+      final connection = IsolateBus.connect(hub.connectPort);
+      await pumpEventQueue();
+
+      final received = <Object?>[];
+      final sub = connection.subscribe('t').listen(received.add);
+      addTearDown(sub.cancel);
+
+      // A hub-side subscriber too, to prove the drop is specific to the
+      // closed connection and not a general publish failure.
+      final onHub = <Object?>[];
+      final hubSub = hub.subscribe('t').listen(onHub.add);
+      addTearDown(hubSub.cancel);
+      await pumpEventQueue();
+
+      await connection.close();
+      // Deliberately no pumpEventQueue() here: the ('detach', port) envelope
+      // this close sent may still be in-flight to the hub, so the hub's
+      // `_connections` set can still hold this connection's port at the
+      // moment of publish below. The connection has already closed its own
+      // ReceivePort locally though (`_closeLocal` finished before
+      // `connection.close()`'s Future resolved) — so `hub.publish` here
+      // exercises sending to a port whose ReceivePort is already gone, the
+      // same no-op path documented for a killed isolate's lingering port,
+      // but reached via a graceful close instead of a crash.
+      expect(() => hub.publish('t', 'late'), returnsNormally);
+      await pumpEventQueue();
+
+      expect(received, isEmpty);
+      expect(onHub, ['late']);
     });
   });
 
