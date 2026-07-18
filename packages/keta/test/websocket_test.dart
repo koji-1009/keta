@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:keta/keta.dart';
+import 'package:keta/src/h1_transport.dart' show debugWebSocketChannel;
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
 
@@ -31,6 +32,37 @@ Future<Response> runMw(
 /// middleware (only a realizing transport calls it), so it is safe to shuttle
 /// through a rebuild and inspect.
 Response upgradeResponse() => Response.upgrade((channel) {});
+
+/// A minimal in-memory `dart:io` [WebSocket] stand-in for unit-testing the
+/// channel adapter's inbound path in isolation: [emit] pushes a frame, and
+/// [peerClose] ends the stream (a peer-initiated close). Every other WebSocket
+/// member routes through `noSuchMethod` — the adapter's inbound behavior needs
+/// only `listen` and the stream's end.
+class _FakeInboundWebSocket extends Stream<dynamic> implements WebSocket {
+  final StreamController<dynamic> _frames = StreamController<dynamic>();
+
+  @override
+  StreamSubscription<dynamic> listen(
+    void Function(dynamic)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _frames.stream.listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  void emit(dynamic frame) => _frames.add(frame);
+
+  /// Ends the raw stream — a peer-initiated close, the case that must still
+  /// drive the channel's `done` even with no `messages` subscriber.
+  Future<void> peerClose() => _frames.close();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 /// Collects [n] messages from [ws] (or whatever arrives before it closes),
 /// bounded so a missing message fails the test instead of hanging it.
@@ -228,6 +260,77 @@ void main() {
         );
         expect(ws.closeCode, isNotNull);
         await ws.close();
+      },
+    );
+  });
+
+  group('watch-only channel does not buffer without bound (item 1)', () {
+    test(
+      'a push-only flood is dropped, not buffered, and done still fires on '
+      'peer close',
+      () async {
+        // The unit-level proof, deterministic: drive the channel adapter's
+        // inbound path directly with a fake socket, never subscribing to
+        // `messages` (a server-push-only handler). Every frame must be
+        // discarded — never accumulated in the controller — and the peer close
+        // must still complete `done` despite there being no listener.
+        final fake = _FakeInboundWebSocket();
+        final (channel, dropped) = debugWebSocketChannel(fake);
+        // Never listen to `channel.messages`. Flood the raw socket.
+        const n = 100000;
+        for (var i = 0; i < n; i++) {
+          fake.emit('frame $i');
+        }
+        // Peer closes: all buffered raw frames deliver (and are dropped), then
+        // `onDone` fires → `done` completes and the drop tally is final.
+        await fake.peerClose();
+        await channel.done.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () =>
+              fail('done did not fire on peer close for a push-only channel'),
+        );
+        // Every frame was discarded: nothing was buffered in `_incoming`, so
+        // memory stayed bounded regardless of the flood size.
+        expect(dropped(), n);
+      },
+    );
+
+    test(
+      'a push-only handler (never listens) survives a peer flood and its done '
+      'fires on close',
+      () async {
+        // The end-to-end mirror over a real socket: a handler that never reads
+        // `channel.messages` while the peer floods frames, then closes. With the
+        // fix the flood is dropped at the transport instead of piling up in the
+        // controller, and the peer close still reaches the handler as `done`.
+        final handlerDone = Completer<void>();
+        final app = App<Env>();
+        app.get(
+          '/push',
+          (c) => Response.upgrade((channel) {
+            // Server-push-only: never subscribe to inbound frames, just observe
+            // the disconnect.
+            channel.done.then((_) {
+              if (!handlerDone.isCompleted) handlerDone.complete();
+            });
+          }),
+        );
+        final server = await app.serve(boot, port: 8136);
+
+        final ws = await WebSocket.connect('ws://127.0.0.1:8136/push');
+        for (var i = 0; i < 100000; i++) {
+          ws.add('x');
+        }
+        await ws.close();
+
+        await handlerDone.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () =>
+              fail('done did not fire on peer close for a push-only handler'),
+        );
+        expect(handlerDone.isCompleted, isTrue);
+
+        await server.shutdown(grace: const Duration(milliseconds: 200));
       },
     );
   });

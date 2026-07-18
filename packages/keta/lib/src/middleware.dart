@@ -12,20 +12,40 @@ import 'response.dart';
 /// Logs one line per request on completion: method, status, and elapsed
 /// milliseconds (reqId and route are already baked into `c.log`). Place it
 /// outermost so it times the whole chain.
+///
+/// `ms` is time-to-response, not time-to-last-byte: it measures how long the
+/// chain took to *produce* a [Response], and the log is written then — before
+/// the transport streams the body or answers the upgrade handshake. Two markers
+/// make that scope honest rather than silently misleading:
+/// - `upgrade: true` on an upgrade response. `status` is the *declared* 101; the
+///   wire may still answer 426 (e.g. a plain request to an upgrade route), which
+///   the transport decides after this log line, so 101 here means "the handler
+///   asked to switch", not "the switch happened".
+/// - `streaming: true` on a streamed body (SSE and other `Stream` bodies). The
+///   body has not been sent when this logs, so `status` is the header status and
+///   `ms` is time-to-first-byte, never the stream's lifetime.
+/// Full end-of-connection accounting (final status, bytes, duration) would need
+/// transport-level completion hooks that do not exist here; these markers keep
+/// the existing line truthful about what it does and does not measure.
 Middleware<E> accessLog<E>() => (Context<E> c, Handler<E> next) {
   final watch = Stopwatch()..start();
-  void emit(int status) {
+  void emit(int status, {Response? response}) {
     watch.stop();
     c.log.info('request', {
       'method': c.method,
       'status': status,
       'ms': watch.elapsedMilliseconds,
+      // The 101 is the declared status; the transport may still answer 426.
+      if (response?.upgrade != null) 'upgrade': true,
+      // The body is streamed after this line, so `ms` is time-to-first-byte.
+      if (response != null && response.body is Stream<List<int>>)
+        'streaming': true,
     });
   }
 
   return guard<Response>(
     () => chain(next(c), (Response r) {
-      emit(r.status);
+      emit(r.status, response: r);
       return r;
     }),
     (error, st) {
@@ -154,8 +174,21 @@ Middleware<E> cors<E>({
 /// handler ignoring `c.aborted` runs to completion after the 504 is sent — its
 /// side effects (writes, resource use) still happen, and its late result is
 /// dropped with a warning. Observe `c.aborted` to abandon work early.
+///
+/// It bounds time-to-*response*, never a stream's or socket's lifetime. The
+/// timer arms only when `next(c)` returns a `Future<Response>`; a response
+/// produced synchronously — which an SSE endpoint (`c.sse(...)`) and a
+/// WebSocket upgrade (`Response.upgrade(...)`) both are — is returned before the
+/// timer is ever set, so it is never subject to this timeout. Such a response
+/// hands the transport a live body/socket that then runs unbounded by `d`; a
+/// long-lived stream must bound itself (e.g. its own idle timer, or observing
+/// `c.aborted`, which a client disconnect or a graceful shutdown still completes
+/// independently of this middleware).
 Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
   final result = next(c);
+  // A synchronously-produced response (SSE, upgrade, any plain sync handler)
+  // returns here before the timer is armed — see the doc: this bounds
+  // time-to-response only.
   if (result is! Future<Response>) return result;
 
   final completer = Completer<Response>();

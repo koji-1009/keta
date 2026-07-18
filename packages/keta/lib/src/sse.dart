@@ -113,6 +113,12 @@ final class SseEvent {
 /// idle timers of intermediary proxies that would otherwise cut a quiet stream.
 const String _keepAliveComment = ': keep-alive\n\n';
 
+/// The keep-alive comment's UTF-8 bytes, encoded once. The heartbeat text is
+/// constant, so re-encoding it on every emission (potentially every few seconds
+/// for the life of a long stream) is pure waste; every heartbeat writes this
+/// single shared wire form.
+final List<int> _keepAliveBytes = utf8.encode(_keepAliveComment);
+
 /// The response-building surface for Server-Sent Events, added to [Context]
 /// alongside `c.json`/`c.text` so an SSE endpoint reads the same as any other.
 ///
@@ -192,7 +198,7 @@ Stream<List<int>> _sseBody(
     timer?.cancel();
     timer = Timer(keepAlive, () {
       if (controller.isClosed || controller.isPaused) return;
-      controller.add(utf8.encode(_keepAliveComment));
+      controller.add(_keepAliveBytes);
       armKeepAlive();
     });
   }
@@ -221,9 +227,17 @@ Stream<List<int>> _sseBody(
           if (!controller.isClosed) controller.close();
         },
       );
-      // Cooperative cancellation: a timeout or disconnect completes `aborted`,
-      // which ends the stream so the source stops producing into a dead socket.
-      // Closing here triggers `onCancel`, which cancels the source subscription.
+      // Cooperative cancellation: a timeout, a client disconnect, or a server
+      // shutdown (which fires the request's `closed`) completes `aborted`,
+      // which ends the stream so the source stops producing into a dead — or
+      // soon-to-be-closed — socket. Closing the controller *normally* here is
+      // what makes shutdown clean: the transport's `addStream` completes and it
+      // frames the chunked body to a proper end (a `0\r\n\r\n` terminator via
+      // its ordinary `close()`), so an open SSE response winds down on a whole
+      // event boundary instead of being cut mid-event by the forced socket
+      // close. Closing here also triggers `onCancel`, which cancels the source
+      // subscription. No extra byte is emitted: the wire ends exactly on the
+      // last event the source produced, the invariant the abort tests pin.
       unawaited(
         aborted.then((_) {
           if (!controller.isClosed) controller.close();

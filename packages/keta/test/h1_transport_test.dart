@@ -230,4 +230,54 @@ void main() {
       },
     );
   });
+
+  group('graceful shutdown (item 2)', () {
+    test(
+      'a non-cooperative in-flight request still gets its full grace',
+      () async {
+        // Shutdown fires each in-flight request's going-away signal so a
+        // cooperative stream can wind down early. A handler that ignores
+        // `c.aborted` must NOT be cut short by that signal — it runs to
+        // completion within the grace and its response is delivered intact.
+        final started = Completer<void>();
+        final app = App<Env>();
+        app.get('/slow', (c) async {
+          if (!started.isCompleted) started.complete();
+          // Ignores c.aborted; finishes well inside the grace below.
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+          return c.text('done');
+        });
+        final server = await app.serve(boot, port: 8115);
+
+        final socket = await Socket.connect(InternetAddress.loopbackIPv4, 8115);
+        socket.write(
+          'GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n',
+        );
+        await socket.flush();
+        final received = <int>[];
+        socket.listen(received.addAll, onError: (_) {});
+
+        await started.future.timeout(const Duration(seconds: 2));
+        // Grace comfortably longer than the handler's work: it must be allowed
+        // to finish, not truncated by the going-away signal.
+        final watch = Stopwatch()..start();
+        await server.shutdown(grace: const Duration(seconds: 5));
+        watch.stop();
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 5)),
+          reason: 'the handler finished inside the grace, so shutdown returns '
+              'when it does — not at the grace deadline',
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(
+          String.fromCharCodes(received),
+          contains('done'),
+          reason: 'a non-cooperative request keeps its grace and responds',
+        );
+        socket.destroy();
+      },
+    );
+  });
 }

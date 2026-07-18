@@ -53,6 +53,13 @@ class _H1Server implements TransportServer {
   final void Function(Object, StackTrace) _onError;
   final Set<Future<void>> _inFlight = {};
 
+  // The wrapped requests currently being handled, parallel to `_inFlight`.
+  // Tracked so graceful shutdown can signal each one to wind down (fire its
+  // `closed`/abort seam) *before* the grace clock starts — the difference
+  // between a cooperative streaming handler (SSE) ending promptly and one that
+  // burns the whole grace only to be truncated by the forced close.
+  final Set<_H1Request> _active = {};
+
   // Upgraded connections outlive the request that switched them, so they are NOT
   // tracked in `_inFlight` (which gates request/response draining). A WebSocket
   // could stay open for hours; if the handshake request stayed "in flight" for
@@ -72,24 +79,30 @@ class _H1Server implements TransportServer {
 
   Future<void> _handle(HttpRequest request) async {
     final wrapped = _H1Request(request);
-    Response response;
+    _active.add(wrapped);
     try {
-      response = await _onRequest(wrapped);
-    } catch (error, stack) {
-      // The app applies a last-resort fallback, so this is defensive only.
-      _onError(error, stack);
-      response = Response(500, body: '');
+      Response response;
+      try {
+        response = await _onRequest(wrapped);
+      } catch (error, stack) {
+        // The app applies a last-resort fallback, so this is defensive only.
+        _onError(error, stack);
+        response = Response(500, body: '');
+      }
+      final upgrade = response.upgrade;
+      if (upgrade != null) {
+        // The handler asked to switch protocols. This returns once the
+        // handshake is done and the connection callback has been *started* —
+        // not when the socket eventually closes — so the handshake request
+        // leaves `_inFlight` promptly while the live socket is tracked in
+        // `_openSockets`.
+        await _switchProtocols(request, upgrade);
+        return;
+      }
+      await _write(request.response, wrapped, response);
+    } finally {
+      _active.remove(wrapped);
     }
-    final upgrade = response.upgrade;
-    if (upgrade != null) {
-      // The handler asked to switch protocols. This returns once the handshake
-      // is done and the connection callback has been *started* — not when the
-      // socket eventually closes — so the handshake request leaves `_inFlight`
-      // promptly while the live socket is tracked in `_openSockets`.
-      await _switchProtocols(request, upgrade);
-      return;
-    }
-    await _write(request.response, wrapped, response);
   }
 
   /// Realizes an [Upgrade] value against the concrete `dart:io` request this
@@ -222,6 +235,19 @@ class _H1Server implements TransportServer {
     // Stop accepting, wait out in-flight requests within the grace window, then
     // force-close anything still lingering.
     final stopped = _server.close();
+    // Before the grace clock starts, tell every in-flight request the
+    // connection is going away. This fires each one's `closed` seam, which the
+    // core wires to `ctx.abort()` — the same cooperative-cancellation signal a
+    // client disconnect raises. A streaming handler that observes `c.aborted`
+    // (an open SSE response) then ends its body at once, flushing a clean close
+    // instead of being hard-truncated when the forced close lands; the request
+    // leaves `_inFlight` promptly and the whole grace is not burned on it. A
+    // handler that ignores the signal is unaffected and still gets its full
+    // grace below. Iterate a snapshot: firing `closed` schedules the abort
+    // asynchronously, which later removes the request from `_active`.
+    for (final request in _active.toList()) {
+      request.signalGoingAway();
+    }
     if (_inFlight.isNotEmpty) {
       await Future.wait(_inFlight).timeout(grace, onTimeout: () => const []);
     }
@@ -248,41 +274,94 @@ class _H1Server implements TransportServer {
 /// This is the only place `dart:io`'s WebSocket type is named on the server
 /// path; everything above the transport sees the neutral value alone.
 ///
-/// It owns the single subscription to the raw socket and re-presents inbound
-/// frames through [messages], for one load-bearing reason: [done] must complete
-/// when the *peer* closes, and the only `dart:io` signal that fires on a peer
-/// close is the data stream's `onDone` — not WebSocket.done, which completes
-/// only on a local close (verified). Consuming the stream here lets that
-/// `onDone` reliably drive [done], which is the handler's disconnect signal and
-/// how the transport reclaims a closed socket from its shutdown set.
+/// The raw socket is listened to *unconditionally* for the connection's whole
+/// life — even when the handler never subscribes to [messages] (a push-only,
+/// server-push handler, a path the interface advertises). That is load-bearing
+/// for [done]: it must complete when the *peer* closes, and the only `dart:io`
+/// signal that fires on a peer close is the data stream's `onDone` — not
+/// `WebSocket.done`, which completes only on a *local* close (verified). Keeping
+/// the subscription always-on lets that `onDone` reliably drive [done] — the
+/// handler's disconnect signal and how the transport reclaims a closed socket
+/// from its shutdown set — no matter whether the handler ever reads a frame.
+///
+/// What varies with a subscriber is only whether an inbound frame is
+/// *forwarded* or *dropped*. The previous design re-presented every frame
+/// through a single-subscription controller and gated backpressure on a
+/// subscriber existing; a push-only handler (no [messages] listener) therefore
+/// accumulated every inbound frame in that controller forever, with `onPause`
+/// never firing (verified: 100k frames buffered, zero pauses). Here a frame is
+/// enqueued only while a live [messages] subscriber wants it; with no
+/// subscriber it is discarded (and counted, for the transport's own tests),
+/// so a flood cannot grow memory without bound. Backpressure is still exact
+/// while a subscriber exists: a slow consumer pauses the controller, which
+/// pauses the raw socket read (real TCP backpressure), and resuming lifts both.
+///
+/// One consequence: a frame that arrives before the first [messages] listen is
+/// dropped, not buffered. In practice a handler subscribes synchronously inside
+/// its `onConnected` (which runs before any frame can be delivered), so a
+/// normal handler loses nothing; only a genuinely push-only or late-listening
+/// handler discards inbound frames, which is exactly its intent.
 class _IoWebSocketChannel implements UpgradedChannel {
   _IoWebSocketChannel(this._ws) {
     _sub = _ws.listen(
-      // Data frames are `String` or `List<int>` — never null, so the cast is
-      // total.
-      (dynamic message) => _incoming.add(message as Object),
-      onError: _incoming.addError,
+      (dynamic message) {
+        // Forward only while a live `messages` subscriber wants the frame; with
+        // none (push-only handler, or one that cancelled), discard rather than
+        // buffer in `_incoming`. `_dropped` makes the discard observable so the
+        // "no unbounded buffering" property is testable.
+        if (_subscribed) {
+          // Data frames are `String` or `List<int>` — never null, so the cast
+          // is total.
+          _incoming.add(message as Object);
+        } else {
+          _dropped++;
+        }
+      },
+      // An error with a subscriber is surfaced; with none there is no one to
+      // deliver it to, so it is dropped like a data frame — `onDone` still
+      // drives [done]. cancelOnError:false keeps the stream (and its onDone)
+      // alive past a non-fatal error.
+      onError: (Object e, StackTrace st) {
+        if (_subscribed) _incoming.addError(e, st);
+      },
       onDone: () {
         if (!_closed.isCompleted) _closed.complete();
-        _incoming.close();
+        if (!_incoming.isClosed) _incoming.close();
       },
       cancelOnError: false,
     );
-    // Preserve backpressure when there IS a listener; a watch-only handler (no
-    // messages listener) still needs `onDone` to fire, so the subscription is
-    // not gated on a listener existing.
-    _incoming
-      ..onPause = _sub.pause
-      ..onResume = _sub.resume
-      ..onCancel = _sub.cancel;
+    _incoming.onListen = () {
+      _subscribed = true;
+    };
+    // Backpressure, preserved only while a subscriber exists: a paused
+    // controller pauses the raw socket read; resuming lifts both. With no
+    // subscriber there is nothing to pause — frames are dropped, not queued.
+    _incoming.onPause = _sub.pause;
+    _incoming.onResume = _sub.resume;
+    // The handler stopped listening: stop forwarding (drop from here on) but do
+    // NOT cancel `_sub` — keeping the raw read alive is what lets a later peer
+    // close still drive `onDone` → [done]. Cancelling would blind the transport
+    // to that close and strand the socket in its shutdown set.
+    _incoming.onCancel = () {
+      _subscribed = false;
+    };
   }
   final WebSocket _ws;
   final StreamController<Object> _incoming = StreamController<Object>();
   final Completer<void> _closed = Completer<void>();
 
-  // The subscription's lifetime is the connection's: its `onDone` closes the
-  // controller, and it is cancelled through `_incoming.onCancel` when the
-  // handler stops listening, so there is no leak to cancel by hand.
+  /// Whether a `messages` subscriber currently exists. Latched true on the
+  /// first listen and back to false on cancel; frames are forwarded only while
+  /// it holds, and discarded (into [_dropped]) otherwise.
+  bool _subscribed = false;
+
+  /// Count of inbound frames discarded because no subscriber wanted them — the
+  /// testable witness that a push-only flood is dropped, not buffered.
+  int _dropped = 0;
+
+  // The subscription lives for the whole connection: its `onDone` closes the
+  // controller and completes [done], and a local `close()` triggers that same
+  // `onDone`, so it is always torn down without a manual cancel.
   // ignore: cancel_subscriptions
   late final StreamSubscription<dynamic> _sub;
 
@@ -300,6 +379,18 @@ class _IoWebSocketChannel implements UpgradedChannel {
 
   @override
   Future<void> get done => _closed.future;
+}
+
+/// Test-only seam: builds the WebSocket channel adapter over [ws] and returns
+/// its neutral [UpgradedChannel] face alongside a probe of how many inbound
+/// frames it has *dropped* (frames that arrived while no `messages` subscriber
+/// existed). It lets the transport's own tests assert that a push-only flood is
+/// discarded rather than buffered without unbounded growth — the reported
+/// defect — without exposing the private adapter type as API. Not exported from
+/// `keta.dart`; reachable only via `package:keta/src/h1_transport.dart`.
+(UpgradedChannel, int Function()) debugWebSocketChannel(WebSocket ws) {
+  final channel = _IoWebSocketChannel(ws);
+  return (channel, () => channel._dropped);
 }
 
 class _H1Request implements TransportRequest {
@@ -327,6 +418,17 @@ class _H1Request implements TransportRequest {
   }
   final HttpRequest _request;
   final Completer<void> _closed = Completer<void>();
+
+  /// Fires the `closed` seam early, at graceful shutdown, so a cooperative
+  /// in-flight handler can wind down within the grace instead of being
+  /// hard-truncated by the forced close. It reuses `closed` — the
+  /// transport-observed "the connection is going away" signal the core already
+  /// routes to `ctx.abort()` — because at shutdown that is precisely the case:
+  /// the connection is about to end. Idempotent, and harmless for a handler
+  /// that never observes `aborted` (it simply runs on under the grace).
+  void signalGoingAway() {
+    if (!_closed.isCompleted) _closed.complete();
+  }
 
   /// Whether the body stream has been listened to (dart:io latches
   /// `hasSubscriber` true on the first listen and never clears it).
