@@ -169,6 +169,50 @@ final class Schema {
   }
 }
 
+/// Builds the canonical list-endpoint envelope: an object [Schema] wrapping
+/// [itemSchema] as a page of results alongside the un-paginated match count.
+///
+/// The emitted shape is exactly the `{"items": [...], "total": n}` pattern
+/// every list endpoint hand-writes today — `items` and `total` both
+/// `required`, no additional properties admitted — produced as an ordinary
+/// [Schema], not a generic or a code-generated type. [listSchema] composes
+/// the same plain `Schema` a hand-written envelope would, so
+/// `validate`/`require`/`requireMap` and the OpenAPI walker treat it exactly
+/// like one; this is a helper over the canonical WRITING pattern (a judged
+/// restraint), not a replacement for it.
+///
+/// `items` is the current page — bounded by whatever pagination (`?limit`/
+/// `?offset` or otherwise) the handler applies. `total` is how many rows
+/// match the query across *all* pages, independent of that window, so a
+/// client can compute how many pages remain without walking them; it is the
+/// total matching count, not the page size — an empty `items` with a
+/// positive `total` is a legitimate answer to an offset past the end of the
+/// result set.
+///
+/// The wrapper is named `'${itemSchema.name}List'` and carries [itemSchema]
+/// in `deps`, so the OpenAPI walker collects both into `components/schemas`
+/// and the `items` array's `$ref` resolves. Because it builds a new `Schema`
+/// per call rather than reading a `const`, a `RouteDoc` that embeds
+/// `listSchema(itemSchema)` cannot itself be `const` — unlike a hand-written
+/// envelope schema, which is declared once as a top-level `const Schema` and
+/// referenced everywhere.
+Schema listSchema(Schema itemSchema) => Schema(
+  '${itemSchema.name}List',
+  {
+    'type': 'object',
+    'required': ['items', 'total'],
+    'properties': {
+      'items': {
+        'type': 'array',
+        'items': {r'$ref': '#/components/schemas/${itemSchema.name}'},
+      },
+      'total': {'type': 'integer'},
+    },
+    'additionalProperties': false,
+  },
+  deps: [itemSchema],
+);
+
 /// Throws the [StateError] a malformed SCHEMA fragment gets under the class
 /// doc's two-posture rule — never a violation, never a silent pass.
 /// [schemaName] and [path] locate the fragment (the schema currently being

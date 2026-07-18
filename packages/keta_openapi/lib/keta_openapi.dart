@@ -13,5 +13,5 @@ export 'src/route_doc.dart'
         QueryParam,
         bearer,
         apiKey;
-export 'src/schema.dart' show Schema;
+export 'src/schema.dart' show Schema, listSchema;
 export 'src/security.dart' show SecurityPolicy, enforceSecurity;

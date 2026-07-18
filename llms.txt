@@ -152,6 +152,45 @@ and contract tests.
 Usage: `final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));`
 (`requireMap` requires, then hands the result back typed as `Map<String, Object?>` — the shape every write handler needs before `fromJson`. `require` remains the untyped primitive — `Object? require(Object?)`, unchanged — for a schema that isn't `type: object`.)
 
+## List endpoints
+
+Every list endpoint hand-writes the same three things: pagination that clamps instead of rejecting, a `{items, total}` response, and a Schema for that envelope. `listSchema(itemSchema)` (from `keta_openapi`) canonicalizes only the third — it is a helper over the writing pattern, not a generic or codegen, so the handler and the response map below are still written by hand, exactly like every other route:
+
+```dart
+app.get(
+  '/users',
+  (c) async {
+    // Clamp both bounds rather than trust them: an unbounded limit lets one
+    // request scan the whole table, and a negative bound is a SQL error
+    // waiting to happen. An offset past the end is an empty page with the
+    // right total, not a 400 — the honest answer for a paging UI that
+    // overshoots the last page.
+    final limit = (c.tryQuery<int>('limit') ?? 20).clamp(1, 100);
+    final offset = (c.tryQuery<int>('offset') ?? 0).clamp(0, 1 << 31);
+    final rows = await c.env.db.reader.query(
+      'select id, name, age, role, tags from users order by id limit ? offset ?',
+      [limit, offset],
+    );
+    // total counts the whole set, independent of limit/offset.
+    final total = await c.env.db.reader.query('select count(*) as n from users');
+    return c.json({
+      'items': [for (final r in rows) UserDto.fromRow(r).toJson()],
+      'total': total.first['n'] as int,
+    });
+  },
+  // Not const: listSchema builds a new Schema per call (it interpolates
+  // itemSchema.name), so a RouteDoc that embeds it cannot be const the way a
+  // hand-written const Schema's RouteDoc can.
+  doc: RouteDoc(
+    success: Success(schema: listSchema(userDtoSchema)),
+    summary: 'List users',
+    query: [QueryParam('limit', integer), QueryParam('offset', integer)],
+  ),
+);
+```
+
+`listSchema` emits the canonical envelope — `items` (array of the item schema) and `total` (integer), both `required`, `additionalProperties: false` — so `validate`/`require`/`requireMap` and the OpenAPI walker treat it exactly like a hand-written envelope Schema would. `total` is the total matching count across every page, not the page size. Pagination clamping stays a template you copy per handler, not a `c.query` API — `limit`/`offset` reads and their bounds are deliberately not centralized.
+
 ## OpenAPI
 
 Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., description: ..., tags: ['users'], operationId: 'getUser', failureResponses: {code: schema_or_Failure}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe; a schema on a 204/304 is an emit-time error). `description` (prose) and `tags` (grouping, aggregated sorted+deduped into the document's top-level `tags`) are optional; `operationId` is optional but **document-wide-unique** — two routes with the same id is a hard error at emit, naming both. `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route); each value is a bare `Schema` (defaults to `application/json`) or a `Failure(schema, {contentType: 'application/json'})` for a non-JSON error body (`text/plain`, `application/problem+json`). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag. A WebSocket route documents its 101 with `doc: RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` instead of a `success` (see the SSE & WebSocket section).
