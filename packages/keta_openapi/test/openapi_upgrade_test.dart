@@ -39,7 +39,7 @@ void main() {
       final headers = r101['headers']! as Map<String, Object?>;
       expect(headers.keys, contains('Sec-WebSocket-Protocol'));
       final scheme = headers['Sec-WebSocket-Protocol']! as Map<String, Object?>;
-      expect((scheme['schema']! as Map)['const'], 'chat');
+      expect((scheme['schema']! as Map)['enum'], ['chat']);
       expect(op['summary'], 'Live feed');
     });
 

@@ -55,9 +55,20 @@ import 'package:keta/keta.dart';
 ///    astral-plane character such as `'😀'` counts as length 1, not 2.
 ///  - **`pattern`** (strings): compiled as a Dart [RegExp] (the ECMAScript
 ///    dialect JSON Schema prescribes) and matched **unanchored** — a partial
-///    match anywhere in the string satisfies it, per JSON Schema. There is no
-///    runtime ReDoS guard; the premise is that `pattern` is applied only to
-///    length-bounded input, so pair it with `maxLength`.
+///    match anywhere in the string satisfies it, per JSON Schema. The regex
+///    itself carries no ReDoS guard (a hostile pattern such as `^(a+)+$`
+///    backtracks catastrophically), so its safety rests on never running it
+///    over an arbitrarily long string, and the boundary enforces that in two
+///    layers. First, the `maxLength` bound *gates* the regex: when the schema
+///    declares `maxLength` and the value exceeds it, the value is already
+///    condemned, so `pattern` is skipped entirely rather than fed the
+///    over-long input — pairing `pattern` with a `maxLength` keeps validation
+///    fully under the author's control. Second, an absolute backstop caps the
+///    length of any string the regex will ever see at [_patternInputCeiling]
+///    code points, for the schema that omits `maxLength` (or sets one above
+///    the ceiling): a longer string is reported as a violation instead of
+///    being pattern-matched, so the megabyte-scale body the request cap admits
+///    can never reach an unguarded regex.
 ///  - **`format`** (strings): only a crisp, unambiguous set is enforced —
 ///    `date-time` and `date` (RFC 3339) and `uuid` (RFC 4122 string form).
 ///    Every other `format` value (`email`, `hostname`, `binary`, …) is an
@@ -666,6 +677,20 @@ void _rejectUnenforcedKeywords(
   }
 }
 
+/// The absolute ceiling, in Unicode code points, on the length of a string the
+/// boundary will run a `pattern` regex against. `pattern` has no ReDoS guard of
+/// its own — a hostile pattern such as `^(a+)+$` backtracks catastrophically —
+/// so its safety rests on the input being length-bounded. The primary bound is
+/// the author's own `maxLength`, which gates the regex (see [_stringKeywords]);
+/// this constant is the backstop for the schema that carries a `pattern` with
+/// no `maxLength`, or a `maxLength` larger than this, so the megabyte-scale body
+/// the 1 MiB request cap would otherwise admit can never reach an unguarded
+/// regex. A string longer than this is reported as a violation instead of being
+/// pattern-matched. 4096 code points is generous for every realistic
+/// pattern-validated scalar (emails, UUIDs, slugs, tokens, URLs) yet small
+/// enough to keep the regex off megabyte-scale input.
+const _patternInputCeiling = 4096;
+
 /// Applies the string value keywords (`minLength`, `maxLength`, `pattern`,
 /// `format`) to a string [value]. Length is counted in Unicode code points.
 void _stringKeywords(
@@ -676,6 +701,7 @@ void _stringKeywords(
   String schemaName,
 ) {
   final length = value.runes.length;
+  var maxLengthExceeded = false;
   if (schema.containsKey('minLength')) {
     final min = _nonNegativeIntKeyword(schema, 'minLength', path, schemaName);
     if (length < min) {
@@ -686,6 +712,7 @@ void _stringKeywords(
     final max = _nonNegativeIntKeyword(schema, 'maxLength', path, schemaName);
     if (length > max) {
       errors.add('$path: string length $length exceeds maxLength $max');
+      maxLengthExceeded = true;
     }
   }
   if (schema.containsKey('pattern')) {
@@ -703,7 +730,9 @@ void _stringKeywords(
       regExp = RegExp(raw);
     } on FormatException catch (e) {
       // An uncompilable pattern is the author's mistake, not the client's:
-      // no request could ever make it a valid regular expression.
+      // no request could ever make it a valid regular expression. Compiled
+      // unconditionally (before the length gates below) so this authoring
+      // defect surfaces regardless of the instance that happens to arrive.
       _authoringDefect(
         schemaName,
         path,
@@ -711,9 +740,27 @@ void _stringKeywords(
         'is not a valid regular expression: ${e.message}',
       );
     }
-    // Unanchored: a partial match anywhere satisfies `pattern`, per JSON Schema.
-    if (!regExp.hasMatch(value)) {
-      errors.add('$path: "$value" does not match pattern $raw');
+    // The length bound gates the regex. A value that already exceeds the
+    // enforced `maxLength` is condemned; also running the author's ECMAScript
+    // pattern over it adds nothing but the ReDoS exposure the bound exists to
+    // foreclose, so skip the match. (A too-*short* string is cheap to match,
+    // so only the maxLength-exceeded case is skipped, not a minLength miss.)
+    if (!maxLengthExceeded) {
+      if (length > _patternInputCeiling) {
+        // Defense in depth for the schema that omits `maxLength` (or set one
+        // above the ceiling): the megabyte-scale body the 1 MiB request cap
+        // admits must never reach an unguarded regex. The value is reported by
+        // length only — echoing a multi-kilobyte string back would be its own
+        // abuse.
+        errors.add(
+          '$path: string length $length exceeds the pattern-validation '
+          'ceiling of $_patternInputCeiling code points',
+        );
+      } else if (!regExp.hasMatch(value)) {
+        // Unanchored: a partial match anywhere satisfies `pattern`, per JSON
+        // Schema.
+        errors.add('$path: "$value" does not match pattern $raw');
+      }
     }
   }
   if (schema.containsKey('format')) {
@@ -800,15 +847,19 @@ void _arrayKeywords(
       );
     }
   }
+  var maxItemsExceeded = false;
   if (schema.containsKey('maxItems')) {
     final max = _nonNegativeIntKeyword(schema, 'maxItems', path, schemaName);
     if (value.length > max) {
       errors.add('$path: array length ${value.length} exceeds maxItems $max');
+      maxItemsExceeded = true;
     }
   }
   if (schema.containsKey('uniqueItems')) {
     final raw = schema['uniqueItems'];
     if (raw is! bool) {
+      // A malformed `uniqueItems` is authoring damage regardless of the
+      // instance, so this check runs before the maxItems gate below.
       _authoringDefect(
         schemaName,
         path,
@@ -816,10 +867,13 @@ void _arrayKeywords(
         'must be a boolean, got ${_typeName(raw)}',
       );
     }
-    if (raw) {
+    if (raw && !maxItemsExceeded) {
       // Deep JSON-value equality, so two equal nested objects collide even
-      // though they are distinct instances. O(n²), which the length-bounded
-      // premise (pair with maxItems) keeps in check. One violation is enough
+      // though they are distinct instances. This scan is O(n²), so the cheap
+      // `maxItems` bound gates it: an array that already exceeds `maxItems` is
+      // condemned, and running the quadratic uniqueness scan over it as well
+      // is the DoS the bound exists to foreclose — pairing `uniqueItems` with
+      // a `maxItems` is what keeps the cost in check. One violation is enough
       // to condemn the array, so the first colliding pair ends the scan.
       outer:
       for (var i = 0; i < value.length; i++) {

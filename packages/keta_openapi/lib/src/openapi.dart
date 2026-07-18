@@ -190,7 +190,15 @@ Map<String, Object?> _operation(
           'headers': {
             'Sec-WebSocket-Protocol': {
               'description': 'The negotiated WebSocket subprotocol.',
-              'schema': {'type': 'string', 'const': upgrade.subprotocol},
+              // `enum` (a single-member set), not `const`: keta forbids
+              // authors from writing `const` (it is in the unenforced-keyword
+              // rejection set), so keta's own emitter must not write it either.
+              // A one-element `enum` expresses the same "exactly this value"
+              // intent and is a keyword keta enforces.
+              'schema': {
+                'type': 'string',
+                'enum': [upgrade.subprotocol],
+              },
             },
           },
       };

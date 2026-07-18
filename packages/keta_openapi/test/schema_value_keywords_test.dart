@@ -108,6 +108,111 @@ void main() {
     });
   });
 
+  group('string — pattern is length-gated (ReDoS guard)', () {
+    // A catastrophic-backtracking ("ReDoS") pattern: on a run of 'a's followed
+    // by a non-matching character it backtracks exponentially, freezing the
+    // isolate for tens of seconds. Every test here proves the boundary never
+    // feeds it an over-long string, so it never runs at all. The generous
+    // per-test timeout is a backstop: if the guard regressed and the regex did
+    // run, the test would hang and this timeout would fail it fast rather than
+    // stalling the suite for ~33s.
+    const redos = r'^(a+)+$';
+
+    // A string long enough that running `redos` over it would not return in any
+    // tolerable time — but short enough to build instantly.
+    String hostile(int length) => 'a' * length + '!';
+
+    // The violation an over-ceiling string earns instead of being matched.
+    // Built here rather than inline so the expected list holds one element, not
+    // two adjacent string literals (which `no_adjacent_strings_in_list` flags).
+    String ceilingViolation(int length) =>
+        '\$: string length $length exceeds the pattern-validation ceiling of '
+        '4096 code points';
+
+    test('a maxLength-exceeded string skips pattern entirely (no hang, only '
+        'the maxLength violation)', () {
+      const s = Schema('Bounded', {
+        'type': 'string',
+        'maxLength': 20,
+        'pattern': redos,
+      });
+      // Length 41 > maxLength 20: the value is condemned by maxLength, so the
+      // regex is never run. Structural proof — exactly one violation, and it is
+      // the maxLength one, not a pattern miss.
+      expect(s.validate(hostile(40)), [
+        r'$: string length 41 exceeds maxLength 20',
+      ]);
+    }, timeout: const Timeout(Duration(seconds: 5)));
+
+    test('a maxLength-satisfied string is still pattern-matched (the gate does '
+        'not suppress a legitimate match)', () {
+      const s = Schema('Bounded', {
+        'type': 'string',
+        'maxLength': 20,
+        'pattern': r'\d{3}',
+      });
+      // Within maxLength, so pattern runs as before: a match passes, a miss is
+      // a pattern violation.
+      expect(s.validate('123'), isEmpty);
+      expect(s.validate('ab'), [r'$: "ab" does not match pattern \d{3}']);
+    });
+
+    test(
+      'a pattern with no maxLength is backstopped by the hard ceiling',
+      () {
+        const s = Schema('Unbounded', {'type': 'string', 'pattern': redos});
+        // 5001 code points, over the 4096 ceiling and with no maxLength to gate
+        // it: the regex is skipped and the over-length string is a violation. If
+        // the ceiling regressed, `redos` would run over 5000 'a's and hang.
+        expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
+      },
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test('the ceiling fires even for a value that would match (over-ceiling is '
+        'condemned before the regex, not after)', () {
+      const s = Schema('Unbounded', {'type': 'string', 'pattern': r'a'});
+      // A string of 4097 'a's would match `a`, but it is over the ceiling, so
+      // it is reported by length and never matched.
+      final overCeiling = 'a' * 4097;
+      expect(s.validate(overCeiling), [ceilingViolation(4097)]);
+      // One code point under the ceiling: matched normally, so it passes.
+      expect(s.validate('a' * 4096), isEmpty);
+    });
+
+    test(
+      'a maxLength above the ceiling does not lift the ceiling',
+      () {
+        const s = Schema('Loose', {
+          'type': 'string',
+          'maxLength': 1000000,
+          'pattern': redos,
+        });
+        // The value satisfies the author's (huge) maxLength, but the absolute
+        // ceiling still gates the regex — a maxLength larger than the ceiling
+        // cannot re-expose the unguarded regex.
+        expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
+      },
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test('an uncompilable pattern is authoring damage even when the value is '
+        'over-length', () {
+      // The gate must not mask an authoring defect: the pattern is compiled
+      // unconditionally, so a bad pattern surfaces as a StateError regardless
+      // of whether the instance would have been length-gated.
+      const bad = Schema('BadAndLong', {
+        'type': 'string',
+        'maxLength': 5,
+        'pattern': '(',
+      });
+      expect(
+        () => bad.validate('abcdefghij'),
+        throwsAuthoringDefect(['"BadAndLong"', 'pattern']),
+      );
+    });
+  });
+
   group('string — format (only a crisp set is enforced)', () {
     test('date-time enforces RFC 3339', () {
       const s = Schema('DT', {'type': 'string', 'format': 'date-time'});
@@ -338,6 +443,74 @@ void main() {
         throwsAuthoringDefect(['"BadUniq"', 'uniqueItems']),
       );
     });
+
+    test('a non-boolean uniqueItems is authoring damage even when maxItems is '
+        'exceeded (the gate does not mask the defect)', () {
+      // uniqueItems is validated before the maxItems gate, so a malformed value
+      // still surfaces as a StateError on an over-long array.
+      const bad = Schema('BadUniqLong', {
+        'type': 'array',
+        'maxItems': 1,
+        'uniqueItems': 'yes',
+      });
+      expect(
+        () => bad.validate([1, 2, 3]),
+        throwsAuthoringDefect(['"BadUniqLong"', 'uniqueItems']),
+      );
+    });
+  });
+
+  group('array — maxItems gates the O(n²) uniqueItems scan', () {
+    test('a maxItems-exceeded array skips the uniqueItems scan (only the '
+        'maxItems violation, not a uniqueItems one)', () {
+      const s = Schema('Gated', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'maxItems': 3,
+        'uniqueItems': true,
+      });
+      // [1, 1, 1, 1] has a duplicate, so the scan would report a uniqueItems
+      // collision — but the array exceeds maxItems, so the scan is skipped and
+      // only the maxItems violation is reported. Structural proof of the gate.
+      expect(s.validate([1, 1, 1, 1]), [
+        r'$: array length 4 exceeds maxItems 3',
+      ]);
+    });
+
+    test('a maxItems-satisfied array is still scanned for uniqueness (the gate '
+        'does not suppress a legitimate collision)', () {
+      const s = Schema('Gated', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'maxItems': 3,
+        'uniqueItems': true,
+      });
+      // Within maxItems, so the scan runs: distinct passes, a duplicate is a
+      // uniqueItems violation exactly as before.
+      expect(s.validate([1, 2, 3]), isEmpty);
+      expect(s.validate([1, 2, 1]), [
+        r'$: array items at [0] and [2] are equal (uniqueItems)',
+      ]);
+    });
+
+    test(
+      'a large over-maxItems array does not pay the quadratic scan',
+      () {
+        const s = Schema('Gated', {
+          'type': 'array',
+          'items': {'type': 'integer'},
+          'maxItems': 3,
+          'uniqueItems': true,
+        });
+        // 50k distinct elements over maxItems: if the O(n²) scan ran it would
+        // burn seconds (2.5e9 comparisons); the gate skips it, so this returns
+        // immediately with only the maxItems violation. The timeout is the
+        // backstop that fails fast if the gate regressed.
+        final big = List<Object?>.generate(50000, (i) => i);
+        expect(s.validate(big), [r'$: array length 50000 exceeds maxItems 3']);
+      },
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
   });
 
   group('a wrong-typed value skips its keyword checks (no double report)', () {
