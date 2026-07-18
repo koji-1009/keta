@@ -1,3 +1,9 @@
+/// Owns the data-shaped path form (a prebuilt List of LiteralSegment/
+/// CaptureSegment): it binds and reads via c.param like any path, carries the
+/// declared capture schema into OpenAPI, has unbounded arity, 400s a bad value,
+/// and rejects a non-path argument.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:test/test.dart';

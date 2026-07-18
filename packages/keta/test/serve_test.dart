@@ -1,3 +1,8 @@
+/// Owns single-process serve(): binding a real socket, dispatching one live
+/// request end-to-end, and disposing the environment on graceful shutdown.
+@TestOn('vm')
+library;
+
 import 'dart:convert';
 import 'dart:io';
 

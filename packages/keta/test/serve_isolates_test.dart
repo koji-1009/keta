@@ -1,3 +1,6 @@
+/// Owns multi-isolate serve(): running N listeners behind one port and shutting
+/// them all down, and tearing worker 0 back down when a later worker's spawn
+/// fails so no socket or env is leaked.
 @TestOn('vm')
 library;
 

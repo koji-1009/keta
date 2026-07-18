@@ -1,3 +1,6 @@
+/// Owns the H1 transport's wire behavior: Content-Length vs chunked framing,
+/// the unread-oversized-body defense, client-disconnect detection, and
+/// graceful shutdown giving a non-cooperative in-flight request its full grace.
 @TestOn('vm')
 library;
 
@@ -7,13 +10,7 @@ import 'dart:io';
 import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Future<Env> boot() async => Env(StdoutLog(flushInterval: Duration.zero));
+import 'support/harness.dart';
 
 /// Sends one raw request and returns everything read back before the server
 /// closes (or [wait] elapses), so header framing can be asserted directly.

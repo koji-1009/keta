@@ -1,3 +1,6 @@
+/// Owns the etag() and gzip() middlewares: conditional-request 304 semantics
+/// and tag scope, gzip negotiation/threshold/Vary union, their composition
+/// (gzip outer, etag inner), and the on-the-wire Content-Length framing.
 @TestOn('vm')
 library;
 
@@ -10,22 +13,7 @@ import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Env newEnv() => Env(StdoutLog(flushInterval: Duration.zero));
-
-Future<Env> boot() async => Env(StdoutLog(flushInterval: Duration.zero));
-
-/// Runs [mw] against a fixed [response], returning the transformed response.
-Future<Response> run(
-  Middleware<Env> mw,
-  Context<Env> c,
-  Response response,
-) async => mw(c, (_) => response);
+import 'support/harness.dart';
 
 void main() {
   group('etag — 304 semantics', () {

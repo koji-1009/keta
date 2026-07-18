@@ -1,14 +1,13 @@
+/// Owns cookies both ways: parsing the request Cookie header (OWS, malformed
+/// pairs, duplicates, opaque values, caching) and rendering SetCookie with its
+/// attributes plus the injection guards on names, values, domain/path.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Env newEnv() => Env(StdoutLog(flushInterval: Duration.zero));
+import 'support/harness.dart';
 
 Context<Env> ctxWithCookie(String? header) => testContext(
   newEnv(),

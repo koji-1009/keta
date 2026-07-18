@@ -1,3 +1,8 @@
+/// Owns the router-facing contract: string and typed-DSL routing, match
+/// precedence and fail-fast errors, middleware ordering, request body/failure
+/// modes, Response header validation, and query/header accessors.
+library;
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -5,46 +10,7 @@ import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
 
-/// A log that records lines in memory, for asserting on middleware output.
-class MemLog implements Log {
-  MemLog([this.lines = const []]) : _baked = const {};
-  MemLog._(this.lines, this._baked);
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
-
-  void _add(String level, String msg, Map<String, Object?> fields) =>
-      lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
-
-  @override
-  void debug(String msg, [Map<String, Object?> fields = const {}]) =>
-      _add('debug', msg, fields);
-  @override
-  void info(String msg, [Map<String, Object?> fields = const {}]) =>
-      _add('info', msg, fields);
-  @override
-  void warn(String msg, [Map<String, Object?> fields = const {}]) =>
-      _add('warn', msg, fields);
-  @override
-  void error(
-    String msg, [
-    Object? error,
-    StackTrace? st,
-    Map<String, Object?> fields = const {},
-  ]) => _add('error', msg, {...fields, if (error != null) 'error': '$error'});
-  @override
-  Future<void> flush() async {}
-  @override
-  Log withFields(Map<String, Object?> fields) =>
-      MemLog._(lines, {..._baked, ...fields});
-}
-
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Env newEnv() => Env(MemLog(<Map<String, Object?>>[]));
+import 'support/harness.dart';
 
 enum Shade { red, green }
 
@@ -431,24 +397,6 @@ void main() {
         );
       },
     );
-
-    test('tracing extracts a valid traceparent', () async {
-      final app = App<Env>()..use(tracing());
-      app.get('/t', (c) {
-        final t = c.tryGet(traceKey);
-        return c.json({'trace': t?.traceId});
-      });
-      final client = TestClient(app, newEnv());
-
-      final r = await client.get(
-        '/t',
-        headers: {
-          'traceparent':
-              '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
-        },
-      );
-      expect(r.json(), {'trace': '0af7651916cd43dd8448eb211c80319c'});
-    });
   });
 
   group('body and failure modes', () {

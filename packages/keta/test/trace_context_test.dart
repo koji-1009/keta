@@ -1,3 +1,9 @@
+/// Owns TraceContext.parse at the header level: accepting a canonical W3C
+/// traceparent (and exposing its fields) and totally rejecting each single-field
+/// spec violation. (The tracing() middleware integration lives in
+/// tracing_test.dart.)
+library;
+
 import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 

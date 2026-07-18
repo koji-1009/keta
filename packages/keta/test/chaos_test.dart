@@ -1,3 +1,7 @@
+/// Owns the transport's resilience under abuse: a CRLF-injecting header, a
+/// body stream that errors mid-write, a truncated chunked body never framed as
+/// complete, and shutdown completing despite a hung handler — the server must
+/// survive each and keep serving.
 @TestOn('vm')
 library;
 
@@ -7,13 +11,7 @@ import 'dart:io';
 import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Future<Env> boot() async => Env(StdoutLog(flushInterval: Duration.zero));
+import 'support/harness.dart';
 
 Future<int> _get(HttpClient client, int port, String path) async {
   final response = await (await client.getUrl(

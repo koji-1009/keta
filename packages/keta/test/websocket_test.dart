@@ -1,3 +1,7 @@
+/// Owns WebSocket upgrade end-to-end over H1 and in-process TestClient: the
+/// handshake and echo/close lifecycle, the security gate and 426 refusals,
+/// graceful shutdown of open sockets, the watch-only drop-not-buffer channel,
+/// and an upgrade response surviving a middleware rebuild.
 @TestOn('vm')
 library;
 
@@ -9,24 +13,7 @@ import 'package:keta/src/h1_transport.dart' show debugWebSocketChannel;
 import 'package:keta/test.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
-
-Future<Env> boot() async => Env(StdoutLog(flushInterval: Duration.zero));
-
-Env newEnv() => Env(StdoutLog(flushInterval: Duration.zero));
-
-/// Runs [mw] against a fixed [response] handler and returns what it produced —
-/// the single-middleware harness shape used to assert, in isolation, that a
-/// middleware's rebuild carries an upgrade response's `upgrade` field through.
-Future<Response> runMw(
-  Middleware<Env> mw,
-  Context<Env> c,
-  Response response,
-) async => mw(c, (_) => response);
+import 'support/harness.dart';
 
 /// An inert upgrade response: its `onConnected` is never invoked by a
 /// middleware (only a realizing transport calls it), so it is safe to shuttle
@@ -292,44 +279,47 @@ void main() {
       expect(dropped(), n);
     });
 
-    test(
-      'a push-only handler (never listens) survives a peer flood and its done '
-      'fires on close',
-      () async {
-        // The end-to-end mirror over a real socket: a handler that never reads
-        // `channel.messages` while the peer floods frames, then closes. With the
-        // fix the flood is dropped at the transport instead of piling up in the
-        // controller, and the peer close still reaches the handler as `done`.
-        final handlerDone = Completer<void>();
-        final app = App<Env>();
-        app.get(
-          '/push',
-          (c) => Response.upgrade((channel) {
-            // Server-push-only: never subscribe to inbound frames, just observe
-            // the disconnect.
-            channel.done.then((_) {
-              if (!handlerDone.isCompleted) handlerDone.complete();
-            });
-          }),
-        );
-        final server = await app.serve(boot, port: 8136);
+    test('SMOKE: a push-only handler survives a real peer flood and its done '
+        'fires on close', () async {
+      // A liveness smoke test, not the drop pin. Over a real socket a handler
+      // that never reads `channel.messages` takes a peer flood and then a
+      // close, and we only observe that the handler stays alive and its `done`
+      // fires. The drop-not-buffer behavior itself is unobservable end-to-end
+      // (the transport builds the channel internally and exposes no drop
+      // tally on this path), so it is pinned deterministically by the unit
+      // test above via `debugWebSocketChannel`. This one guards against the
+      // flood wedging or crashing the served handler; it would pass even if
+      // frames were buffered, which is exactly why it is labelled a smoke
+      // test rather than the contract.
+      final handlerDone = Completer<void>();
+      final app = App<Env>();
+      app.get(
+        '/push',
+        (c) => Response.upgrade((channel) {
+          // Server-push-only: never subscribe to inbound frames, just observe
+          // the disconnect.
+          channel.done.then((_) {
+            if (!handlerDone.isCompleted) handlerDone.complete();
+          });
+        }),
+      );
+      final server = await app.serve(boot, port: 8136);
 
-        final ws = await WebSocket.connect('ws://127.0.0.1:8136/push');
-        for (var i = 0; i < 100000; i++) {
-          ws.add('x');
-        }
-        await ws.close();
+      final ws = await WebSocket.connect('ws://127.0.0.1:8136/push');
+      for (var i = 0; i < 100000; i++) {
+        ws.add('x');
+      }
+      await ws.close();
 
-        await handlerDone.future.timeout(
-          const Duration(seconds: 5),
-          onTimeout: () =>
-              fail('done did not fire on peer close for a push-only handler'),
-        );
-        expect(handlerDone.isCompleted, isTrue);
+      await handlerDone.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () =>
+            fail('done did not fire on peer close for a push-only handler'),
+      );
+      expect(handlerDone.isCompleted, isTrue);
 
-        await server.shutdown(grace: const Duration(milliseconds: 200));
-      },
-    );
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    });
   });
 
   group('TestClient in-process upgrade', () {
