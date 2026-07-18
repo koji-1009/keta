@@ -1,6 +1,58 @@
+/// Schema.validate/require/requireMap's two-posture rule — a malformed SCHEMA
+/// fragment is a StateError naming the defect, invalid INSTANCE data is a
+/// violation message — exercised across every keyword the canonical subset
+/// supports, plus the sealed (oneOf+discriminator) shape end to end.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
+
+// The §4 canonical shape, mirroring openapi_test.dart's UserDto/Role/
+// userDtoSchema (that file keeps its own copy — it is also OpenApi.fromRoutes'
+// fixture there; validation of the shape belongs to this file's charter).
+enum Role { admin, member }
+
+class UserDto {
+  UserDto({
+    required this.id,
+    required this.name,
+    this.age,
+    required this.role,
+    required this.tags,
+  });
+  final String id;
+  final String name;
+  final int? age;
+  final Role role;
+  final List<String> tags;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'name': name,
+    if (age != null) 'age': age,
+    'role': role.name,
+    'tags': tags,
+  };
+}
+
+const userDtoSchema = Schema('UserDto', {
+  'type': 'object',
+  'required': ['id', 'name', 'role', 'tags'],
+  'properties': {
+    'id': {'type': 'string'},
+    'name': {'type': 'string'},
+    'age': {'type': 'integer'},
+    'role': {
+      'type': 'string',
+      'enum': ['admin', 'member'],
+    },
+    'tags': {
+      'type': 'array',
+      'items': {'type': 'string'},
+    },
+  },
+});
 
 // Sealed-with-discriminator schemas, mirroring the shapes in openapi_test.dart.
 const createdSchema = Schema('Created', {
@@ -38,6 +90,73 @@ const eventSchema = Schema(
 );
 
 void main() {
+  group('Schema.validate / require — canonical DTO contract', () {
+    // Moved from openapi_test.dart: this exercises Schema.validate/require
+    // directly and has nothing to do with OpenApi.fromRoutes, so it belongs to
+    // this file's charter rather than the emitter's.
+    test('accepts a valid object and passes toJson output', () {
+      final user = UserDto(
+        id: '1',
+        name: 'Ada',
+        role: Role.member,
+        tags: ['a'],
+      );
+      expect(userDtoSchema.validate(user.toJson()), isEmpty);
+    });
+
+    test('reports missing required, wrong type, and bad enum', () {
+      final errors = userDtoSchema.validate({
+        'id': 'x',
+        'age': 'not-an-int',
+        'role': 'root',
+        'tags': ['ok', 1],
+      });
+      expect(errors, contains(matches(r'name: required')));
+      expect(errors, contains(matches(r'age: expected integer')));
+      expect(errors, contains(matches(r'role: "root" is not one of')));
+      expect(errors, contains(matches(r'tags\[1\]: expected string')));
+    });
+
+    test('require returns the value or throws KetaException(400)', () {
+      final ok = userDtoSchema.require({
+        'id': 'a',
+        'name': 'b',
+        'role': 'admin',
+        'tags': <String>[],
+      });
+      expect((ok as Map)['id'], 'a');
+      expect(
+        () => userDtoSchema.require({'id': 'a'}),
+        throwsA(isA<KetaException>().having((e) => e.status, 'status', 400)),
+      );
+    });
+
+    test('accepts an explicit null for an optional field', () {
+      expect(
+        userDtoSchema.validate({
+          'id': 'a',
+          'name': 'b',
+          'age': null,
+          'role': 'admin',
+          'tags': <String>[],
+        }),
+        isEmpty,
+      );
+    });
+
+    test('validates Map<String,T> via additionalProperties', () {
+      const counts = Schema('Counts', {
+        'type': 'object',
+        'additionalProperties': {'type': 'integer'},
+      });
+      expect(counts.validate({'a': 1, 'b': 2}), isEmpty);
+      expect(
+        counts.validate({'a': 1, 'b': 'x'}),
+        contains(matches(r'b: expected integer')),
+      );
+    });
+  });
+
   test('a top-level \$ref absent from deps is a schema-authoring StateError, '
       'not a violation', () {
     // A dangling $ref has nothing to do with the value being checked — it
@@ -270,6 +389,28 @@ void main() {
             allOf(contains('"BadOneOf"'), contains('"oneOf"')),
           ),
         ),
+      );
+    });
+  });
+
+  group('sealed schema — explicit discriminator mapping, end to end', () {
+    // Moved from openapi_test.dart: this is the violation/happy-path posture
+    // for the very same eventSchema the StateError tests above (dangling
+    // mapping ref, missing discriminator, etc.) exercise — both postures for
+    // one schema now live in one charter.
+    test('validates the variant selected by the discriminator', () {
+      expect(eventSchema.validate({'type': 'created', 'at': 'now'}), isEmpty);
+      expect(
+        eventSchema.validate({'type': 'deleted', 'reason': 'gone'}),
+        isEmpty,
+      );
+      expect(
+        eventSchema.validate({'type': 'created'}),
+        contains(matches(r'at: required')),
+      );
+      expect(
+        eventSchema.validate({'type': 'unknown'}),
+        contains(matches(r'has no variant')),
       );
     });
   });

@@ -1,3 +1,9 @@
+/// The OpenAPI shadow of a WebSocket-upgrade route (`RouteDoc.upgrade` /
+/// `SwitchingProtocols`): the 101 entry replaces any 2xx, the subprotocol
+/// header is projected only when pinned, and security/failureResponses still
+/// compose onto it exactly as they do on an ordinary route.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';

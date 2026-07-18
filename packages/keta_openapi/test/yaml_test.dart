@@ -1,5 +1,9 @@
-// Unit-tests the internal YAML emitter directly (it is not part of the public
-// barrel, but same-package tests may import src/).
+/// The internal YAML emitter (`src/yaml.dart`, not part of the public barrel —
+/// same-package tests may import `src/`): non-map roots, empty/nested
+/// collections, and scalar quoting/escaping, each checked for a round-trip
+/// through the `yaml` package's own parser.
+library;
+
 import 'package:keta_openapi/src/yaml.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';

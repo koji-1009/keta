@@ -1,3 +1,9 @@
+/// OpenApi.fromRoutes's structural guarantees: fail-fast collision detection
+/// (route, schema, security-scheme, operationId), path/parameter templating,
+/// query parameters, request-body media types, security projection, and
+/// registration-order-independent (deterministic) output.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
@@ -88,22 +94,29 @@ void main() {
     expect(doc.containsKey('components'), isFalse);
   });
 
-  test('a documented route with no response fabricates a 200', () {
-    final app = App<Ignored>()
-      ..get(
-        '/s',
-        (c) => c.text('x'),
-        doc: const RouteDoc(success: Success(), summary: 'just s'),
-      );
-    final op =
-        ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/s']
-                as Map)['get']
-            as Map;
-    expect(op['summary'], 'just s');
-    expect(op['responses'], {
-      '200': {'description': 'OK'},
-    });
-  });
+  test(
+    'a declared success with no schema emits a bare 200, no content key',
+    () {
+      // Distinct from the "no RouteDoc at all" case just above: here a
+      // RouteDoc IS present and its Success has no schema (a liveness probe,
+      // say) — the response must still be exactly {'200': {description: OK}},
+      // with no fabricated `content`.
+      final app = App<Ignored>()
+        ..get(
+          '/s',
+          (c) => c.text('x'),
+          doc: const RouteDoc(success: Success(), summary: 'just s'),
+        );
+      final op =
+          ((OpenApi.fromRoutes(app.routes).toJson()['paths'] as Map)['/s']
+                  as Map)['get']
+              as Map;
+      expect(op['summary'], 'just s');
+      expect(op['responses'], {
+        '200': {'description': 'OK'},
+      });
+    },
+  );
 
   test('nameless captures become p{index} with their schema fragment', () {
     final app = App<Ignored>();
@@ -616,6 +629,60 @@ void main() {
     expect(
       OpenApi.fromRoutes(build(['/b', '/a']).routes).toYaml(),
       OpenApi.fromRoutes(build(['/a', '/b']).routes).toYaml(),
+    );
+  });
+
+  test('the document depends on the route set, not registration order — across '
+      'varied reason phrases and a 101 upgrade', () {
+    // The test above predates non-200 reason phrases, tag aggregation, and
+    // the 101/SwitchingProtocols projection (route_doc_metadata_test.dart
+    // separately pins tag-order determinism); this extends coverage to the
+    // other two so every emitter that sorts/aggregates across routes is
+    // proven order-independent, not just the schema-collection walk.
+    App<Ignored> build(List<String> keys) {
+      final app = App<Ignored>();
+      for (final key in keys) {
+        switch (key) {
+          case '/a':
+            app.get(
+              '/a',
+              (c) => c.text('x'),
+              doc: const RouteDoc(success: Success(schema: createdSchema)),
+            );
+          case '/b':
+            app.post(
+              '/b',
+              (c) => c.text('x', status: 201),
+              doc: const RouteDoc(success: Success(status: 201)),
+            );
+          case '/c':
+            app.delete(
+              '/c',
+              (c) => c.text('', status: 204),
+              doc: const RouteDoc(success: Success(status: 204)),
+            );
+          case '/ws':
+            app.get(
+              '/ws',
+              (c) => Response.upgrade((ch) => ch.close()),
+              doc: const RouteDoc.upgrade(
+                upgrade: SwitchingProtocols(subprotocol: 'chat'),
+              ),
+            );
+        }
+      }
+      return app;
+    }
+
+    expect(
+      OpenApi.fromRoutes(
+        build(['/ws', '/c', '/b', '/a']).routes,
+        security: [bearer],
+      ).toYaml(),
+      OpenApi.fromRoutes(
+        build(['/a', '/b', '/c', '/ws']).routes,
+        security: [bearer],
+      ).toYaml(),
     );
   });
 

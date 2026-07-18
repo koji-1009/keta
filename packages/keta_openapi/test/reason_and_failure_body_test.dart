@@ -1,10 +1,15 @@
+/// Response `description` text is a deterministic RFC 9110 reason phrase (not
+/// a fixed "OK"/""), for both `Success` and `failureResponses`; and a failure
+/// value may be a bare `Schema` (`application/json`) or a `Failure` naming its
+/// own media type, with anything else rejected as a hard error at emit time.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
 
 class Ignored {}
 
-const bodySchema = Schema('Body', {'type': 'object'});
 const errorSchema = Schema('Error', {'type': 'object'});
 
 Map<String, Object?> _op(App<Ignored> app, String path, String method) {

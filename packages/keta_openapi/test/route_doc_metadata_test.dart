@@ -1,3 +1,10 @@
+/// `RouteDoc`'s free-form metadata (`description`, `tags`, `operationId`):
+/// each projects onto its operation as declared, `tags` additionally
+/// aggregates into a sorted/deduped document-wide list, `operationId` is
+/// enforced document-wide unique, and none of this depends on registration
+/// order.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';

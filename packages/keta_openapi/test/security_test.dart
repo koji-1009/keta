@@ -1,3 +1,12 @@
+/// `enforceSecurity`/`SecurityPolicy`: runtime enforcement of a route's
+/// declared security — defaulting, explicit-public override, the secure-by-
+/// default auth wall, synchronous and asynchronous verifiers, multi-scheme OR
+/// (including a scheme with no registered verifier, which must be skipped,
+/// not treated as a pass). This is the runtime gate; OpenApi.fromRoutes'
+/// document-side security projection is covered in
+/// openapi_generation_test.dart's "security" group.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_openapi/keta_openapi.dart';
@@ -85,5 +94,89 @@ void main() {
         );
       },
     );
+
+    test(
+      'an async verifier is awaited before admitting or rejecting',
+      () async {
+        // The plain `verifiers` map above never returns a Future — `_admit`'s
+        // synchronous branch is what every other test in this file exercises.
+        // A verifier that genuinely returns `Future<bool>` (an async token
+        // introspection call, say) drives the other branch: `result.then(...)`.
+        final app = build(
+          SecurityPolicy(
+            verifiers: {
+              'bearer': (Context<Env> c) async =>
+                  c.header('authorization') == 'Bearer ok',
+            },
+          ),
+          (a) => a.get(
+            '/x',
+            (c) => c.text('ok'),
+            doc: const RouteDoc(success: Success(), security: [bearer]),
+          ),
+        );
+        expect((await TestClient(app, Env()).get('/x')).status, 401);
+        expect(
+          (await TestClient(
+            app,
+            Env(),
+          ).get('/x', headers: {'authorization': 'Bearer ok'})).status,
+          200,
+        );
+      },
+    );
+
+    test('multiple declared schemes are OR-combined: any one admitting is '
+        'enough', () async {
+      final app = build(
+        SecurityPolicy(
+          verifiers: {
+            'apiKey': (Context<Env> c) => false, // never admits
+            'bearer': (Context<Env> c) =>
+                c.header('authorization') == 'Bearer ok',
+          },
+        ),
+        (a) => a.get(
+          '/x',
+          (c) => c.text('ok'),
+          doc: const RouteDoc(success: Success(), security: [apiKey, bearer]),
+        ),
+      );
+      // apiKey's verifier always refuses; bearer's admits with the right
+      // header — one passing scheme is enough even though the first fails.
+      expect(
+        (await TestClient(
+          app,
+          Env(),
+        ).get('/x', headers: {'authorization': 'Bearer ok'})).status,
+        200,
+      );
+      // Neither passes: apiKey always refuses, bearer sees no token.
+      expect((await TestClient(app, Env()).get('/x')).status, 401);
+    });
+
+    test('a declared scheme with no registered verifier is skipped, not '
+        'treated as an automatic pass', () async {
+      // `security: [apiKey, bearer]` but `policy.verifiers` (the `verifiers`
+      // map above) has no entry for 'apiKey' at all — not one that returns
+      // false, one that is simply absent. `_admit` must fall through to the
+      // next scheme rather than either admitting by default or getting stuck.
+      final app = build(
+        SecurityPolicy(verifiers: verifiers),
+        (a) => a.get(
+          '/x',
+          (c) => c.text('ok'),
+          doc: const RouteDoc(success: Success(), security: [apiKey, bearer]),
+        ),
+      );
+      expect((await TestClient(app, Env()).get('/x')).status, 401);
+      expect(
+        (await TestClient(
+          app,
+          Env(),
+        ).get('/x', headers: {'authorization': 'Bearer ok'})).status,
+        200,
+      );
+    });
   });
 }

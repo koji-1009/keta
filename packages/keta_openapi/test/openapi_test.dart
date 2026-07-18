@@ -1,3 +1,10 @@
+/// OpenApi.fromRoutes's core contract over a realistic canonical-DTO app:
+/// paths/parameters/components extraction, one declared success per route,
+/// and the 2xx/3xx and 204/304-bodyless invariants enforced at emit time (not
+/// merely by the constructor's `assert`). Schema.validate/require mechanics
+/// live in schema_validation_test.dart, not here.
+library;
+
 import 'dart:io';
 
 import 'package:keta/keta.dart';
@@ -59,42 +66,6 @@ const userDtoSchema = Schema('UserDto', {
   },
 });
 
-// Sealed with a discriminator.
-
-const createdSchema = Schema('Created', {
-  'type': 'object',
-  'required': ['type', 'at'],
-  'properties': {
-    'type': {'type': 'string'},
-    'at': {'type': 'string'},
-  },
-});
-const deletedSchema = Schema('Deleted', {
-  'type': 'object',
-  'required': ['type', 'reason'],
-  'properties': {
-    'type': {'type': 'string'},
-    'reason': {'type': 'string'},
-  },
-});
-const eventSchema = Schema(
-  'Event',
-  {
-    'oneOf': [
-      {r'$ref': '#/components/schemas/Created'},
-      {r'$ref': '#/components/schemas/Deleted'},
-    ],
-    'discriminator': {
-      'propertyName': 'type',
-      'mapping': {
-        'created': '#/components/schemas/Created',
-        'deleted': '#/components/schemas/Deleted',
-      },
-    },
-  },
-  deps: [createdSchema, deletedSchema],
-);
-
 class Ignored {}
 
 void main() {
@@ -111,88 +82,6 @@ void main() {
       expect(back.age, isNull);
       expect(back.role, Role.admin);
       expect(back.tags, ['x', 'y']);
-    });
-  });
-
-  group('Schema.validate', () {
-    test('accepts a valid object and passes toJson output', () {
-      final user = UserDto(
-        id: '1',
-        name: 'Ada',
-        role: Role.member,
-        tags: ['a'],
-      );
-      expect(userDtoSchema.validate(user.toJson()), isEmpty);
-    });
-
-    test('reports missing required, wrong type, and bad enum', () {
-      final errors = userDtoSchema.validate({
-        'id': 'x',
-        'age': 'not-an-int',
-        'role': 'root',
-        'tags': ['ok', 1],
-      });
-      expect(errors, contains(matches(r'name: required')));
-      expect(errors, contains(matches(r'age: expected integer')));
-      expect(errors, contains(matches(r'role: "root" is not one of')));
-      expect(errors, contains(matches(r'tags\[1\]: expected string')));
-    });
-
-    test('require returns the value or throws KetaException(400)', () {
-      final ok = userDtoSchema.require({
-        'id': 'a',
-        'name': 'b',
-        'role': 'admin',
-        'tags': <String>[],
-      });
-      expect((ok as Map)['id'], 'a');
-      expect(
-        () => userDtoSchema.require({'id': 'a'}),
-        throwsA(isA<KetaException>().having((e) => e.status, 'status', 400)),
-      );
-    });
-
-    test('accepts an explicit null for an optional field', () {
-      expect(
-        userDtoSchema.validate({
-          'id': 'a',
-          'name': 'b',
-          'age': null,
-          'role': 'admin',
-          'tags': <String>[],
-        }),
-        isEmpty,
-      );
-    });
-
-    test('validates Map<String,T> via additionalProperties', () {
-      const counts = Schema('Counts', {
-        'type': 'object',
-        'additionalProperties': {'type': 'integer'},
-      });
-      expect(counts.validate({'a': 1, 'b': 2}), isEmpty);
-      expect(
-        counts.validate({'a': 1, 'b': 'x'}),
-        contains(matches(r'b: expected integer')),
-      );
-    });
-  });
-
-  group('sealed schema', () {
-    test('validates the variant selected by the discriminator', () {
-      expect(eventSchema.validate({'type': 'created', 'at': 'now'}), isEmpty);
-      expect(
-        eventSchema.validate({'type': 'deleted', 'reason': 'gone'}),
-        isEmpty,
-      );
-      expect(
-        eventSchema.validate({'type': 'created'}),
-        contains(matches(r'at: required')),
-      );
-      expect(
-        eventSchema.validate({'type': 'unknown'}),
-        contains(matches(r'has no variant')),
-      );
     });
   });
 

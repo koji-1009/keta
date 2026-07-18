@@ -1,3 +1,9 @@
+/// `conflictKey` parity with keta core: keta_openapi hand-copies keta's
+/// route-conflict collapse rule because it is not part of keta's public API,
+/// so this pins the copy against a corpus rather than trusting it never to
+/// drift.
+library;
+
 import 'package:keta/keta.dart';
 // A workspace-internal test may reach into keta's `src/` to pin behavior that
 // the public API does not export. `conflictKey` is exactly that: `App.compile`
