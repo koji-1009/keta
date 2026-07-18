@@ -1,3 +1,7 @@
+/// Pins loadMigrations' filename parsing (version/name split), numeric
+/// sort order, and rejection of malformed or duplicate-version files.
+library;
+
 import 'dart:io';
 
 import 'package:keta_db/keta_db.dart';

@@ -1,3 +1,8 @@
+/// Pins SqliteDb's PRAGMA-driven behavior: foreign_keys enforcement, WAL
+/// journal mode opt-in, and cross-connection busy_timeout translating to
+/// Unavailable.
+library;
+
 import 'dart:async';
 import 'dart:io';
 

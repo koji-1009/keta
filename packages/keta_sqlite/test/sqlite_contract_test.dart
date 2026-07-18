@@ -1,3 +1,8 @@
+/// Pins SqliteDb's DbConn contract: type round-tripping, transaction
+/// commit/rollback and failure handling, lifecycle, `run<T>` serialization,
+/// and lock-acquisition timeout/close ordering.
+library;
+
 import 'dart:async';
 import 'dart:io';
 
@@ -7,6 +12,37 @@ import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import 'package:test/test.dart';
 
 void main() {
+  group('transaction commit/rollback', () {
+    test('commits on success and rolls back on throw', () async {
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await db.writer.execute(
+        'create table users (id integer primary key, name text not null)',
+      );
+
+      await db.transaction((c) async {
+        await c.execute('insert into users (name) values (?)', ['ada']);
+        return 0;
+      });
+      expect(
+        (await db.reader.query('select count(*) n from users')).single['n'],
+        1,
+      );
+
+      await expectLater(
+        db.transaction((c) async {
+          await c.execute('insert into users (name) values (?)', ['grace']);
+          throw StateError('boom');
+        }),
+        throwsStateError,
+      );
+      expect(
+        (await db.reader.query('select count(*) n from users')).single['n'],
+        1,
+      );
+    });
+  });
+
   group('transaction failure handling', () {
     test('a failing ROLLBACK does not mask the original error', () async {
       final db = SqliteDb.memory();
@@ -90,6 +126,30 @@ void main() {
   });
 
   group('the DbConn contract', () {
+    test('execute and query round-trip with the type contract', () async {
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await db.writer.execute(
+        'create table t (i integer, r real, s text, b blob)',
+      );
+      final affected = await db.writer.execute(
+        'insert into t values (?, ?, ?, ?)',
+        [
+          7,
+          1.5,
+          'hi',
+          [1, 2, 3],
+        ],
+      );
+      expect(affected, 1);
+
+      final rows = await db.reader.query('select * from t');
+      expect(rows.single['i'], 7);
+      expect(rows.single['r'], 1.5);
+      expect(rows.single['s'], 'hi');
+      expect(rows.single['b'], [1, 2, 3]);
+    });
+
     test('execute returns the affected row count', () async {
       final db = SqliteDb.memory();
       addTearDown(db.close);

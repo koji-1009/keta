@@ -1,3 +1,7 @@
+/// Pins that a migration failing on a constraint names the migration and the
+/// SQL collision in operator terms, not the client-facing Conflict shape.
+library;
+
 import 'dart:io';
 
 import 'package:keta_db/keta_db.dart';

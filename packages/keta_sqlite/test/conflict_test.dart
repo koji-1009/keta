@@ -1,3 +1,8 @@
+/// Pins SqliteDb's constraint-error translation: uniqueness violations become
+/// Conflict (detail kept server-side, hidden from the client); everything
+/// else stays the driver's own error.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:sqlite3/sqlite3.dart' show SqlExtendedError, SqliteException;

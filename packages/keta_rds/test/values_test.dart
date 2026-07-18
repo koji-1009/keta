@@ -1,3 +1,7 @@
+/// Pins mapValue's temporal rendering (date/timestamp/timestamptz each render
+/// by their own rule) and pass-through of non-temporal values.
+library;
+
 import 'dart:typed_data';
 
 import 'package:keta_rds/src/values.dart';

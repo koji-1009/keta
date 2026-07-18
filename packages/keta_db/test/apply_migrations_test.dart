@@ -1,3 +1,7 @@
+/// Pins applyMigrations' ordering, idempotency, ledger/checksum bookkeeping,
+/// legacy-upgrade, and out-of-order rules against FakeDb.
+library;
+
 import 'dart:io';
 
 import 'package:keta_db/keta_db.dart';

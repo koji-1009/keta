@@ -1,3 +1,7 @@
+/// Canary: the exact package:postgres message literals keta_rds keys its
+/// socket-death 503 off still exist verbatim in the installed driver source.
+library;
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';

@@ -1,3 +1,7 @@
+/// Pins verifyMigrations' pending/applied detection, checksum-drift and
+/// legacy-NULL-checksum handling, and writer-routed reads against FakeDb.
+library;
+
 import 'dart:io';
 
 import 'package:keta_db/keta_db.dart';

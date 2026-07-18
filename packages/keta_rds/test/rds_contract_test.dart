@@ -1,3 +1,7 @@
+/// The live-Postgres contract suite: types, transactions, error translation,
+/// concurrency, and migrations, gated on KETA_TEST_PG (never a silent green).
+library;
+
 import 'dart:async';
 import 'dart:io';
 

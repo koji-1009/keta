@@ -1,3 +1,8 @@
+/// Pins SqliteDb's transaction serialization: concurrent transactions queue
+/// rather than interleave or lose updates, and a genuinely nested transaction
+/// is a StateError.
+library;
+
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 

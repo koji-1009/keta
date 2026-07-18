@@ -1,3 +1,8 @@
+/// Pins tx()'s post-completion guard: the DbConn published under txConn must
+/// refuse further queries/executes once the transaction has committed or
+/// rolled back.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_db/keta_db.dart';

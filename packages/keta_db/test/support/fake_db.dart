@@ -1,3 +1,7 @@
+/// Shared support fixture: the single-sourced FakeDb used by keta_db's
+/// migration-runner tests (apply/verify/checksum/legacy-ledger).
+library;
+
 import 'package:keta_db/keta_db.dart';
 
 /// An in-memory [Db] that records what `applyMigrations` issues, so tests can

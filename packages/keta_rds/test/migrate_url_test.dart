@@ -1,3 +1,7 @@
+/// Pins requirePostgresUrl's scheme validation: postgres(ql):// is accepted
+/// unchanged; every other scheme or bare path is a FormatException naming it.
+library;
+
 import 'package:keta_rds/keta_rds.dart';
 import 'package:test/test.dart';
 
