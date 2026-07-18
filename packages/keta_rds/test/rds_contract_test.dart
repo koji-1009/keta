@@ -1,5 +1,6 @@
 /// The live-Postgres contract suite: types, transactions, error translation,
-/// concurrency, and migrations, gated on KETA_TEST_PG (never a silent green).
+/// concurrency, migrations, statement timeout, and poolStats, gated on
+/// KETA_TEST_PG (never a silent green).
 library;
 
 import 'dart:async';
@@ -518,6 +519,46 @@ void main() {
       expect(stats.writer.idle, 0); // close() disposes idle inventory
       expect(stats.reader.leased, 0);
       expect(stats.reader.idle, 0);
+    });
+
+    test('a separate reader endpoint gives writer and reader genuinely '
+        'independent pools', () async {
+      // readerUrl pointed at the same server the writer uses is fine here:
+      // what this test pins is that RdsDb.url(readerUrl: ...) builds a
+      // SECOND, distinct Pool object rather than reusing the writer's (the
+      // sibling tests above only exercise the degenerate no-readerUrl case,
+      // where writer and reader literally are the same Pool). Endpoint
+      // diversity is not the point; pool independence is.
+      final db = RdsDb.url(_pgUrl!, readerUrl: _pgUrl!);
+      addTearDown(db.close);
+
+      expect(db.poolStats.writer.leased, 0);
+      expect(db.poolStats.reader.leased, 0);
+
+      await db.transaction((c) async {
+        // transaction() pins one connection from the WRITER pool for its
+        // whole span (see RdsDb's class doc). If writer and reader shared
+        // one Pool, reader.leased would move in lockstep with
+        // writer.leased; it must not.
+        final mid = db.poolStats;
+        expect(mid.writer.leased, 1);
+        expect(mid.reader.leased, 0);
+
+        // The reader pool moves on its own account: a reader query leases
+        // and releases a READER connection without disturbing the
+        // still-pinned writer connection.
+        await db.reader.query('select 1');
+        final afterRead = db.poolStats;
+        expect(afterRead.writer.leased, 1); // unchanged: still pinned
+        expect(afterRead.reader.leased, 0); // already checked back in
+        expect(afterRead.reader.idle, greaterThanOrEqualTo(1));
+
+        return 0;
+      });
+
+      final after = db.poolStats;
+      expect(after.writer.leased, 0);
+      expect(after.reader.leased, 0);
     });
   });
 }

@@ -1,6 +1,7 @@
 /// Pins Pool's invariants: checkout/reuse up to the ceiling, exhaustion and
 /// FIFO waiter release, failed-open recovery, broken-resource disposal,
-/// close draining, release guards, validate, and the idle reaper.
+/// close draining, release guards, validate, the idle reaper, and the stats
+/// snapshot.
 library;
 
 import 'dart:async';

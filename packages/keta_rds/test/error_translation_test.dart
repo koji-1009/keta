@@ -1,6 +1,7 @@
 /// Pins translating()'s driver-exception floor: which PostgreSQL SQLSTATEs
-/// and connection-fatal PgExceptions become Conflict/Unavailable, and which
-/// conditions are deliberately left raw.
+/// and connection-fatal PgExceptions become Conflict, UnprocessableEntity,
+/// TransientFailure, or Unavailable, and which conditions are deliberately
+/// left raw.
 library;
 
 import 'dart:io' show SocketException;
