@@ -39,6 +39,64 @@ import 'package:keta/keta.dart';
 /// authoring damage — depending on which line happened to notice it. That
 /// inconsistency is the bug this class now forecloses: every code path below
 /// is one of the two postures above, never a third.
+///
+/// ## Validation keywords are enforced, not decoration
+///
+/// The document does not lie: a constraint that appears in the emitted OpenAPI
+/// must also be applied at the runtime boundary. Beyond the shape checks
+/// (`type`/`required`/`enum`/nested/`oneOf`/`additionalProperties`), [validate]
+/// enforces every scalar validation keyword this schema can carry, with JSON
+/// Schema 2020-12 semantics, and each applies only to an instance of the
+/// keyword's own type (a `minLength` on a number instance is inapplicable, not
+/// a failure — exactly as the spec says):
+///
+///  - **`minLength` / `maxLength`** (strings): length is counted in Unicode
+///    **code points** (`String.runes.length`), not UTF-16 code units, so an
+///    astral-plane character such as `'😀'` counts as length 1, not 2.
+///  - **`pattern`** (strings): compiled as a Dart [RegExp] (the ECMAScript
+///    dialect JSON Schema prescribes) and matched **unanchored** — a partial
+///    match anywhere in the string satisfies it, per JSON Schema. There is no
+///    runtime ReDoS guard; the premise is that `pattern` is applied only to
+///    length-bounded input, so pair it with `maxLength`.
+///  - **`format`** (strings): only a crisp, unambiguous set is enforced —
+///    `date-time` and `date` (RFC 3339) and `uuid` (RFC 4122 string form).
+///    Every other `format` value (`email`, `hostname`, `binary`, …) is an
+///    annotation per the spec: it is emitted but **not** enforced, and never a
+///    violation.
+///  - **`minimum` / `maximum`** and **`exclusiveMinimum` / `exclusiveMaximum`**
+///    (numbers): numeric comparison; the exclusive variants are the 2020-12
+///    numeric form (a bound, not a boolean flag).
+///  - **`multipleOf`** (numbers): `value / multipleOf` must be an integer.
+///    Integer operands are checked exactly (`value % multipleOf == 0`);
+///    fractional operands (e.g. `multipleOf: 0.1`) are checked with a small
+///    relative tolerance so `0.3` counts as a multiple of `0.1` despite binary
+///    floating-point error, while `0.35` does not. A `multipleOf` that is not
+///    greater than zero is authoring damage.
+///  - **`minItems` / `maxItems`** (arrays): element count.
+///  - **`uniqueItems`** (arrays): when `true`, no two elements may be equal by
+///    **deep JSON-value equality** (structural, not identity), so two equal
+///    nested objects collide.
+///
+/// A violated value keyword is instance data — posture (2), a violation. A
+/// malformed keyword *value* (a `minLength` that isn't a non-negative integer,
+/// a `pattern` that isn't a valid regular expression, a `multipleOf` ≤ 0, a
+/// non-boolean `uniqueItems`, …) is authoring damage — posture (1), a
+/// [StateError].
+///
+/// ## What you can write takes effect; what doesn't take effect can't be written
+///
+/// The keywords above are every validation keyword keta enforces. A schema may
+/// still *carry* any JSON string as a key, but a key that is a recognized JSON
+/// Schema **validation** keyword keta does **not** enforce — `const`, `allOf`,
+/// `anyOf`, `not`, `if`/`then`/`else`, `dependentRequired`, `dependentSchemas`,
+/// `prefixItems`, `contains`, `minContains`, `maxContains`, `minProperties`,
+/// `maxProperties`, `patternProperties`, `propertyNames`, `unevaluatedItems`,
+/// or `unevaluatedProperties` — is authoring damage: it would be emitted into
+/// the document as a promise the boundary silently breaks. [validate] throws a
+/// [StateError] naming it (posture (1)). Pure annotations that only describe
+/// the document (`description`, `title`, `example`, `examples`, `default`,
+/// `deprecated`, `readOnly`, `writeOnly`, …) are not validation keywords and
+/// pass through untouched.
 final class Schema {
   const Schema(this.name, this.json, {this.deps = const []});
   final String name;
@@ -134,6 +192,7 @@ void _validate(
   Map<String, Schema> refs,
   String schemaName,
 ) {
+  _rejectUnenforcedKeywords(schema, path, schemaName);
   if (schema.containsKey(r'$ref')) {
     final ref = schema[r'$ref'];
     if (ref is! String) {
@@ -178,8 +237,18 @@ void _validate(
   switch (schema['type']) {
     case null:
       // No `type` declared at all: legitimate for an enum-only or `oneOf`
-      // fragment — nothing to check here beyond what already ran above.
-      break;
+      // fragment. There is no type gate to apply, but any scalar/array value
+      // keyword the fragment carries still binds by the instance's own type
+      // (JSON Schema evaluates keywords against the instance, not a declared
+      // type), so dispatch by what the value actually is.
+      switch (value) {
+        case String():
+          _stringKeywords(schema, value, path, errors, schemaName);
+        case num():
+          _numberKeywords(schema, value, path, errors, schemaName);
+        case List():
+          _arrayKeywords(schema, value, path, errors, schemaName);
+      }
     case 'object':
       _validateObject(schema, value, path, errors, refs, schemaName);
     case 'array':
@@ -187,6 +256,8 @@ void _validate(
     case 'string':
       if (value is! String) {
         errors.add('$path: expected string, got ${_typeName(value)}');
+      } else {
+        _stringKeywords(schema, value, path, errors, schemaName);
       }
     case 'integer':
       // Deliberately narrower than JSON Schema 2020-12, which admits a
@@ -201,10 +272,14 @@ void _validate(
       // integer is decided once, and validation and mapping agree on it.
       if (value is! int) {
         errors.add('$path: expected integer, got ${_typeName(value)}');
+      } else {
+        _numberKeywords(schema, value, path, errors, schemaName);
       }
     case 'number':
       if (value is! num) {
         errors.add('$path: expected number, got ${_typeName(value)}');
+      } else {
+        _numberKeywords(schema, value, path, errors, schemaName);
       }
     case 'boolean':
       if (value is! bool) {
@@ -357,6 +432,10 @@ void _validateArray(
     errors.add('$path: expected array, got ${_typeName(value)}');
     return;
   }
+  // Array-level keywords bind to the array itself, so they are checked whether
+  // or not an individual element also fails below — a too-short array is a
+  // distinct fact from a mistyped element.
+  _arrayKeywords(schema, value, path, errors, schemaName);
   final itemsRaw = schema['items'];
   if (itemsRaw == null) return;
   if (itemsRaw is! Map) {
@@ -489,6 +568,366 @@ void _validateOneOf(
     return;
   }
   _validate(target.json, value, path, errors, refs, target.name);
+}
+
+/// Recognized JSON Schema validation keywords that keta deliberately does not
+/// enforce. Any of these present in a fragment is authoring damage: it would be
+/// emitted into the document as a constraint the boundary silently ignores.
+/// (The keywords keta *does* enforce — `type`, `enum`, `required`, `items`,
+/// `properties`, `additionalProperties`, `oneOf`/`discriminator`, `$ref`, and
+/// the scalar/array value keywords handled by [_stringKeywords],
+/// [_numberKeywords], and [_arrayKeywords] — are absent from this set, as are
+/// pure annotations, which are not validation keywords at all.)
+const _unenforcedValidationKeywords = <String>{
+  'const',
+  'allOf',
+  'anyOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'dependentRequired',
+  'dependentSchemas',
+  'prefixItems',
+  'contains',
+  'minContains',
+  'maxContains',
+  'minProperties',
+  'maxProperties',
+  'patternProperties',
+  'propertyNames',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+};
+
+/// Throws a [StateError] (posture (1)) if [schema] declares a validation
+/// keyword keta does not enforce — "what you can write takes effect; what
+/// doesn't take effect can't be written". Runs before the `$ref`/`oneOf`
+/// branches so a stray keyword beside either is caught too.
+void _rejectUnenforcedKeywords(
+  Map<String, Object?> schema,
+  String path,
+  String schemaName,
+) {
+  for (final key in schema.keys) {
+    if (_unenforcedValidationKeywords.contains(key)) {
+      _authoringDefect(
+        schemaName,
+        path,
+        key,
+        'is a JSON Schema validation keyword keta does not enforce; a schema '
+        'must not declare a constraint the boundary would silently ignore',
+      );
+    }
+  }
+}
+
+/// Applies the string value keywords (`minLength`, `maxLength`, `pattern`,
+/// `format`) to a string [value]. Length is counted in Unicode code points.
+void _stringKeywords(
+  Map<String, Object?> schema,
+  String value,
+  String path,
+  List<String> errors,
+  String schemaName,
+) {
+  final length = value.runes.length;
+  if (schema.containsKey('minLength')) {
+    final min = _nonNegativeIntKeyword(schema, 'minLength', path, schemaName);
+    if (length < min) {
+      errors.add('$path: string length $length is shorter than minLength $min');
+    }
+  }
+  if (schema.containsKey('maxLength')) {
+    final max = _nonNegativeIntKeyword(schema, 'maxLength', path, schemaName);
+    if (length > max) {
+      errors.add('$path: string length $length exceeds maxLength $max');
+    }
+  }
+  if (schema.containsKey('pattern')) {
+    final raw = schema['pattern'];
+    if (raw is! String) {
+      _authoringDefect(
+        schemaName,
+        path,
+        'pattern',
+        'must be a string, got ${_typeName(raw)}',
+      );
+    }
+    final RegExp regExp;
+    try {
+      regExp = RegExp(raw);
+    } on FormatException catch (e) {
+      // An uncompilable pattern is the author's mistake, not the client's:
+      // no request could ever make it a valid regular expression.
+      _authoringDefect(
+        schemaName,
+        path,
+        'pattern',
+        'is not a valid regular expression: ${e.message}',
+      );
+    }
+    // Unanchored: a partial match anywhere satisfies `pattern`, per JSON Schema.
+    if (!regExp.hasMatch(value)) {
+      errors.add('$path: "$value" does not match pattern $raw');
+    }
+  }
+  if (schema.containsKey('format')) {
+    final raw = schema['format'];
+    if (raw is! String) {
+      _authoringDefect(
+        schemaName,
+        path,
+        'format',
+        'must be a string, got ${_typeName(raw)}',
+      );
+    }
+    // A `null` verdict means the format is not in keta's enforced set — an
+    // annotation, passed through untouched (never a violation).
+    if (_formatValid(raw, value) == false) {
+      errors.add('$path: "$value" is not a valid $raw');
+    }
+  }
+}
+
+/// Applies the numeric value keywords (`minimum`, `maximum`,
+/// `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`) to a numeric [value].
+void _numberKeywords(
+  Map<String, Object?> schema,
+  num value,
+  String path,
+  List<String> errors,
+  String schemaName,
+) {
+  if (schema.containsKey('minimum')) {
+    final min = _numberKeyword(schema, 'minimum', path, schemaName);
+    if (value < min) {
+      errors.add('$path: $value is less than minimum $min');
+    }
+  }
+  if (schema.containsKey('maximum')) {
+    final max = _numberKeyword(schema, 'maximum', path, schemaName);
+    if (value > max) {
+      errors.add('$path: $value is greater than maximum $max');
+    }
+  }
+  if (schema.containsKey('exclusiveMinimum')) {
+    final min = _numberKeyword(schema, 'exclusiveMinimum', path, schemaName);
+    if (value <= min) {
+      errors.add('$path: $value is not greater than exclusiveMinimum $min');
+    }
+  }
+  if (schema.containsKey('exclusiveMaximum')) {
+    final max = _numberKeyword(schema, 'exclusiveMaximum', path, schemaName);
+    if (value >= max) {
+      errors.add('$path: $value is not less than exclusiveMaximum $max');
+    }
+  }
+  if (schema.containsKey('multipleOf')) {
+    final factor = _numberKeyword(schema, 'multipleOf', path, schemaName);
+    if (factor <= 0) {
+      _authoringDefect(
+        schemaName,
+        path,
+        'multipleOf',
+        'must be greater than zero, got $factor',
+      );
+    }
+    if (!_isMultipleOf(value, factor)) {
+      errors.add('$path: $value is not a multiple of $factor');
+    }
+  }
+}
+
+/// Applies the array value keywords (`minItems`, `maxItems`, `uniqueItems`) to
+/// a list [value].
+void _arrayKeywords(
+  Map<String, Object?> schema,
+  List<Object?> value,
+  String path,
+  List<String> errors,
+  String schemaName,
+) {
+  if (schema.containsKey('minItems')) {
+    final min = _nonNegativeIntKeyword(schema, 'minItems', path, schemaName);
+    if (value.length < min) {
+      errors.add(
+        '$path: array length ${value.length} is shorter than minItems $min',
+      );
+    }
+  }
+  if (schema.containsKey('maxItems')) {
+    final max = _nonNegativeIntKeyword(schema, 'maxItems', path, schemaName);
+    if (value.length > max) {
+      errors.add('$path: array length ${value.length} exceeds maxItems $max');
+    }
+  }
+  if (schema.containsKey('uniqueItems')) {
+    final raw = schema['uniqueItems'];
+    if (raw is! bool) {
+      _authoringDefect(
+        schemaName,
+        path,
+        'uniqueItems',
+        'must be a boolean, got ${_typeName(raw)}',
+      );
+    }
+    if (raw) {
+      // Deep JSON-value equality, so two equal nested objects collide even
+      // though they are distinct instances. O(n²), which the length-bounded
+      // premise (pair with maxItems) keeps in check. One violation is enough
+      // to condemn the array, so the first colliding pair ends the scan.
+      outer:
+      for (var i = 0; i < value.length; i++) {
+        for (var j = i + 1; j < value.length; j++) {
+          if (_jsonEquals(value[i], value[j])) {
+            errors.add(
+              '$path: array items at [$i] and [$j] are equal '
+              '(uniqueItems)',
+            );
+            break outer;
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Reads [key] from [schema] as a non-negative integer, or throws the authoring
+/// [StateError] a malformed length/count bound gets (posture (1)).
+int _nonNegativeIntKeyword(
+  Map<String, Object?> schema,
+  String key,
+  String path,
+  String schemaName,
+) {
+  final raw = schema[key];
+  if (raw is! int) {
+    _authoringDefect(
+      schemaName,
+      path,
+      key,
+      'must be a non-negative integer, got ${_typeName(raw)}',
+    );
+  }
+  if (raw < 0) {
+    _authoringDefect(
+      schemaName,
+      path,
+      key,
+      'must be a non-negative integer, got $raw',
+    );
+  }
+  return raw;
+}
+
+/// Reads [key] from [schema] as a number, or throws the authoring [StateError]
+/// a malformed numeric bound gets (posture (1)).
+num _numberKeyword(
+  Map<String, Object?> schema,
+  String key,
+  String path,
+  String schemaName,
+) {
+  final raw = schema[key];
+  if (raw is! num) {
+    _authoringDefect(
+      schemaName,
+      path,
+      key,
+      'must be a number, got ${_typeName(raw)}',
+    );
+  }
+  return raw;
+}
+
+/// Whether [value] is an integer multiple of [factor]. Integer operands are
+/// exact; fractional operands use a small relative tolerance so binary
+/// floating-point error (`0.3 / 0.1 == 2.9999999999999996`) does not reject a
+/// genuine multiple, while a real non-multiple (`0.35 / 0.1`) still fails.
+bool _isMultipleOf(num value, num factor) {
+  if (value is int && factor is int) return value % factor == 0;
+  final quotient = value / factor;
+  final nearest = quotient.roundToDouble();
+  final scale = quotient.abs() < 1 ? 1.0 : quotient.abs();
+  return (quotient - nearest).abs() <= 1e-9 * scale;
+}
+
+/// The enforced-format verdict: `true`/`false` for a format in keta's crisp
+/// set (`date-time`, `date`, `uuid`), `null` for any other format — which is an
+/// annotation, not a constraint, and so never a violation.
+bool? _formatValid(String format, String value) => switch (format) {
+  'date-time' => _isRfc3339DateTime(value),
+  'date' => _isRfc3339FullDate(value),
+  'uuid' => _uuidPattern.hasMatch(value),
+  _ => null,
+};
+
+final _uuidPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+  r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+);
+
+final _fullDatePattern = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
+
+/// RFC 3339 `full-date` (`YYYY-MM-DD`), rejecting impossible calendar dates
+/// (a round-trip through [DateTime.utc] catches overflow like `2026-02-30`).
+bool _isRfc3339FullDate(String value) {
+  final match = _fullDatePattern.firstMatch(value);
+  if (match == null) return false;
+  final year = int.parse(match[1]!);
+  final month = int.parse(match[2]!);
+  final day = int.parse(match[3]!);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  final date = DateTime.utc(year, month, day);
+  return date.year == year && date.month == month && date.day == day;
+}
+
+final _dateTimePattern = RegExp(
+  r'^(\d{4})-(\d{2})-(\d{2})[Tt]'
+  r'(\d{2}):(\d{2}):(\d{2})(\.\d+)?'
+  r'([Zz]|[+-]\d{2}:\d{2})$',
+);
+
+/// RFC 3339 `date-time`: a valid `full-date`, a `T` (or `t`) separator, a
+/// `HH:MM:SS` time (with optional fractional seconds), and a `Z`/`z` or numeric
+/// `±HH:MM` offset. A leap second (`:60`) is admitted, as the grammar allows.
+bool _isRfc3339DateTime(String value) {
+  final match = _dateTimePattern.firstMatch(value);
+  if (match == null) return false;
+  if (!_isRfc3339FullDate('${match[1]}-${match[2]}-${match[3]}')) return false;
+  final hour = int.parse(match[4]!);
+  final minute = int.parse(match[5]!);
+  final second = int.parse(match[6]!);
+  if (hour > 23 || minute > 59 || second > 60) return false;
+  final offset = match[8]!;
+  if (offset != 'Z' && offset != 'z') {
+    final offsetHour = int.parse(offset.substring(1, 3));
+    final offsetMinute = int.parse(offset.substring(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return true;
+}
+
+/// Deep structural equality over JSON-shaped values, used by `uniqueItems` so
+/// two equal (but non-identical) nested objects or arrays count as duplicates.
+bool _jsonEquals(Object? a, Object? b) {
+  if (identical(a, b)) return true;
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key) || !_jsonEquals(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_jsonEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
 }
 
 String _typeName(Object? value) => switch (value) {
