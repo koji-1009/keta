@@ -305,8 +305,15 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// An unsupported `T` is an `ArgumentError`; a parse failure is a [BadRequest].
   T param<T>(String name) => _raw.param<T>(name);
 
-  /// The query parameter [name] parsed as `T`, fully symmetric with [param].
-  /// Absence is a [BadRequest] — the required form; use [tryQuery] for optional.
+  /// The query parameter [name] parsed as `T` (String, int, double, or bool) —
+  /// the same type-parsing contract as [param], but NOT the same presence
+  /// guarantee: a path capture is always present because the route matched,
+  /// whereas a query parameter may simply be absent. Absence is deliberately a
+  /// [BadRequest] (400), not null. Required-ness is expressed by which accessor
+  /// you call — [query] declares the parameter mandatory, [tryQuery] declares it
+  /// optional — rather than by a separate flag, so a handler that reads [query]
+  /// has said "this must be here", and a missing one is a malformed request that
+  /// earns the same 400 a bad value does. By design, not an oversight.
   T query<T>(String name) => _raw.query<T>(name);
 
   /// The query parameter [name] as `T`, or null when absent (the optional form).

@@ -37,7 +37,9 @@ The two routing syntaxes converge on one internal `Path` value; a documented rou
 
 ## Streaming and upgrades
 
-SSE is a first-class streaming response: `c.sse(events)` renders a `Stream<SseEvent>` onto `text/event-stream` with opt-in keep-alive and abort-driven cleanup, composing with `gzip()`/`etag()` unchanged. A WebSocket handshake is an ordinary `GET` whose handler returns `Response.upgrade(...)` — upgrade as a value, so security middleware can refuse with a plain 401 before any switch happens, the OpenAPI shadow documents the 101, and `TestClient.connect()` exercises it without a socket.
+SSE is a first-class streaming response: `c.sse(events)` renders a `Stream<SseEvent>` onto `text/event-stream` with opt-in keep-alive, opt-in `maxIdle`/`maxLifetime` bounds, and abort-driven cleanup, composing with `gzip()`/`etag()` unchanged. A WebSocket handshake is an ordinary `GET` whose handler returns `Response.upgrade(...)` — upgrade as a value, so security middleware can refuse with a plain 401 before any switch happens, the OpenAPI shadow documents the 101, and `TestClient.connect()` exercises it without a socket; an upgrade carries the same opt-in `maxIdle`/`maxLifetime` self-defense.
+
+A streaming response lives on the isolate that produced it. To reach subscribers on the *other* worker isolates of `serve(isolates: n)`, publish through `keta_bus`: `IsolateBus` fans a message out across the process so an event raised while handling a request on one isolate reaches an SSE/WS client parked on another.
 
 ## Packages
 
@@ -55,6 +57,7 @@ Dependencies flow inward only — Optional → Recommended → Core — and peel
 | `keta_shelf` | 3 · Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
 | `keta_multipart` | 3 · Optional | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`. Boundary parsing via `package:mime`. |
 | `keta_otel` | 3 · Optional | `traceparent` → OTLP and a `/metrics` endpoint, with every label axis bounded (no attacker-controlled cardinality). |
+| `keta_bus` | 3 · Optional | A publish/subscribe seam, standalone and core-unaware (SDK-only, zero dependencies): `publish(topic)` / `subscribe(topic)` fan a JSON message out to live listeners, at-most-once. `InMemoryBus` (one isolate) and `IsolateBus` (fan-out across the worker isolates of `serve(isolates: n)`). |
 
 ## Deliberately out of scope for v0.1
 
@@ -79,4 +82,4 @@ dart test                       # this example's tests
 for d in packages/*/ examples/*/; do [ -d "$d/test" ] && (cd "$d" && dart test); done
 ```
 
-Start with [`examples/register`](examples/register) for the framework end to end — a CRUD app over SQLite in both syntaxes, whose `/users/events` route is an SSE feed. Beside it, [`examples/auth`](examples/auth) shows the bearer and session-cookie flows, [`examples/websocket`](examples/websocket) an upgrade-as-a-value echo behind a bearer gate, and [`examples/files`](examples/files) file-based routing. Or read [llms.txt](llms.txt) — the most compressed complete description of keta, and enough to write handlers, DTOs, and tests by hand.
+Start with [`examples/register`](examples/register) for the framework end to end — a CRUD app over SQLite in both syntaxes, whose `/users/events` route is an SSE feed fed over a `Bus` (single-isolate in-process, or fanned out across isolates via `IsolateBus`), and whose `/ready` route is a readiness probe reading pool stats. Beside it, [`examples/auth`](examples/auth) shows the bearer and session-cookie flows and a session-revocation notice that closes a live SSE stream from the server side, [`examples/websocket`](examples/websocket) an upgrade-as-a-value echo behind a bearer gate, and [`examples/files`](examples/files) file-based routing. Or read [llms.txt](llms.txt) — the most compressed complete description of keta, and enough to write handlers, DTOs, and tests by hand.

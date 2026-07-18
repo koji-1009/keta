@@ -39,8 +39,12 @@ final Key<DbConn> txConn = Key<DbConn>('tx');
 /// ```dart
 /// app
 ///   ..use(recover())
-///   ..get('/things', listThings) // reads: no tx(), free to use the reader
-///   ..group('/things', (g) => g..use(tx())..post('/', createThing));
+///   ..get('/things', listThings); // reads: no tx(), free to use the reader
+///
+/// // App.group returns a fluent RouteGroup, not a callback builder: scope
+/// // tx() to it with ..use, then register the write routes on the group.
+/// final things = app.group('/things')..use(tx());
+/// things.post('/', createThing); // writes: covered by tx()
 /// ```
 ///
 /// Read routes then reach the database directly through `env.db.reader`;
