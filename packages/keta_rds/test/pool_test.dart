@@ -415,4 +415,155 @@ void main() {
       throwsA(isA<ArgumentError>()),
     );
   });
+
+  group('stats', () {
+    test('a fresh pool reports all zeros against the ceiling', () {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 3);
+
+      final stats = pool.stats;
+      expect(stats.leased, 0);
+      expect(stats.idle, 0);
+      expect(stats.waiting, 0);
+      expect(stats.maxConnections, 3);
+      expect(stats.open, 0);
+    });
+
+    test('leased and idle move across acquire and release', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 3);
+
+      final a = await pool.acquire();
+      final b = await pool.acquire();
+      expect(pool.stats.leased, 2);
+      expect(pool.stats.idle, 0);
+      expect(pool.stats.open, 2);
+
+      pool.release(a);
+      expect(pool.stats.leased, 1);
+      expect(pool.stats.idle, 1);
+      expect(pool.stats.open, 2); // still open, just no longer leased
+
+      pool.release(b);
+      expect(pool.stats.leased, 0);
+      expect(pool.stats.idle, 2);
+      expect(pool.stats.open, 2);
+    });
+
+    test('a broken release disposes instead of going idle', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 2);
+
+      final a = await pool.acquire();
+      pool.release(a, broken: true);
+      expect(pool.stats.leased, 0);
+      expect(pool.stats.idle, 0); // disposed, not counted as idle
+      expect(pool.stats.open, 0);
+    });
+
+    test('waiting counts a caller parked behind a saturated ceiling', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 1,
+        acquireTimeout: const Duration(seconds: 5),
+      );
+
+      final a = await pool.acquire();
+      expect(pool.stats.waiting, 0);
+
+      final waiting = pool.acquire(); // parks behind a
+      await Future<void>.delayed(Duration.zero);
+      expect(pool.stats.waiting, 1);
+      expect(pool.stats.leased, 1);
+
+      pool.release(a); // hands the slot straight to the waiter
+      await waiting;
+      expect(pool.stats.waiting, 0);
+      expect(pool.stats.leased, 1);
+    });
+
+    test(
+      'idle drops to zero once the reaper evicts an expired resource',
+      () async {
+        final f = Factory();
+        final pool = Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxConnections: 2,
+          maxIdleTime: const Duration(milliseconds: 100),
+        );
+
+        final a = await pool.acquire();
+        pool.release(a); // idle, reaper armed
+        expect(pool.stats.idle, 1);
+
+        // See the idle-reaper group above for why 170ms clears the ~1.5x
+        // maxIdleTime worst case.
+        await Future<void>.delayed(const Duration(milliseconds: 170));
+        expect(pool.stats.idle, 0);
+        expect(pool.stats.leased, 0);
+        expect(pool.stats.open, 0);
+      },
+    );
+
+    test('a snapshot does not change as the pool moves on', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(f.open, f.close, maxConnections: 2);
+
+      final before = pool.stats;
+      expect(before.leased, 0);
+
+      await pool.acquire();
+      await pool.acquire();
+
+      // The earlier snapshot is untouched by the pool moving on...
+      expect(before.leased, 0);
+      expect(before.idle, 0);
+      // ...while a fresh snapshot reflects the new state.
+      expect(pool.stats.leased, 2);
+    });
+
+    test('leased and waiting both settle to zero after close', () async {
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 1,
+        acquireTimeout: const Duration(seconds: 5),
+      );
+
+      final a = await pool.acquire();
+      final waiting = pool.acquire(); // parked, will be rejected by close
+      await Future<void>.delayed(Duration.zero);
+      expect(pool.stats.waiting, 1);
+
+      final closing = pool.close();
+      await expectLater(waiting, throwsStateError);
+      pool.release(a); // let close() finish draining
+      await closing;
+
+      final stats = pool.stats;
+      expect(stats.leased, 0);
+      expect(stats.idle, 0);
+      expect(stats.waiting, 0);
+      expect(stats.maxConnections, 1); // the ceiling is a constructor value
+    });
+
+    test('PoolStats value equality, open, and toString', () {
+      const a = PoolStats(leased: 2, idle: 1, waiting: 0, maxConnections: 5);
+      const b = PoolStats(leased: 2, idle: 1, waiting: 0, maxConnections: 5);
+      const c = PoolStats(leased: 3, idle: 1, waiting: 0, maxConnections: 5);
+
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+      expect(a, isNot(equals(c)));
+      expect(a.open, 3);
+      expect(
+        a.toString(),
+        'PoolStats(leased: 2, idle: 1, waiting: 0, open: 3/5)',
+      );
+    });
+  });
 }

@@ -238,6 +238,42 @@ class RdsDb implements Db {
       await _readerPool.close();
     }
   }
+
+  /// A snapshot of both connection pools' accounting right now. See
+  /// [RdsPoolStats] and [PoolStats] for field semantics and intended use.
+  RdsPoolStats get poolStats =>
+      RdsPoolStats(writer: _writerPool.stats, reader: _readerPool.stats);
+}
+
+/// A snapshot of [RdsDb]'s writer and reader pools, taken together.
+///
+/// When no `readerEndpoint`/`readerUrl` was given at construction, [writer]
+/// and [reader] are stats of the very same [Pool] (see [RdsDb]'s "pool
+/// model"), so the two fields report identical numbers rather than this type
+/// pretending there is only one pool to ask about. See [PoolStats] for what
+/// each field means and its staleness caveat; this type adds nothing beyond
+/// pairing the two snapshots.
+class RdsPoolStats {
+  const RdsPoolStats({required this.writer, required this.reader});
+
+  /// The writer pool's snapshot — every [transaction] and every `writer`
+  /// query/execute checks out from this pool.
+  final PoolStats writer;
+
+  /// The reader pool's snapshot — every `reader` query checks out from this
+  /// pool. Identical to [writer] when no separate reader endpoint was
+  /// configured.
+  final PoolStats reader;
+
+  @override
+  String toString() => 'RdsPoolStats(writer: $writer, reader: $reader)';
+
+  @override
+  bool operator ==(Object other) =>
+      other is RdsPoolStats && other.writer == writer && other.reader == reader;
+
+  @override
+  int get hashCode => Object.hash(writer, reader);
 }
 
 /// A [DbConn] over a [Pool]: each call checks out a connection, runs, and

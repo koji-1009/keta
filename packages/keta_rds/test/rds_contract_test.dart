@@ -482,4 +482,42 @@ void main() {
       },
     );
   });
+
+  group('poolStats', () {
+    test(
+      'reader and writer share one pool when no reader endpoint is set',
+      () async {
+        final db = _connect();
+        addTearDown(db.close);
+
+        final before = db.poolStats;
+        expect(before.writer, equals(before.reader)); // literally one pool
+        expect(before.writer.leased, 0);
+
+        await db.writer.execute('select 1');
+
+        // The query already checked its connection back in by the time
+        // execute() returns, so leased is back to 0 and the connection it
+        // opened is now sitting idle.
+        final after = db.poolStats;
+        expect(after.writer.leased, 0);
+        expect(after.writer.idle, greaterThanOrEqualTo(1));
+        expect(after.writer, equals(after.reader));
+      },
+    );
+
+    test('leased/idle counts settle back to zero after close', () async {
+      final db = _connect();
+      await db.writer.execute('select 1');
+      expect(db.poolStats.writer.open, greaterThanOrEqualTo(1));
+
+      await db.close();
+
+      final stats = db.poolStats;
+      expect(stats.writer.leased, 0);
+      expect(stats.writer.idle, 0); // close() disposes idle inventory
+      expect(stats.reader.leased, 0);
+      expect(stats.reader.idle, 0);
+    });
+  });
 }

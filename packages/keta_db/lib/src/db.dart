@@ -58,6 +58,19 @@ abstract interface class DbConn {
 
 /// A database, split into a read connection and a write connection (the same
 /// connection on single-writer engines like SQLite).
+///
+/// **No shared pool/connection-stats surface.** [Db] deliberately does not
+/// declare a `poolStats`-shaped accessor, and keta does not grow a readiness-
+/// probe framework mechanism on top of one. What a connection accessor can
+/// honestly report is adapter-specific: keta_rds's `RdsDb` genuinely runs a
+/// bounded pool of several connections and can report leased/idle/waiting
+/// counts against a configured ceiling (`RdsDb.poolStats`), while a
+/// single-writer, single-connection adapter has no such pool to describe —
+/// forcing the same shape onto it would mean either fabricating idle/waiting
+/// counts it does not track, or reporting a fixed ceiling of 1 that answers a
+/// question nobody asked. Where an adapter's underlying model can honestly
+/// support it, look for a stats accessor on the concrete adapter type, not
+/// here.
 abstract interface class Db {
   DbConn get reader;
   DbConn get writer;

@@ -106,6 +106,21 @@ class Pool<C> {
   /// and an emptied idle set both drop it back to false (see [_syncReaper]).
   bool get reaperActive => _reaper != null;
 
+  /// A snapshot of this pool's accounting right now: how many resources are
+  /// leased out, how many sit idle, how many callers are queued behind
+  /// [acquire], and the configured ceiling. See [PoolStats] for field
+  /// semantics and intended use.
+  ///
+  /// Reads [_checkedOut], [_idle], and [_waiters] directly rather than adding
+  /// any bookkeeping beyond what the pool already tracks for its own
+  /// checkout/release logic.
+  PoolStats get stats => PoolStats(
+    leased: _checkedOut,
+    idle: _idle.length,
+    waiting: _waiters.length,
+    maxConnections: maxConnections,
+  );
+
   /// Checks out a resource, opening a fresh one only if none is idle and the
   /// ceiling has room. Waits up to [acquireTimeout] for a slot when saturated,
   /// then throws [Unavailable]. Throws [StateError] once the pool is closed.
@@ -318,4 +333,61 @@ class _Idle<C> {
   _Idle(this.resource, this.returnedAt);
   final C resource;
   final DateTime returnedAt;
+}
+
+/// A point-in-time snapshot of a [Pool]'s connection accounting.
+///
+/// Every field is a direct read of counters the pool already keeps for its
+/// own checkout/release bookkeeping — nothing here is inferred or tracked
+/// solely for reporting. And every field is stale the instant it is taken: a
+/// concurrent [Pool.acquire] or [Pool.release] can change any of them before
+/// this value is even returned to the caller. Treat it as "roughly what the
+/// pool looked like just now", suited to a readiness/health handler or a
+/// diagnostic log line — not as a live view, and not as a synchronization
+/// primitive. This type takes no position on what a readiness policy should
+/// do with these numbers; that judgment belongs to the application.
+class PoolStats {
+  const PoolStats({
+    required this.leased,
+    required this.idle,
+    required this.waiting,
+    required this.maxConnections,
+  });
+
+  /// Resources currently checked out by a caller (in [Pool.acquire] and not
+  /// yet [Pool.release]d).
+  final int leased;
+
+  /// Resources open and sitting idle — returned to the pool, validated (if
+  /// [Pool.validate] is set) or not yet re-checked, and ready to be handed out
+  /// again without opening a fresh one.
+  final int idle;
+
+  /// Callers currently parked in [Pool.acquire], waiting for a slot to free up
+  /// because the pool already has [maxConnections] resources leased.
+  final int waiting;
+
+  /// The configured ceiling on live resources ([leased] plus [idle]) — see
+  /// [Pool.maxConnections].
+  final int maxConnections;
+
+  /// Resources currently open: [leased] plus [idle]. Never exceeds
+  /// [maxConnections].
+  int get open => leased + idle;
+
+  @override
+  String toString() =>
+      'PoolStats(leased: $leased, idle: $idle, waiting: $waiting, '
+      'open: $open/$maxConnections)';
+
+  @override
+  bool operator ==(Object other) =>
+      other is PoolStats &&
+      other.leased == leased &&
+      other.idle == idle &&
+      other.waiting == waiting &&
+      other.maxConnections == maxConnections;
+
+  @override
+  int get hashCode => Object.hash(leased, idle, waiting, maxConnections);
 }

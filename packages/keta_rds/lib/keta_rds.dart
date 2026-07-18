@@ -15,4 +15,5 @@ export 'package:postgres/postgres.dart'
     show ConnectionSettings, Endpoint, SslMode;
 
 export 'src/migrate_url.dart' show requirePostgresUrl;
-export 'src/rds_db.dart' show RdsDb;
+export 'src/pool.dart' show PoolStats;
+export 'src/rds_db.dart' show RdsDb, RdsPoolStats;
