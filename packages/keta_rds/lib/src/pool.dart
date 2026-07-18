@@ -64,7 +64,8 @@ class Pool<C> {
   /// caller is never handed a corpse. A non-positive duration disables the
   /// reaper entirely (no periodic timer is ever armed). Default 5 minutes sits
   /// under the common proxy/NAT idle timeouts (RDS Proxy's is minutes, many
-  /// NATs 350s).
+  /// NATs 350s) — but note the worst-case bound below is ~1.5x this value, not
+  /// this value itself.
   final Duration maxIdleTime;
 
   final ListQueue<_Idle<C>> _idle = ListQueue<_Idle<C>>();
@@ -123,7 +124,25 @@ class Pool<C> {
     while (_idle.isNotEmpty) {
       final resource = _idle.removeLast().resource;
       _syncReaper();
-      if (validate == null || validate!(resource)) {
+      bool valid;
+      try {
+        valid = validate == null || validate!(resource);
+      } catch (_) {
+        // validate() itself threw — not "returned false". The resource is
+        // already popped from _idle and this checkout already holds a permit
+        // and counts against _checkedOut, so an unguarded rethrow here would
+        // leak both: the resource ends up neither idle, in _out, nor disposed,
+        // and repeated occurrences wedge the pool at a permanently lower
+        // effective ceiling (eventually permanent 503s). Mirror _open's catch
+        // below: dispose the resource, undo the checkout and permit, nudge a
+        // drain in progress, then rethrow.
+        unawaited(_safeClose(resource));
+        _checkedOut--;
+        _givePermit();
+        _finishDrainIfIdle();
+        rethrow;
+      }
+      if (valid) {
         _out.add(resource);
         return resource;
       }
@@ -259,10 +278,18 @@ class Pool<C> {
   /// closed) — so an idle-free or closed pool holds no timer and never pins its
   /// isolate, the same posture as StdoutLog.dispose() cancelling its flush
   /// timer.
+  ///
+  /// Ticks at `maxIdleTime / 2`, not `maxIdleTime`: a resource can go idle right
+  /// after a tick and then wait a full further period before the *next* tick
+  /// even notices it is overdue, so ticking at the full [maxIdleTime] makes the
+  /// worst-case time-to-disposal ~2x [maxIdleTime] — exactly the gap a
+  /// middlebox with, say, a 350s idle timeout and a naively-ticked 5-minute
+  /// reaper would fall into (2x5min = 600s, already past 350s). Halving the
+  /// tick caps the worst case at ~1.5x [maxIdleTime] instead.
   void _syncReaper() {
     final wanted = !_closed && maxIdleTime > Duration.zero && _idle.isNotEmpty;
     if (wanted && _reaper == null) {
-      _reaper = Timer.periodic(maxIdleTime, (_) => _reap());
+      _reaper = Timer.periodic(maxIdleTime ~/ 2, (_) => _reap());
     } else if (!wanted && _reaper != null) {
       _reaper!.cancel();
       _reaper = null;

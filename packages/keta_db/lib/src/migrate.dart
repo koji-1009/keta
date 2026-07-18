@@ -339,6 +339,17 @@ extension VerifyMigrations on Db {
 /// stronger one. This is keta core's `etag()` reasoning applied to migrations;
 /// the implementation is copied here rather than imported so keta_db does not
 /// depend on keta's HTTP layer for a byte hash.
+///
+/// The hash is deliberately byte-faithful (see [loadMigrations]: "the raw file
+/// bytes, not the decoded string"), so anything that rewrites bytes on
+/// checkout reads to this hash as an edit — line-ending normalization included.
+/// A Windows checkout under `core.autocrlf=true` rewrites a migration's LF to
+/// CRLF, which is a different FNV-1a from the LF bytes CI applied and hashed,
+/// so [VerifyMigrations.verifyMigrations] would report checksum drift on a
+/// schema that is in fact current. Normalizing bytes before hashing would blind
+/// the detector to genuine edits that happen to only touch line endings, so
+/// that is not the fix; the repo instead pins `*.sql text eol=lf` in the root
+/// `.gitattributes`, keeping every checkout byte-identical to what was hashed.
 String _fnv1a64Hex(List<int> bytes) {
   // Dart's int is 64-bit two's complement on the native VM (keta's only target;
   // Ring 0 does not target the web), so the multiply wraps mod 2^64 exactly as

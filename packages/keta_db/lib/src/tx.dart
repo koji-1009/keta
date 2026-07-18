@@ -58,6 +58,13 @@ final Key<DbConn> txConn = Key<DbConn>('tx');
 /// back in the pool (where the next request could be mid-query on it). If a
 /// streaming body needs the database, it must open its own `env.db` access; it
 /// cannot borrow the request's transaction.
+///
+/// The guard only rejects calls made *after* the handler returns — it cannot
+/// and does not reach into a query already in flight when `next(c)` returns:
+/// that call already passed the guard and keeps running to completion on the
+/// real connection, commit/rollback notwithstanding. An unawaited
+/// `session.query(...)` left running past the handler's return is the caller's
+/// own race against COMMIT/ROLLBACK, not something this guard closes.
 Middleware<E> tx<E extends HasDb>() => (Context<E> c, Handler<E> next) {
   return c.env.db.transaction((conn) async {
     final guard = _CompletedGuard(conn);

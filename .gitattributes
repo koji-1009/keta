@@ -1,0 +1,10 @@
+# .sql files are pinned to LF so their bytes are identical on every checkout.
+# keta_db's migration checksum (see Migration.checksum in
+# packages/keta_db/lib/src/migrate.dart) hashes a migration file's raw bytes,
+# and verifyMigrations compares that hash against what was recorded when the
+# migration was applied. Under core.autocrlf=true, a Windows checkout would
+# otherwise rewrite LF to CRLF on checkout — a different byte sequence, hence a
+# different FNV-1a hash — and a schema that is actually current would false-fail
+# verify at boot. Pinning eol=lf here means every checkout, on every platform,
+# sees the exact bytes CI hashed.
+*.sql text eol=lf

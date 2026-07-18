@@ -80,11 +80,20 @@ Object? mapValue(Object? value, Type type) {
 
 /// `yyyy-MM-dd` for a `date` column, dropping the driver's synthetic
 /// midnight-UTC time-of-day.
+///
+/// Delegates the year formatting to [DateTime.toIso8601String] and slices off
+/// everything before its `T`, rather than hand-padding `year.toString()`: a
+/// hand-padded year breaks on the two cases ISO 8601 itself has rules for — a
+/// BC year (`(-44).toString()` is `-44`, and `padLeft(4, '0')` counts the `-`
+/// as one of the four characters and prepends a bare `0` ahead of it, giving
+/// `0-44` instead of the `-0044` ISO 8601 requires — hence the observed
+/// `0-44-03-15`) and a >9999 year (`12345` needs a leading `+` and six digits,
+/// neither of which `padLeft(4)` adds). `toIso8601String()` already gets both
+/// right — it is the same call the timestamp paths above rely on — so reuse it
+/// instead of re-deriving the rule.
 String _formatDate(DateTime value) {
-  final y = value.year.toString().padLeft(4, '0');
-  final m = value.month.toString().padLeft(2, '0');
-  final d = value.day.toString().padLeft(2, '0');
-  return '$y-$m-$d';
+  final iso = value.toIso8601String();
+  return iso.substring(0, iso.indexOf('T'));
 }
 
 /// ISO 8601 without a trailing zone designator, for a `timestamp` (no tz). The

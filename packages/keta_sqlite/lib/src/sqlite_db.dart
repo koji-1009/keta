@@ -149,6 +149,12 @@ class SqliteDb implements Db {
   /// the first `UPDATE`. Every [transaction] is a write transaction here (there
   /// is no read-only variant), so paying the write lock at `BEGIN` costs
   /// nothing a deferred read would have saved.
+  ///
+  /// One consequence worth naming: a caller that reaches for [transaction]
+  /// purely for a consistent multi-statement **read** (no write in the body at
+  /// all) still takes the write lock at `BEGIN`, and so still serializes behind
+  /// every other writer — even with [SqliteDb.open]'s `wal: true`, where a
+  /// plain read normally would not block on the writer at all.
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) {
     if (_inActiveTxZone) {

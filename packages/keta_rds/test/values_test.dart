@@ -40,6 +40,19 @@ void main() {
       expect(mapValue(DateTime.utc(2026, 1, 5), Type.date), '2026-01-05');
     });
 
+    test('date renders a BC year as a signed 4-digit ISO 8601 year', () {
+      // Regression: hand-padding `year.toString().padLeft(4, '0')` produces
+      // '0-44-03-15' for year -44 (padLeft counts the leading '-' as a digit),
+      // which is not valid ISO 8601 and does not round-trip.
+      expect(mapValue(DateTime.utc(-44, 3, 15), Type.date), '-0044-03-15');
+    });
+
+    test('date renders a >9999 year with the required leading +', () {
+      // Regression: hand-padding leaves a bare '12345-01-02' with no sign,
+      // which ISO 8601 requires once the year exceeds 4 digits.
+      expect(mapValue(DateTime.utc(12345, 1, 2), Type.date), '+012345-01-02');
+    });
+
     test('timestamptz still round-trips through DateTime.parse to the same '
         'UTC instant', () {
       final mapped = mapValue(instant, Type.timestampTz) as String;

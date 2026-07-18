@@ -294,6 +294,47 @@ void main() {
       expect(identical(a, b), isTrue);
       expect(f.opened, 1);
     });
+
+    test(
+      'a validate that throws disposes the resource and restores pool state',
+      () async {
+        // Regression: the idle-drain loop called validate() with no guard.
+        // A throw (as opposed to a returned false) left the popped resource
+        // neither idle, in _out, nor disposed, and the permit/checkout it took
+        // in acquire() before the loop was never given back — repeated hits
+        // would wedge the pool at a permanently lower effective ceiling.
+        final f = Factory();
+        var throwNext = false;
+        final pool = Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxConnections: 2,
+          validate: (c) {
+            if (throwNext) {
+              throwNext = false;
+              throw StateError('validate blew up');
+            }
+            return c.open;
+          },
+        );
+
+        final a = await pool.acquire();
+        pool.release(a); // now idle
+        throwNext = true;
+
+        await expectLater(pool.acquire(), throwsStateError);
+        // Fully restored: no leaked checkout, no phantom idle entry, and the
+        // resource that took the throw was disposed rather than orphaned.
+        expect(pool.checkedOut, 0);
+        expect(pool.idle, 0);
+        expect(a.closed, isTrue);
+
+        // Not wedged: a normal acquire still succeeds afterward.
+        final b = await pool.acquire();
+        expect(b, isA<FakeConn>());
+        expect(pool.checkedOut, 1);
+      },
+    );
   });
 
   group('idle reaper', () {
@@ -305,7 +346,7 @@ void main() {
           f.open,
           f.close,
           maxConnections: 2,
-          maxIdleTime: const Duration(milliseconds: 40),
+          maxIdleTime: const Duration(milliseconds: 100),
         );
 
         final a = await pool.acquire();
@@ -313,7 +354,13 @@ void main() {
         expect(pool.idle, 1);
         expect(pool.reaperActive, isTrue);
 
-        await Future<void>.delayed(const Duration(milliseconds: 120));
+        // The reaper ticks at maxIdleTime/2 (50ms), so the worst case for
+        // disposing a resource that just missed a tick is ~1.5x maxIdleTime
+        // (150ms), guaranteed caught by the tick at 150ms. 170ms clears that
+        // with margin while staying comfortably under the pre-fix worst case
+        // of 2x maxIdleTime (200ms), so this wait is itself evidence the
+        // tighter bound is in effect, not just that reaping eventually happens.
+        await Future<void>.delayed(const Duration(milliseconds: 170));
         expect(a.closed, isTrue); // reaped
         expect(pool.idle, 0);
         expect(pool.reaperActive, isFalse); // self-cancelled once idle emptied
