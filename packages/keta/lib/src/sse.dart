@@ -165,19 +165,31 @@ extension SseResponses<E> on Context<E> {
   ///
   /// [maxLifetime] is an absolute cap measured from when the response starts
   /// streaming, regardless of activity — it fires even if events (or
-  /// keep-alives) are still flowing right up to the deadline.
+  /// keep-alives) are still flowing right up to the deadline, and it fires even
+  /// while the body is paused under backpressure (a slow or dead reader whose
+  /// full socket buffer has paused the body subscription). On firing it frees the
+  /// [events] subscription and every timer at once, so under sustained
+  /// backpressure neither the source nor a timer can outlive the deadline. One
+  /// honest caveat: the chunked terminator is a byte on the wire, so it is
+  /// buffered behind the paused consumer and the socket's final release still
+  /// waits on the transport resuming or the OS reporting the dead peer — but
+  /// nothing keeps producing, and no timer pins the isolate, in the meantime.
   ///
   /// Either duration, if given, must be positive; a non-positive [maxIdle] or
   /// [maxLifetime] is an authoring defect and throws [ArgumentError]
   /// immediately, the same posture [SseEvent]'s constructor takes for a
   /// malformed field.
   ///
-  /// On expiry (either bound), the stream ends through the exact same path a
-  /// client disconnect or server shutdown already uses: the body controller is
-  /// closed normally, so the chunked response ends on a clean boundary (never
-  /// mid-event) and the source subscription is torn down via the controller's
-  /// single `onCancel` seam — there is no separate expiry-teardown code path to
-  /// fall out of sync with that one.
+  /// On expiry (either bound), the stream ends the same way a client disconnect
+  /// or server shutdown does — the body controller is closed normally, so the
+  /// chunked response ends on a clean boundary (never mid-event) — and the source
+  /// subscription and every timer are freed through one shared, once-guarded
+  /// teardown. That teardown runs directly on expiry rather than only through the
+  /// controller's `onCancel`, because a `close()` whose consumer is paused under
+  /// backpressure defers `onCancel` until a resume a dead client may never
+  /// perform; driving teardown directly keeps `maxLifetime` an honest cap in
+  /// exactly that case. The single guard means the two entry points — a real
+  /// cancel and an expiry — never tear down twice.
   ///
   /// Lifecycle: the [events] subscription and every timer ([keepAlive],
   /// [maxIdle], [maxLifetime]) are torn down when the stream completes, errors,
@@ -237,17 +249,46 @@ Stream<List<int>> _sseBody(
   Timer? idleTimer;
   Timer? lifetimeTimer;
 
-  // THE single close path for every form of stream end — normal completion,
-  // source error, client disconnect/abort/shutdown, and now a `maxIdle` or
-  // `maxLifetime` expiry: they all just close the controller normally. That
-  // single call is what keeps the chunked response ending on a clean boundary
-  // (a proper terminator, never a mid-event cut) and is also what drives
-  // `onCancel` below (done delivery auto-cancels the listener), so expiry needs
-  // no teardown code of its own — it reuses this exactly like abort already
-  // does. The `isClosed` guard makes it safe to call from more than one place
-  // at once (e.g. `maxIdle` firing the same tick the source also completes).
+  // The isolate-liveness cleanup: cancel the source subscription and every
+  // timer. Guarded to run exactly once so it is safe to drive from more than one
+  // place — `onCancel` (the transport's cancel seam) and `endStream` (every
+  // expiry/abort/completion) both route through it, and whichever reaches it
+  // second is a no-op. That once-guard is what preserves the "source `onCancel`
+  // fires exactly once" guarantee the no-double-teardown race tests pin.
+  var tornDown = false;
+  Future<void>? teardown() {
+    if (tornDown) return null;
+    tornDown = true;
+    keepAliveTimer?.cancel();
+    idleTimer?.cancel();
+    lifetimeTimer?.cancel();
+    return sub?.cancel();
+  }
+
+  // THE single end path for every form of stream end — normal completion,
+  // source error, client disconnect/abort/shutdown, and a `maxIdle`/`maxLifetime`
+  // expiry. Two things happen here, and BOTH matter:
+  //
+  //  1. `controller.close()` ends the transport-facing byte stream so the
+  //     chunked response terminates on a clean boundary (a proper terminator,
+  //     never a mid-event cut).
+  //  2. `teardown()` frees the source subscription and every timer *directly*.
+  //
+  // Step 2 cannot be left to `close()` alone: when the consumer is paused
+  // (backpressure — a slow or dead client whose socket write buffer is full,
+  // which dart:io signals by pausing this body's subscription), `close()` defers
+  // both its `done` delivery and the `onCancel` that would otherwise run
+  // teardown until the consumer resumes — which a dead client may never do.
+  // `maxLifetime` is precisely the bound that must still fire in that state, so
+  // it drives teardown here rather than waiting on a resume that never comes. The
+  // socket itself is not released until the consumer resumes or TCP errors (the
+  // buffered `done` stays behind the paused consumer), but no timer and no source
+  // subscription outlives the expiry. The `isClosed`/`tornDown` guards make this
+  // safe to call from several signals racing on the same tick (e.g. `maxIdle`
+  // firing the same tick the source also completes).
   void endStream() {
     if (!controller.isClosed) controller.close();
+    unawaited(teardown() ?? Future<void>.value());
   }
 
   // A single-shot timer re-armed after every emission gives precise "no event
@@ -323,17 +364,14 @@ Stream<List<int>> _sseBody(
       // last event the source produced, the invariant the abort tests pin.
       unawaited(aborted.then((_) => endStream()));
     },
-    // THE cleanup seam. Fires on an explicit listener cancel (the transport's
-    // failed-write path) and after a normal close (done delivery auto-cancels
-    // the subscription). Idempotent: cancelling a spent subscription is a
-    // no-op. Cancels every timer — including `lifetimeTimer`, which nothing
-    // else above ever touches — so nothing outlives the connection.
-    onCancel: () {
-      keepAliveTimer?.cancel();
-      idleTimer?.cancel();
-      lifetimeTimer?.cancel();
-      return sub?.cancel();
-    },
+    // THE transport cancel seam. Fires on an explicit listener cancel (the
+    // transport's failed-write path) and after a normal close (done delivery
+    // auto-cancels the subscription). Routes through the shared once-guarded
+    // `teardown`, so a cancel that arrives after an expiry already tore down is
+    // a no-op, and one that arrives first frees every timer (including
+    // `lifetimeTimer`, which nothing else above touches) and the source
+    // subscription — nothing outlives the connection either way.
+    onCancel: teardown,
     // Preserve backpressure: when the transport pauses the body, stop pulling
     // the source and hold off the keep-alive and idle clocks; resume all three
     // together. A heartbeat added while paused would defeat the pause, and a
@@ -341,7 +379,10 @@ Stream<List<int>> _sseBody(
     // `maxIdle` out — that would punish a slow *reader*, not an idle *app*.
     // `maxLifetime` is deliberately left running through a pause: it is an
     // absolute cap "regardless of activity", and backpressure is exactly
-    // activity, just held back.
+    // activity, just held back. When it fires while paused, `endStream` frees the
+    // source and timers directly (its `teardown`), not via this paused
+    // subscription's deferred `onCancel` — the cap holds even against a reader
+    // that never resumes.
     onPause: () {
       keepAliveTimer?.cancel();
       idleTimer?.cancel();
