@@ -86,7 +86,13 @@ import 'package:keta/keta.dart';
 ///  - **`minItems` / `maxItems`** (arrays): element count.
 ///  - **`uniqueItems`** (arrays): when `true`, no two elements may be equal by
 ///    **deep JSON-value equality** (structural, not identity), so two equal
-///    nested objects collide.
+///    nested objects collide. The check is O(n²), so — symmetrically with
+///    `pattern` — its cost is bounded in two layers: a `maxItems` the array
+///    exceeds *gates* the scan out (the array is already condemned), and an
+///    absolute [_uniqueItemsCeiling] backstops the schema that omits `maxItems`,
+///    reporting an over-ceiling array as a violation instead of scanning it. An
+///    endpoint that legitimately needs uniqueness over more items declares an
+///    explicit `maxItems` rather than leaning on the backstop.
 ///
 /// A violated value keyword is instance data — posture (2), a violation. A
 /// malformed keyword *value* (a `minLength` that isn't a non-negative integer,
@@ -868,28 +874,53 @@ void _arrayKeywords(
       );
     }
     if (raw && !maxItemsExceeded) {
-      // Deep JSON-value equality, so two equal nested objects collide even
-      // though they are distinct instances. This scan is O(n²), so the cheap
-      // `maxItems` bound gates it: an array that already exceeds `maxItems` is
-      // condemned, and running the quadratic uniqueness scan over it as well
-      // is the DoS the bound exists to foreclose — pairing `uniqueItems` with
-      // a `maxItems` is what keeps the cost in check. One violation is enough
-      // to condemn the array, so the first colliding pair ends the scan.
-      outer:
-      for (var i = 0; i < value.length; i++) {
-        for (var j = i + 1; j < value.length; j++) {
-          if (_jsonEquals(value[i], value[j])) {
-            errors.add(
-              '$path: array items at [$i] and [$j] are equal '
-              '(uniqueItems)',
-            );
-            break outer;
+      if (value.length > _uniqueItemsCeiling) {
+        // Defense in depth for the schema that omits `maxItems` (or set one
+        // above the ceiling): the ~900 KB array the 1 MiB request cap admits
+        // must never reach the O(n²) uniqueness scan. Reported by length only
+        // — the same posture the pattern ceiling takes. Unlike a string, an
+        // array can be legitimately large, so this ceiling sits well above the
+        // pattern one; an endpoint that genuinely needs uniqueness over more
+        // items must declare a `maxItems` (which gates the scan itself).
+        errors.add(
+          '$path: array length ${value.length} exceeds the '
+          'uniqueItems-validation ceiling of $_uniqueItemsCeiling items',
+        );
+      } else {
+        // Deep JSON-value equality, so two equal nested objects collide even
+        // though they are distinct instances. This scan is O(n²), so the cheap
+        // `maxItems` bound gates it: an array that already exceeds `maxItems`
+        // is condemned, and running the quadratic uniqueness scan over it as
+        // well is the DoS the bound exists to foreclose — pairing `uniqueItems`
+        // with a `maxItems` is what keeps the cost in check. One violation is
+        // enough to condemn the array, so the first colliding pair ends the
+        // scan.
+        outer:
+        for (var i = 0; i < value.length; i++) {
+          for (var j = i + 1; j < value.length; j++) {
+            if (_jsonEquals(value[i], value[j])) {
+              errors.add(
+                '$path: array items at [$i] and [$j] are equal '
+                '(uniqueItems)',
+              );
+              break outer;
+            }
           }
         }
       }
     }
   }
 }
+
+/// The hard ceiling on how many items the O(n²) `uniqueItems` scan will ever
+/// examine when the schema declares no `maxItems`, or a `maxItems` larger than
+/// this. An array longer than this is reported as a violation instead of being
+/// scanned, so the ~900 KB array the 1 MiB request cap would otherwise admit can
+/// never reach the quadratic scan. Set well above [_patternInputCeiling]: unlike
+/// a pattern-validated scalar, an array can be legitimately large, so an
+/// endpoint needing uniqueness over more items declares an explicit `maxItems`
+/// (which gates the scan on its own) rather than leaning on this backstop.
+const _uniqueItemsCeiling = 8192;
 
 /// Reads [key] from [schema] as a non-negative integer, or throws the authoring
 /// [StateError] a malformed length/count bound gets (posture (1)).

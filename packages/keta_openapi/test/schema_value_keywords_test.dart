@@ -513,6 +513,78 @@ void main() {
     );
   });
 
+  group('array — uniqueItems has an absolute ceiling when maxItems is omitted', () {
+    // The violation an over-ceiling array earns instead of being scanned. Built
+    // in a helper so the expected list holds one element, not two adjacent
+    // string literals (which `no_adjacent_strings_in_list` flags).
+    String ceilingViolation(int length) =>
+        '\$: array length $length exceeds the uniqueItems-validation ceiling '
+        'of 8192 items';
+
+    test(
+      'an array past the ceiling with no maxItems is reported by length, not '
+      'scanned',
+      () {
+        const s = Schema('Unbounded', {
+          'type': 'array',
+          'items': {'type': 'integer'},
+          'uniqueItems': true,
+        });
+        // 150k distinct elements and NO maxItems: without the ceiling this is
+        // the ~20s O(n²) DoS (1.1e10 comparisons). The ceiling reports the
+        // array by length and never scans it, so this returns fast. The timeout
+        // fails the test if the ceiling regressed and the scan ran.
+        final big = List<Object?>.generate(150000, (i) => i);
+        expect(s.validate(big), [ceilingViolation(150000)]);
+      },
+      timeout: const Timeout(Duration(seconds: 5)),
+    );
+
+    test('the ceiling fires even for an array that would have a collision', () {
+      const s = Schema('Unbounded', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'uniqueItems': true,
+      });
+      // A duplicate sits within the first few elements, so a scan would report
+      // a collision immediately — but the array is past the ceiling, so it is
+      // reported by length instead. The ceiling is on the input the scan sees,
+      // not on whether a violation exists.
+      final big = <Object?>[
+        1,
+        1,
+        ...List<Object?>.generate(9000, (i) => i + 2),
+      ];
+      expect(s.validate(big), [ceilingViolation(big.length)]);
+    });
+
+    test('an array at the ceiling is still scanned (boundary is inclusive)', () {
+      const s = Schema('Unbounded', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'uniqueItems': true,
+      });
+      // Exactly 8192 distinct elements: at the ceiling, so the scan still runs
+      // and finds no collision. Pins that the ceiling is `> ceiling`, not `>=`.
+      final atCeiling = List<Object?>.generate(8192, (i) => i);
+      expect(s.validate(atCeiling), isEmpty);
+    });
+
+    test('a maxItems below the ceiling still governs (the ceiling is only a '
+        'backstop for the omitted-maxItems case)', () {
+      const s = Schema('Bounded', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'maxItems': 5,
+        'uniqueItems': true,
+      });
+      // maxItems 5 is far below the ceiling: an array of 10 is condemned by
+      // maxItems and the scan is gated out — the ceiling never enters into it.
+      final ten = List<Object?>.generate(10, (i) => i);
+      expect(s.validate(ten), [r'$: array length 10 exceeds maxItems 5']);
+    });
+  });
+
   group('a wrong-typed value skips its keyword checks (no double report)', () {
     test('a number where a string is declared reports only the type error', () {
       const s = Schema('S', {
