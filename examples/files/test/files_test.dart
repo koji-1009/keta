@@ -1,3 +1,10 @@
+/// keta_files' own charter — the tree IS the route table, and everything
+/// string-routing cannot express needs the file to say it — grouped
+/// alongside the CRUD surface, security, and OpenAPI-conformance suites that
+/// mirror ../register's file-routed equivalents so the two examples can be
+/// diffed test-by-test.
+library;
+
 import 'dart:io';
 
 import 'package:keta/keta.dart';
@@ -137,244 +144,251 @@ void main() {
     });
   });
 
-  test('the document says exactly what the gate does', () {
-    final doc = buildOpenApi().toJson();
-    Map<String, Object?> op(String path) =>
-        ((doc['paths'] as Map)[path] as Map)['get'] as Map<String, Object?>;
+  group('openapi conformance', () {
+    test('the document says exactly what the gate does', () {
+      final doc = buildOpenApi().toJson();
+      Map<String, Object?> op(String path) =>
+          ((doc['paths'] as Map)[path] as Map)['get'] as Map<String, Object?>;
 
-    expect(op('/health').containsKey('security'), isFalse);
-    expect(op('/users')['security'], [
-      {'bearer': <String>[]},
-    ]);
-    expect(op('/metrics')['security'], [
-      {'apiKey': <String>[]},
-    ]);
-    expect(
-      ((doc['components'] as Map)['securitySchemes'] as Map).keys,
-      unorderedEquals(['bearer', 'apiKey']),
-    );
-  });
+      expect(op('/health').containsKey('security'), isFalse);
+      expect(op('/users')['security'], [
+        {'bearer': <String>[]},
+      ]);
+      expect(op('/metrics')['security'], [
+        {'apiKey': <String>[]},
+      ]);
+      expect(
+        ((doc['components'] as Map)['securitySchemes'] as Map).keys,
+        unorderedEquals(['bearer', 'apiKey']),
+      );
+    });
 
-  test('the shared CRUD surface documents identically to ../register', () {
-    // The two examples' OpenAPI documents are NOT identical as a whole:
-    // ../register has since grown /users/by-role/:role (a custom Capture) and
-    // /users/events (an SSE feed) that this file-routed tree does not mirror
-    // — mirroring them would need an events bus and a custom SSE capture in
-    // keta_files, which is its own piece of work, not a doc-wording fix. What
-    // is still true, and worth asserting rather than just claiming in prose,
-    // is that every route this tree *does* serve — the shared CRUD surface —
-    // documents identically on both sides. Restricting ../register's document
-    // to exactly this tree's path set and diffing turns "we didn't check"
-    // into an assertion: a summary edited on one side, a schema changed on
-    // the other, or a route silently dropped now fails here, loudly, instead
-    // of rotting behind a claim nobody re-reads.
-    final filesPaths = buildOpenApi().toJson()['paths']! as Map;
-    final registerPaths = register.buildOpenApi().toJson()['paths']! as Map;
-    expect(
-      registerPaths.keys.toSet().containsAll(filesPaths.keys),
-      isTrue,
-      reason: 'every route this tree serves must also exist in ../register',
-    );
-    final sharedRegisterPaths = {
-      for (final path in filesPaths.keys) path: registerPaths[path],
-    };
-    expect(sharedRegisterPaths, filesPaths);
-  });
-
-  test(
-    'directory-scoped middleware guards /admin, not just the security gate',
-    () async {
-      // routes/admin/_middleware.dart's ScopedMiddleware<Env>([requireAdmin()])
-      // now does what routes/admin/ping.dart used to inline: 401 says "who are
-      // you" (the security gate, enforceSecurity), 403 says "not you" (the
-      // admin-scope middleware) — the same split ../register makes with
-      // app.group('/admin').use(requireAdmin()).
-      final env = await bootTestEnv();
-      addTearDown(env.close);
-      final client = TestClient(buildApp(), env);
-      expect((await client.get('/admin/ping', headers: admin)).status, 200);
-      expect((await client.get('/admin/ping', headers: user)).status, 403);
-      expect((await client.get('/admin/ping')).status, 401);
-    },
-  );
-
-  test('the security declarations reach the file-routed app too', () async {
-    final env = await bootTestEnv();
-    addTearDown(env.close);
-    final client = TestClient(buildApp(), env);
-    expect((await client.get('/health')).status, 200); // explicitly public
-    expect((await client.get('/users')).status, 401); // inherits the default
-    expect((await client.get('/whoami', headers: admin)).json(), {
-      'id': 'ada',
-      'admin': true,
+    test('the shared CRUD surface documents identically to ../register', () {
+      // The two examples' OpenAPI documents are NOT identical as a whole:
+      // ../register has since grown /users/by-role/:role (a custom Capture) and
+      // /users/events (an SSE feed) that this file-routed tree does not mirror
+      // — mirroring them would need an events bus and a custom SSE capture in
+      // keta_files, which is its own piece of work, not a doc-wording fix. What
+      // is still true, and worth asserting rather than just claiming in prose,
+      // is that every route this tree *does* serve — the shared CRUD surface —
+      // documents identically on both sides. Restricting ../register's document
+      // to exactly this tree's path set and diffing turns "we didn't check"
+      // into an assertion: a summary edited on one side, a schema changed on
+      // the other, or a route silently dropped now fails here, loudly, instead
+      // of rotting behind a claim nobody re-reads.
+      final filesPaths = buildOpenApi().toJson()['paths']! as Map;
+      final registerPaths = register.buildOpenApi().toJson()['paths']! as Map;
+      expect(
+        registerPaths.keys.toSet().containsAll(filesPaths.keys),
+        isTrue,
+        reason: 'every route this tree serves must also exist in ../register',
+      );
+      final sharedRegisterPaths = {
+        for (final path in filesPaths.keys) path: registerPaths[path],
+      };
+      expect(sharedRegisterPaths, filesPaths);
     });
   });
 
-  test('PUT rejects a body id that disagrees with the path id', () async {
-    final env = await bootTestEnv();
-    addTearDown(env.close);
-    final client = TestClient(buildApp(), env);
-
-    await client.post(
-      '/users',
-      headers: admin,
-      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+  group('the security declarations are enforced, not decorative', () {
+    test(
+      'directory-scoped middleware guards /admin, not just the security gate',
+      () async {
+        // routes/admin/_middleware.dart's ScopedMiddleware<Env>([requireAdmin()])
+        // now does what routes/admin/ping.dart used to inline: 401 says "who are
+        // you" (the security gate, enforceSecurity), 403 says "not you" (the
+        // admin-scope middleware) — the same split ../register makes with
+        // app.group('/admin').use(requireAdmin()).
+        final env = await bootTestEnv();
+        addTearDown(env.close);
+        final client = TestClient(buildApp(), env);
+        expect((await client.get('/admin/ping', headers: admin)).status, 200);
+        expect((await client.get('/admin/ping', headers: user)).status, 403);
+        expect((await client.get('/admin/ping')).status, 401);
+      },
     );
 
-    // The schema requires a body `id`; nothing checked it agreed with the path
-    // one. Unchecked, this updated row 1 and echoed back id "2" — a silent
-    // rename through a path that named a different row.
-    final mismatch = await client.put(
-      '/users/1',
-      headers: admin,
-      json: {'id': '2', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
-    );
-    expect(mismatch.status, 400);
-    expect(
-      (await client.get('/users/1', headers: admin)).json(),
-      containsPair('name', 'Ada'),
-    );
-
-    final match = await client.put(
-      '/users/1',
-      headers: admin,
-      json: {'id': '1', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
-    );
-    expect(match.status, 200);
-    expect(match.json(), containsPair('name', 'Ada B'));
+    test('the security declarations reach the file-routed app too', () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+      expect((await client.get('/health')).status, 200); // explicitly public
+      expect((await client.get('/users')).status, 401); // inherits the default
+      expect((await client.get('/whoami', headers: admin)).json(), {
+        'id': 'ada',
+        'admin': true,
+      });
+    });
   });
 
-  test('a zero-tag user 404s at any tag index, not ""', () async {
-    final env = await bootTestEnv();
-    addTearDown(env.close);
-    final client = TestClient(buildApp(), env);
+  group('the CRUD surface', () {
+    test('PUT rejects a body id that disagrees with the path id', () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
 
-    await client.post(
-      '/users',
-      headers: admin,
-      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
-    );
+      await client.post(
+        '/users',
+        headers: admin,
+        json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+      );
 
-    // The tags column is a comma-joined `''`, and `''.split(',')` is `['']`,
-    // not `[]` — unguarded, index 0 answered `{"tag": ""}` instead of 404.
-    expect((await client.get('/users/1/tags/0', headers: admin)).status, 404);
-  });
+      // The schema requires a body `id`; nothing checked it agreed with the path
+      // one. Unchecked, this updated row 1 and echoed back id "2" — a silent
+      // rename through a path that named a different row.
+      final mismatch = await client.put(
+        '/users/1',
+        headers: admin,
+        json: {'id': '2', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
+      );
+      expect(mismatch.status, 400);
+      expect(
+        (await client.get('/users/1', headers: admin)).json(),
+        containsPair('name', 'Ada'),
+      );
 
-  test('serves the full CRUD surface end-to-end', () async {
-    final env = await bootTestEnv();
-    addTearDown(env.close);
-    final client = TestClient(buildApp(), env);
+      final match = await client.put(
+        '/users/1',
+        headers: admin,
+        json: {'id': '1', 'name': 'Ada B', 'role': 'admin', 'tags': <String>[]},
+      );
+      expect(match.status, 200);
+      expect(match.json(), containsPair('name', 'Ada B'));
+    });
 
-    final created = await client.post(
-      '/users',
-      headers: admin,
-      json: {
+    test('a zero-tag user 404s at any tag index, not ""', () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+
+      await client.post(
+        '/users',
+        headers: admin,
+        json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+      );
+
+      // The tags column is a comma-joined `''`, and `''.split(',')` is `['']`,
+      // not `[]` — unguarded, index 0 answered `{"tag": ""}` instead of 404.
+      expect((await client.get('/users/1/tags/0', headers: admin)).status, 404);
+    });
+
+    test('serves the full CRUD surface end-to-end', () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+
+      final created = await client.post(
+        '/users',
+        headers: admin,
+        json: {
+          'id': '1',
+          'name': 'Ada',
+          'role': 'admin',
+          'tags': ['x', 'y'],
+        },
+      );
+      expect(created.status, 201);
+      expect(created.headers['location'], '/users/1');
+      expect((await client.get('/users/1', headers: admin)).json(), {
         'id': '1',
         'name': 'Ada',
         'role': 'admin',
         'tags': ['x', 'y'],
-      },
-    );
-    expect(created.status, 201);
-    expect(created.headers['location'], '/users/1');
-    expect((await client.get('/users/1', headers: admin)).json(), {
-      'id': '1',
-      'name': 'Ada',
-      'role': 'admin',
-      'tags': ['x', 'y'],
+      });
+
+      final list = (await client.get('/users', headers: admin)).json()! as Map;
+      expect(list['total'], 1);
+
+      expect(
+        (await client.put(
+          '/users/1',
+          headers: admin,
+          json: {
+            'id': '1',
+            'name': 'Ada B',
+            'role': 'member',
+            'tags': <String>[],
+          },
+        )).status,
+        200,
+      );
+      expect((await client.delete('/users/1', headers: admin)).status, 204);
+      expect((await client.get('/users/1', headers: admin)).status, 404);
+      expect(
+        (await client.post('/users', headers: admin, json: {'id': '2'})).status,
+        400,
+      );
     });
 
-    final list = (await client.get('/users', headers: admin)).json()! as Map;
-    expect(list['total'], 1);
+    test(
+      'pagination clamps bounds, pages with offset, and keeps ?role working',
+      () async {
+        final env = await bootTestEnv();
+        addTearDown(env.close);
+        final client = TestClient(buildApp(), env);
+        // ids 1..3, ordered by id; roles let ?role be exercised alongside paging.
+        for (final r in [('1', 'admin'), ('2', 'member'), ('3', 'member')]) {
+          await client.post(
+            '/users',
+            headers: admin,
+            json: {
+              'id': r.$1,
+              'name': 'U${r.$1}',
+              'role': r.$2,
+              'tags': <String>[],
+            },
+          );
+        }
+        Future<List<String>> page(String q) async {
+          final body =
+              (await client.get('/users$q', headers: admin)).json()! as Map;
+          return [
+            for (final u in body['items'] as List) (u as Map)['id'] as String,
+          ];
+        }
 
-    expect(
-      (await client.put(
-        '/users/1',
-        headers: admin,
-        json: {
-          'id': '1',
-          'name': 'Ada B',
-          'role': 'member',
-          'tags': <String>[],
-        },
-      )).status,
-      200,
+        final all = (await client.get('/users', headers: admin)).json()! as Map;
+        expect(all['total'], 3);
+        expect(await page(''), ['1', '2', '3']);
+        // Offset windows the page; total stays the full count.
+        expect(await page('?limit=2&offset=1'), ['2', '3']);
+        // Out of range → empty page, total intact (not a 400).
+        final over =
+            (await client.get('/users?offset=99', headers: admin)).json()!
+                as Map;
+        expect(over['items'], isEmpty);
+        expect(over['total'], 3);
+        // Clamped bounds don't error.
+        expect(await page('?limit=9999'), ['1', '2', '3']);
+        expect(await page('?offset=-5'), ['1', '2', '3']);
+        // ?role still filters, with its own total.
+        final members =
+            (await client.get('/users?role=member', headers: admin)).json()!
+                as Map;
+        expect(members['total'], 2);
+        expect(await page('?role=member'), ['2', '3']);
+      },
     );
-    expect((await client.delete('/users/1', headers: admin)).status, 204);
-    expect((await client.get('/users/1', headers: admin)).status, 404);
-    expect(
-      (await client.post('/users', headers: admin, json: {'id': '2'})).status,
-      400,
-    );
-  });
 
-  test(
-    'pagination clamps bounds, pages with offset, and keeps ?role working',
-    () async {
+    test('a comma in a tag is a 400 naming the CSV constraint', () async {
       final env = await bootTestEnv();
       addTearDown(env.close);
       final client = TestClient(buildApp(), env);
-      // ids 1..3, ordered by id; roles let ?role be exercised alongside paging.
-      for (final r in [('1', 'admin'), ('2', 'member'), ('3', 'member')]) {
-        await client.post(
-          '/users',
-          headers: admin,
-          json: {
-            'id': r.$1,
-            'name': 'U${r.$1}',
-            'role': r.$2,
-            'tags': <String>[],
-          },
-        );
-      }
-      Future<List<String>> page(String q) async {
-        final body =
-            (await client.get('/users$q', headers: admin)).json()! as Map;
-        return [
-          for (final u in body['items'] as List) (u as Map)['id'] as String,
-        ];
-      }
-
-      final all = (await client.get('/users', headers: admin)).json()! as Map;
-      expect(all['total'], 3);
-      expect(await page(''), ['1', '2', '3']);
-      // Offset windows the page; total stays the full count.
-      expect(await page('?limit=2&offset=1'), ['2', '3']);
-      // Out of range → empty page, total intact (not a 400).
-      final over =
-          (await client.get('/users?offset=99', headers: admin)).json()! as Map;
-      expect(over['items'], isEmpty);
-      expect(over['total'], 3);
-      // Clamped bounds don't error.
-      expect(await page('?limit=9999'), ['1', '2', '3']);
-      expect(await page('?offset=-5'), ['1', '2', '3']);
-      // ?role still filters, with its own total.
-      final members =
-          (await client.get('/users?role=member', headers: admin)).json()!
-              as Map;
-      expect(members['total'], 2);
-      expect(await page('?role=member'), ['2', '3']);
-    },
-  );
-
-  test('a comma in a tag is a 400 naming the CSV constraint', () async {
-    final env = await bootTestEnv();
-    addTearDown(env.close);
-    final client = TestClient(buildApp(), env);
-    final bad = await client.post(
-      '/users',
-      headers: admin,
-      json: {
-        'id': '1',
-        'name': 'Ada',
-        'role': 'admin',
-        'tags': ['a,b'],
-      },
-    );
-    expect(bad.status, 400);
-    expect((bad.json()! as Map)['error'], contains('comma'));
-    // The write never happened — the boundary rejected before the insert.
-    expect((await client.get('/users/1', headers: admin)).status, 404);
+      final bad = await client.post(
+        '/users',
+        headers: admin,
+        json: {
+          'id': '1',
+          'name': 'Ada',
+          'role': 'admin',
+          'tags': ['a,b'],
+        },
+      );
+      expect(bad.status, 400);
+      expect((bad.json()! as Map)['error'], contains('comma'));
+      // The write never happened — the boundary rejected before the insert.
+      expect((await client.get('/users/1', headers: admin)).status, 404);
+    });
   });
 
   test(

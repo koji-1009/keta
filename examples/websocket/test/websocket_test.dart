@@ -1,3 +1,7 @@
+/// The upgrade composes behind the security gate: an unauthenticated
+/// handshake is refused with a plain 401, never switched, both in-process and
+/// over a real H1 socket — because the upgrade is a returned value, not a
+/// side effect the gate has to race.
 @TestOn('vm')
 library;
 
@@ -53,55 +57,60 @@ void main() {
     });
   });
 
-  test('a real H1 handshake upgrades and echoes over a socket', () async {
-    // The in-process path proves the composition; this proves the bundled H1
-    // transport actually performs the 101 switch and frames WebSocket messages.
-    final server = await buildApp().serve(boot, port: 8140);
-    final ws = await WebSocket.connect(
-      'ws://127.0.0.1:8140/ws/echo',
-      headers: {'authorization': 'Bearer t-ok'},
-    );
-    final got = <Object?>[];
-    final done = Completer<void>();
-    ws.listen((dynamic m) {
-      got.add(m as Object?);
-      if (got.length >= 2 && !done.isCompleted) done.complete();
+  group('the upgrade composes over a real H1 socket', () {
+    test('a real H1 handshake upgrades and echoes over a socket', () async {
+      // The in-process path proves the composition; this proves the bundled H1
+      // transport actually performs the 101 switch and frames WebSocket
+      // messages.
+      final server = await buildApp().serve(boot, port: 8140);
+      final ws = await WebSocket.connect(
+        'ws://127.0.0.1:8140/ws/echo',
+        headers: {'authorization': 'Bearer t-ok'},
+      );
+      final got = <Object?>[];
+      final done = Completer<void>();
+      ws.listen((dynamic m) {
+        got.add(m as Object?);
+        if (got.length >= 2 && !done.isCompleted) done.complete();
+      });
+      ws.add('echo me');
+      await done.future.timeout(const Duration(seconds: 5));
+      expect(got, ['hello ada', 'echo me']);
+
+      await ws.close();
+      await server.shutdown(grace: const Duration(milliseconds: 200));
     });
-    ws.add('echo me');
-    await done.future.timeout(const Duration(seconds: 5));
-    expect(got, ['hello ada', 'echo me']);
 
-    await ws.close();
-    await server.shutdown(grace: const Duration(milliseconds: 200));
+    test('an anonymous real handshake is refused, not switched', () async {
+      final server = await buildApp().serve(boot, port: 8141);
+      // No credential → the server answers 401, not 101, so the client's
+      // upgrade attempt fails rather than connecting.
+      await expectLater(
+        WebSocket.connect('ws://127.0.0.1:8141/ws/echo'),
+        throwsA(isA<WebSocketException>()),
+      );
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    });
   });
 
-  test('an anonymous real handshake is refused, not switched', () async {
-    final server = await buildApp().serve(boot, port: 8141);
-    // No credential → the server answers 401, not 101, so the client's upgrade
-    // attempt fails rather than connecting.
-    await expectLater(
-      WebSocket.connect('ws://127.0.0.1:8141/ws/echo'),
-      throwsA(isA<WebSocketException>()),
-    );
-    await server.shutdown(grace: const Duration(milliseconds: 200));
-  });
-
-  test('the document projects the 101 switch and the bearer gate', () {
-    final doc = buildOpenApi().toJson();
-    final op = ((doc['paths'] as Map)['/ws/echo'] as Map)['get'] as Map;
-    final responses = op['responses'] as Map;
-    // The terminal response is a 101, not a 2xx — a SwitchingProtocols, not a
-    // Success. The bearer declaration adds the 401 the handshake refusal is.
-    expect(responses.containsKey('101'), isTrue);
-    expect(responses.containsKey('401'), isTrue);
-    expect(op['operationId'], 'echoWebSocket');
-    expect(op['security'], [
-      {'bearer': <String>[]},
-    ]);
-    // bearer reached components, carried as data by the declaration.
-    expect(
-      ((doc['components'] as Map)['securitySchemes'] as Map).keys,
-      contains('bearer'),
-    );
+  group('openapi conformance', () {
+    test('the document projects the 101 switch and the bearer gate', () {
+      final doc = buildOpenApi().toJson();
+      final op = ((doc['paths'] as Map)['/ws/echo'] as Map)['get'] as Map;
+      final responses = op['responses'] as Map;
+      // The terminal response is a 101, not a 2xx — a SwitchingProtocols, not a
+      // Success. The bearer declaration adds the 401 the handshake refusal is.
+      expect(responses.containsKey('101'), isTrue);
+      expect(responses.containsKey('401'), isTrue);
+      expect(op['operationId'], 'echoWebSocket');
+      expect(op['security'], [
+        {'bearer': <String>[]},
+      ]);
+      // bearer reached components, carried as data by the declaration.
+      expect(
+        ((doc['components'] as Map)['securitySchemes'] as Map).keys,
+        contains('bearer'),
+      );
+    });
   });
 }

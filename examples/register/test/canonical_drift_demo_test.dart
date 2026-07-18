@@ -1,10 +1,7 @@
-import 'dart:io';
-
-import 'package:keta_lints/keta_lints.dart';
-import 'package:test/test.dart';
-
-/// Proves the pitch's core mitigation converges on THIS example's own DTO, not
-/// a synthetic fixture built to flatter the tool.
+/// The canonical drift-repair loop, round-tripped against THIS example's own
+/// DTO — not a synthetic fixture built to flatter the tool. A copier who
+/// deletes this loses the only test that proves keta_lints' check/fix loop
+/// actually converges on real source, not just a crafted sample.
 ///
 /// Take the real lib/user_dto.dart source, simulate the single most ordinary
 /// edit there is — adding a field — with string surgery on a copy (never on
@@ -18,6 +15,13 @@ import 'package:test/test.dart';
 /// If this ever fails because user_dto.dart's shape moved out from under the
 /// string anchors below, that is real: fix the anchors to match, not around
 /// them, because the point is this example's own DTO round-tripping.
+library;
+
+import 'dart:io';
+
+import 'package:keta_lints/keta_lints.dart';
+import 'package:test/test.dart';
+
 void main() {
   test('adding a field is caught, then reconciled, by canonical fix', () {
     final original = File('lib/user_dto.dart').readAsStringSync();

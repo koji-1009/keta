@@ -1,3 +1,9 @@
+/// Two ways to authenticate against the same `enforceSecurity` gate: a bearer
+/// token guarding `/admin` (plus its own role check, 403 on top of 401), and a
+/// cookie session minted by `/login` and spent by `/me`/`/logout`. Both
+/// declarations drive the same OpenAPI output the runtime gate enforces.
+library;
+
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_auth_example/app.dart';
@@ -135,50 +141,52 @@ void main() {
     });
   });
 
-  test('the same declaration drives the OpenAPI output', () {
-    final doc = OpenApi.fromRoutes(buildApp().routes).toJson();
-    final op =
-        ((doc['paths'] as Map)['/admin/whoami'] as Map)['get']
-            as Map<String, Object?>;
-    expect(op['security'], [
-      {'bearer': <String>[]},
-    ]);
-    expect((op['responses'] as Map).containsKey('401'), isTrue);
-    final securitySchemes =
-        (doc['components'] as Map)['securitySchemes'] as Map;
-    expect(securitySchemes['bearer'], {'type': 'http', 'scheme': 'bearer'});
-    // /public declares no security → no security key, no auto-401.
-    final pub =
-        ((doc['paths'] as Map)['/public'] as Map)['get']
-            as Map<String, Object?>;
-    expect(pub.containsKey('security'), isFalse);
+  group('openapi conformance', () {
+    test('the same declaration drives the OpenAPI output', () {
+      final doc = OpenApi.fromRoutes(buildApp().routes).toJson();
+      final op =
+          ((doc['paths'] as Map)['/admin/whoami'] as Map)['get']
+              as Map<String, Object?>;
+      expect(op['security'], [
+        {'bearer': <String>[]},
+      ]);
+      expect((op['responses'] as Map).containsKey('401'), isTrue);
+      final securitySchemes =
+          (doc['components'] as Map)['securitySchemes'] as Map;
+      expect(securitySchemes['bearer'], {'type': 'http', 'scheme': 'bearer'});
+      // /public declares no security → no security key, no auto-401.
+      final pub =
+          ((doc['paths'] as Map)['/public'] as Map)['get']
+              as Map<String, Object?>;
+      expect(pub.containsKey('security'), isFalse);
 
-    // The cookie session flow declares its own security, the same as the
-    // bearer flow: /login is public (it is how a caller becomes
-    // authenticated), /me and /logout require the cookie scheme.
-    final login =
-        ((doc['paths'] as Map)['/login'] as Map)['post']
-            as Map<String, Object?>;
-    expect(login.containsKey('security'), isFalse);
+      // The cookie session flow declares its own security, the same as the
+      // bearer flow: /login is public (it is how a caller becomes
+      // authenticated), /me and /logout require the cookie scheme.
+      final login =
+          ((doc['paths'] as Map)['/login'] as Map)['post']
+              as Map<String, Object?>;
+      expect(login.containsKey('security'), isFalse);
 
-    final me =
-        ((doc['paths'] as Map)['/me'] as Map)['get'] as Map<String, Object?>;
-    expect(me['security'], [
-      {'cookieAuth': <String>[]},
-    ]);
-    expect((me['responses'] as Map).containsKey('401'), isTrue);
+      final me =
+          ((doc['paths'] as Map)['/me'] as Map)['get'] as Map<String, Object?>;
+      expect(me['security'], [
+        {'cookieAuth': <String>[]},
+      ]);
+      expect((me['responses'] as Map).containsKey('401'), isTrue);
 
-    final logout =
-        ((doc['paths'] as Map)['/logout'] as Map)['post']
-            as Map<String, Object?>;
-    expect(logout['security'], [
-      {'cookieAuth': <String>[]},
-    ]);
+      final logout =
+          ((doc['paths'] as Map)['/logout'] as Map)['post']
+              as Map<String, Object?>;
+      expect(logout['security'], [
+        {'cookieAuth': <String>[]},
+      ]);
 
-    expect(securitySchemes['cookieAuth'], {
-      'type': 'apiKey',
-      'in': 'cookie',
-      'name': 'sid',
+      expect(securitySchemes['cookieAuth'], {
+        'type': 'apiKey',
+        'in': 'cookie',
+        'name': 'sid',
+      });
     });
   });
 }
