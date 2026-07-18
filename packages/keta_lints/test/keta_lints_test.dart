@@ -2637,10 +2637,7 @@ class Dto {
   Map<String, Object?> toJson() => {if (role != null) 'role': role!.name};
 }
 ''';
-      expect(
-        canonicalDiagnostics(source).single.rule,
-        'keta_type_drift',
-      );
+      expect(canonicalDiagnostics(source).single.rule, 'keta_type_drift');
       final fixed = applyCanonicalFix(source);
       expect(fixed, contains('Role.fromWire('));
       expect(fixed, contains('role!.wire'));
@@ -2713,17 +2710,16 @@ const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properti
       expect(fixed, isNot(contains("'stale'")));
       expect(fixed, contains("'b': {'type': 'string'}"));
       // The positional mappers are left exactly as written.
-      expect(
-        fixed,
-        contains("P(json['a'] as String, json['b'] as String)"),
-      );
+      expect(fixed, contains("P(json['a'] as String, json['b'] as String)"));
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });
 
-    test('an unresolvable field type still blocks the Schema repair (negative: '
-        'isSchemaFixable is not a blanket yes) — the advice names the blocker', () {
-      const source = '''
+    test(
+      'an unresolvable field type still blocks the Schema repair (negative: '
+      'isSchemaFixable is not a blanket yes) — the advice names the blocker',
+      () {
+        const source = '''
 import 'package:keta_openapi/keta_openapi.dart';
 class D {
   final DateTime when;
@@ -2735,19 +2731,23 @@ class D {
 }
 const dSchema = Schema('D', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
 ''';
-      final d = canonicalDiagnostics(source);
-      final schemaDrift = d.where((e) => e.rule == 'keta_schema_drift');
-      expect(schemaDrift, hasLength(1));
-      expect(
-        schemaDrift.single.message,
-        contains('field type outside the canonical subset'),
-      );
-      expect(schemaDrift.single.message, isNot(contains('run keta_lints:fix')));
-      // And the fix must not touch the Schema (regenerating from the resolvable
-      // subset would drop the `when` property).
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, isNot(contains("'when': {")));
-    });
+        final d = canonicalDiagnostics(source);
+        final schemaDrift = d.where((e) => e.rule == 'keta_schema_drift');
+        expect(schemaDrift, hasLength(1));
+        expect(
+          schemaDrift.single.message,
+          contains('field type outside the canonical subset'),
+        );
+        expect(
+          schemaDrift.single.message,
+          isNot(contains('run keta_lints:fix')),
+        );
+        // And the fix must not touch the Schema (regenerating from the resolvable
+        // subset would drop the `when` property).
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, isNot(contains("'when': {")));
+      },
+    );
   });
 
   // --- inline back-compat fallback fromJson (docstring parity) --------------

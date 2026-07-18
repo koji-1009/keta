@@ -248,7 +248,9 @@ class CanonicalClass {
       fromJson == null
           ? const {}
           : _fromJsonEnumAccessorDrifts(fromJson!, enumFields),
-      toJson == null ? const {} : _toJsonEnumAccessorDrifts(toJson!, enumFields),
+      toJson == null
+          ? const {}
+          : _toJsonEnumAccessorDrifts(toJson!, enumFields),
     );
   }
 

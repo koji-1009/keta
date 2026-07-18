@@ -67,30 +67,33 @@ Future<Map<String, Object?>> logLineFor(
 
 void main() {
   group('accessLog honesty (item 3a)', () {
-    test('an upgrade response is logged with upgrade:true (101 declared)', () async {
-      final log = RecordingLog();
-      final c = testContext(Env(log));
-      final line = await logLineFor(c, log, Response.upgrade((_) {}));
-      // 101 is the *declared* status; the wire may still answer 426. The marker
-      // says "the handler asked to switch", not "the switch happened".
-      expect(line['status'], 101);
-      expect(line['upgrade'], isTrue);
-      // A declared-status upgrade is not a streamed body.
-      expect(line.containsKey('streaming'), isFalse);
-    });
+    test(
+      'an upgrade response is logged with upgrade:true (101 declared)',
+      () async {
+        final log = RecordingLog();
+        final c = testContext(Env(log));
+        final line = await logLineFor(c, log, Response.upgrade((_) {}));
+        // 101 is the *declared* status; the wire may still answer 426. The marker
+        // says "the handler asked to switch", not "the switch happened".
+        expect(line['status'], 101);
+        expect(line['upgrade'], isTrue);
+        // A declared-status upgrade is not a streamed body.
+        expect(line.containsKey('streaming'), isFalse);
+      },
+    );
 
-    test('a streamed body is logged with streaming:true (ms is TTFB)', () async {
-      final log = RecordingLog();
-      final c = testContext(Env(log));
-      final streamed = Response(
-        200,
-        body: const Stream<List<int>>.empty(),
-      );
-      final line = await logLineFor(c, log, streamed);
-      expect(line['status'], 200);
-      expect(line['streaming'], isTrue);
-      expect(line.containsKey('upgrade'), isFalse);
-    });
+    test(
+      'a streamed body is logged with streaming:true (ms is TTFB)',
+      () async {
+        final log = RecordingLog();
+        final c = testContext(Env(log));
+        final streamed = Response(200, body: const Stream<List<int>>.empty());
+        final line = await logLineFor(c, log, streamed);
+        expect(line['status'], 200);
+        expect(line['streaming'], isTrue);
+        expect(line.containsKey('upgrade'), isFalse);
+      },
+    );
 
     test('an SSE response is logged with streaming:true', () async {
       final log = RecordingLog();

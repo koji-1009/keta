@@ -347,55 +347,52 @@ void main() {
     },
   );
 
-  test(
-    'close() cuts a batch mid-retry-sleep: it completes promptly and the '
-    'batch is counted as dropped',
-    () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      // Always throttle with a large Retry-After: the batch can never succeed,
-      // so it sits in its (clamped) retry sleep until close() cuts it loose.
-      server.listen((req) async {
-        await req.drain<void>();
-        req.response.statusCode = 429;
-        req.response.headers.set('retry-after', '9999');
-        await req.response.close();
-      });
+  test('close() cuts a batch mid-retry-sleep: it completes promptly and the '
+      'batch is counted as dropped', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    // Always throttle with a large Retry-After: the batch can never succeed,
+    // so it sits in its (clamped) retry sleep until close() cuts it loose.
+    server.listen((req) async {
+      await req.drain<void>();
+      req.response.statusCode = 429;
+      req.response.headers.set('retry-after', '9999');
+      await req.response.close();
+    });
 
-      final warnings = <MapEntry<String, Map<String, Object?>>>[];
-      final exporter = OtlpExporter.http(
-        Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
-        // A large clamp so the sleep would be long (30s) absent the shutdown
-        // cut — the wall-clock assertion below is meaningful only because the
-        // sleep it races is far longer than the bound.
-        maxRetryDelay: const Duration(seconds: 30),
-        maxRetries: 5,
-        exportInterval: const Duration(milliseconds: 20),
-        onWarn: (msg, fields) => warnings.add(MapEntry(msg, fields)),
-      );
+    final warnings = <MapEntry<String, Map<String, Object?>>>[];
+    final exporter = OtlpExporter.http(
+      Uri.parse('http://127.0.0.1:${server.port}/v1/traces'),
+      // A large clamp so the sleep would be long (30s) absent the shutdown
+      // cut — the wall-clock assertion below is meaningful only because the
+      // sleep it races is far longer than the bound.
+      maxRetryDelay: const Duration(seconds: 30),
+      maxRetries: 5,
+      exportInterval: const Duration(milliseconds: 20),
+      onWarn: (msg, fields) => warnings.add(MapEntry(msg, fields)),
+    );
 
-      exporter.enqueue([
-        OtelSpan(
-          traceId: 'a' * 32,
-          spanId: 'b' * 16,
-          name: 'GET /x',
-          startUnixNano: 1,
-          endUnixNano: 2,
-        ),
-      ]);
+    exporter.enqueue([
+      OtelSpan(
+        traceId: 'a' * 32,
+        spanId: 'b' * 16,
+        name: 'GET /x',
+        startUnixNano: 1,
+        endUnixNano: 2,
+      ),
+    ]);
 
-      // Let the periodic timer drain the batch and park it in its retry sleep.
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+    // Let the periodic timer drain the batch and park it in its retry sleep.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      final sw = Stopwatch()..start();
-      await exporter.close();
-      sw.stop();
+    final sw = Stopwatch()..start();
+    await exporter.close();
+    sw.stop();
 
-      // Bounded: close() cut the 30s sleep instead of waiting it out.
-      expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
-      // The cut batch failed like any rejected send, so its span is folded
-      // into the dropped count and surfaced as an export failure.
-      expect(warnings.any((w) => w.key == 'span export failed'), isTrue);
-    },
-  );
+    // Bounded: close() cut the 30s sleep instead of waiting it out.
+    expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+    // The cut batch failed like any rejected send, so its span is folded
+    // into the dropped count and surfaced as an export failure.
+    expect(warnings.any((w) => w.key == 'span export failed'), isTrue);
+  });
 }

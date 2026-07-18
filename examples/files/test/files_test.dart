@@ -155,34 +155,31 @@ void main() {
     );
   });
 
-  test(
-    'the shared CRUD surface documents identically to ../register',
-    () {
-      // The two examples' OpenAPI documents are NOT identical as a whole:
-      // ../register has since grown /users/by-role/:role (a custom Capture) and
-      // /users/events (an SSE feed) that this file-routed tree does not mirror
-      // — mirroring them would need an events bus and a custom SSE capture in
-      // keta_files, which is its own piece of work, not a doc-wording fix. What
-      // is still true, and worth asserting rather than just claiming in prose,
-      // is that every route this tree *does* serve — the shared CRUD surface —
-      // documents identically on both sides. Restricting ../register's document
-      // to exactly this tree's path set and diffing turns "we didn't check"
-      // into an assertion: a summary edited on one side, a schema changed on
-      // the other, or a route silently dropped now fails here, loudly, instead
-      // of rotting behind a claim nobody re-reads.
-      final filesPaths = buildOpenApi().toJson()['paths']! as Map;
-      final registerPaths = register.buildOpenApi().toJson()['paths']! as Map;
-      expect(
-        registerPaths.keys.toSet().containsAll(filesPaths.keys),
-        isTrue,
-        reason: 'every route this tree serves must also exist in ../register',
-      );
-      final sharedRegisterPaths = {
-        for (final path in filesPaths.keys) path: registerPaths[path],
-      };
-      expect(sharedRegisterPaths, filesPaths);
-    },
-  );
+  test('the shared CRUD surface documents identically to ../register', () {
+    // The two examples' OpenAPI documents are NOT identical as a whole:
+    // ../register has since grown /users/by-role/:role (a custom Capture) and
+    // /users/events (an SSE feed) that this file-routed tree does not mirror
+    // — mirroring them would need an events bus and a custom SSE capture in
+    // keta_files, which is its own piece of work, not a doc-wording fix. What
+    // is still true, and worth asserting rather than just claiming in prose,
+    // is that every route this tree *does* serve — the shared CRUD surface —
+    // documents identically on both sides. Restricting ../register's document
+    // to exactly this tree's path set and diffing turns "we didn't check"
+    // into an assertion: a summary edited on one side, a schema changed on
+    // the other, or a route silently dropped now fails here, loudly, instead
+    // of rotting behind a claim nobody re-reads.
+    final filesPaths = buildOpenApi().toJson()['paths']! as Map;
+    final registerPaths = register.buildOpenApi().toJson()['paths']! as Map;
+    expect(
+      registerPaths.keys.toSet().containsAll(filesPaths.keys),
+      isTrue,
+      reason: 'every route this tree serves must also exist in ../register',
+    );
+    final sharedRegisterPaths = {
+      for (final path in filesPaths.keys) path: registerPaths[path],
+    };
+    expect(sharedRegisterPaths, filesPaths);
+  });
 
   test(
     'directory-scoped middleware guards /admin, not just the security gate',

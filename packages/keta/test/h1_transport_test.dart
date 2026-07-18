@@ -266,7 +266,8 @@ void main() {
         expect(
           watch.elapsed,
           lessThan(const Duration(seconds: 5)),
-          reason: 'the handler finished inside the grace, so shutdown returns '
+          reason:
+              'the handler finished inside the grace, so shutdown returns '
               'when it does — not at the grace deadline',
         );
 

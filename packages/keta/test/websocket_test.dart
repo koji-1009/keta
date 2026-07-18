@@ -265,35 +265,32 @@ void main() {
   });
 
   group('watch-only channel does not buffer without bound (item 1)', () {
-    test(
-      'a push-only flood is dropped, not buffered, and done still fires on '
-      'peer close',
-      () async {
-        // The unit-level proof, deterministic: drive the channel adapter's
-        // inbound path directly with a fake socket, never subscribing to
-        // `messages` (a server-push-only handler). Every frame must be
-        // discarded — never accumulated in the controller — and the peer close
-        // must still complete `done` despite there being no listener.
-        final fake = _FakeInboundWebSocket();
-        final (channel, dropped) = debugWebSocketChannel(fake);
-        // Never listen to `channel.messages`. Flood the raw socket.
-        const n = 100000;
-        for (var i = 0; i < n; i++) {
-          fake.emit('frame $i');
-        }
-        // Peer closes: all buffered raw frames deliver (and are dropped), then
-        // `onDone` fires → `done` completes and the drop tally is final.
-        await fake.peerClose();
-        await channel.done.timeout(
-          const Duration(seconds: 5),
-          onTimeout: () =>
-              fail('done did not fire on peer close for a push-only channel'),
-        );
-        // Every frame was discarded: nothing was buffered in `_incoming`, so
-        // memory stayed bounded regardless of the flood size.
-        expect(dropped(), n);
-      },
-    );
+    test('a push-only flood is dropped, not buffered, and done still fires on '
+        'peer close', () async {
+      // The unit-level proof, deterministic: drive the channel adapter's
+      // inbound path directly with a fake socket, never subscribing to
+      // `messages` (a server-push-only handler). Every frame must be
+      // discarded — never accumulated in the controller — and the peer close
+      // must still complete `done` despite there being no listener.
+      final fake = _FakeInboundWebSocket();
+      final (channel, dropped) = debugWebSocketChannel(fake);
+      // Never listen to `channel.messages`. Flood the raw socket.
+      const n = 100000;
+      for (var i = 0; i < n; i++) {
+        fake.emit('frame $i');
+      }
+      // Peer closes: all buffered raw frames deliver (and are dropped), then
+      // `onDone` fires → `done` completes and the drop tally is final.
+      await fake.peerClose();
+      await channel.done.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () =>
+            fail('done did not fire on peer close for a push-only channel'),
+      );
+      // Every frame was discarded: nothing was buffered in `_incoming`, so
+      // memory stayed bounded regardless of the flood size.
+      expect(dropped(), n);
+    });
 
     test(
       'a push-only handler (never listens) survives a peer flood and its done '
