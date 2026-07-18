@@ -39,21 +39,35 @@ class MultipartLimits {
 /// buffered readers. Every path is bounded by `MultipartLimits.maxPartBytes` —
 /// the API owns the size limit, the caller never has to.
 ///
-/// A part's body may be read at most once, via exactly one of [stream],
-/// [bytes], or [text]; a second read throws [StateError] (the backing MIME
-/// stream is single-subscription). Reading is optional: a consumer may advance
-/// the outer `Stream<Part>` without touching a part, and [parts] drains the
-/// skipped body for it (charged to `maxTotalBytes`), so out-of-order or partial
-/// consumption can neither deadlock nor smuggle uncounted bytes.
+/// A part's body may be *requested* at most once, via exactly one of
+/// [stream], [bytes], or [text]; a second request throws [StateError] (the
+/// backing MIME stream is single-subscription). Requesting is not the same as
+/// reading, though: [stream] hands back a lazy `Stream` that does nothing
+/// until listened to, so a caller can request it and then advance the outer
+/// `Stream<Part>` without ever subscribing. [parts] treats that exactly like
+/// never having requested the body at all — it drains the part for the
+/// caller (charged to `maxTotalBytes`) the moment it advances past it,
+/// whether the body was untouched or merely claimed-but-unlistened. So: read
+/// eagerly, or not at all — a stream stashed away to listen to "later"
+/// (after the loop has moved on) sees an already-drained source and yields
+/// nothing. Either way, consumption (in order, out of order, or skipped
+/// outright) can neither deadlock nor smuggle uncounted bytes.
 class Part {
   Part._(this._source, this._maxBytes);
   final MimeMultipart _source;
   final int _maxBytes;
 
-  /// Whether the body has been claimed (read or drained). Guards the
-  /// single-subscription MIME stream against a second listen and tells [parts]
-  /// whether a skipped part still needs draining.
+  /// Whether the body has been claimed — requested via [stream]/[bytes]/[text],
+  /// or already drained by [parts]. Guards against a second request; does NOT
+  /// by itself mean the body was actually consumed (see [_listened]).
   bool _taken = false;
+
+  /// Whether the stream returned by [stream] was actually listened to. Set
+  /// from inside the lazy `async*` body in [_limitPart], which only starts
+  /// running once something subscribes — so this flag distinguishes "grabbed
+  /// `.stream` but never listened" (still needs draining) from "listened, in
+  /// progress or finished" (already being handled by its own listener).
+  bool _listened = false;
 
   /// The part's headers, lower-cased by the MIME parser.
   Map<String, String> get headers => _source.headers;
@@ -97,20 +111,34 @@ class Part {
     _taken = true;
   }
 
-  /// Drains an unread body when the consumer advances past it. Draining the raw
-  /// `_source` (not [stream]) deliberately skips the per-part cap: a skipped
-  /// part is not an error, but its bytes must still flow through the total meter
+  /// Drains an unread body when the consumer advances past it. Runs whether
+  /// the part was never touched OR was claimed via [stream] but never
+  /// listened — [_listened] is what tells those two apart from "a listener is
+  /// already consuming (or has consumed) it", not [_taken] alone: `.stream`
+  /// sets `_taken` synchronously on request, well before anything actually
+  /// subscribes, so relying on `_taken` here would treat a claimed-but-dropped
+  /// stream as already handled and never drain it — exactly the hang this
+  /// guards against (the MIME parser only surfaces the next part once the
+  /// current body is consumed). Draining the raw `_source` directly (not
+  /// through [stream]) deliberately skips the per-part cap: a drained part is
+  /// not an error, but its bytes must still flow through the total meter
   /// upstream in [parts], so they cannot be used to smuggle payload past
-  /// `maxTotalBytes`. A no-op once the body has been taken.
+  /// `maxTotalBytes`. A no-op once the body is actually being (or has been)
+  /// listened to.
   Future<void> _drainIfUnread() async {
-    if (_taken) return;
+    if (_listened) return;
     _taken = true;
     await _source.drain<void>();
   }
 
   /// Wraps a body stream so cumulative bytes past `maxPartBytes` abort with
-  /// [PayloadTooLarge] rather than being buffered or forwarded.
+  /// [PayloadTooLarge] rather than being buffered or forwarded. `async*`
+  /// bodies are lazy — nothing below this line runs until the returned stream
+  /// is listened to — so marking [_listened] as the first statement means it
+  /// flips exactly when a subscriber starts consuming, not merely when
+  /// [stream] was called.
   Stream<List<int>> _limitPart(Stream<List<int>> source) async* {
+    _listened = true;
     var total = 0;
     await for (final chunk in source) {
       total += chunk.length;
@@ -146,16 +174,18 @@ class Part {
 /// boundary) is a [BadRequest]; an oversized body or part is a [PayloadTooLarge];
 /// a part-count flood is a [BadRequest].
 ///
-/// Parts need not be read in order or at all: when the consumer advances, an
-/// untouched part's body is drained for it — charged to `maxTotalBytes` — so a
-/// skipped part can neither deadlock the underlying single-subscription MIME
-/// stream nor hide uncounted bytes.
+/// Parts need not be read in order or at all: when the consumer advances, a
+/// part's body is drained for it — charged to `maxTotalBytes` — unless it is
+/// actively (or already) being listened to, whether the part was left
+/// completely untouched or its [Part.stream] was requested and then dropped
+/// without a listener. Either way, a skipped part can neither deadlock the
+/// underlying single-subscription MIME stream nor hide uncounted bytes.
 Stream<Part> parts<E>(
   Context<E> c, {
   MultipartLimits limits = const MultipartLimits(),
 }) async* {
   final contentType = c.header('content-type') ?? '';
-  if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+  if (!_isMultipartFormData(contentType)) {
     throw const BadRequest('expected a multipart/form-data body');
   }
   final boundary = _boundary(contentType);
@@ -174,12 +204,34 @@ Stream<Part> parts<E>(
     final part = Part._(source, limits.maxPartBytes);
     yield part;
     // The consumer has finished with this part (its loop body ran to the point
-    // of requesting the next element). Drain anything it left unread: the MIME
-    // parser only surfaces the next part once the current body is consumed, and
-    // draining routes those bytes through `_limitTotal` above so they count
-    // toward the total. This makes the documented "consume in order" footgun
-    // unrepresentable without a race — at this point nothing is reading `part`.
+    // of requesting the next element). Drain anything not actively being
+    // listened to: the MIME parser only surfaces the next part once the
+    // current body is consumed, and draining routes those bytes through
+    // `_limitTotal` above so they count toward the total. This covers both an
+    // untouched part AND one whose `.stream` was requested but never
+    // listened — `Part._drainIfUnread` checks `_listened`, not merely
+    // whether the body was requested, so a claim without a subscriber cannot
+    // stall this loop waiting for a listener that never comes.
     await part._drainIfUnread();
+  }
+}
+
+/// Whether [contentType]'s media type is exactly `multipart/form-data`
+/// (case-insensitively), parsed rather than string-matched: a `startsWith`
+/// check also accepts an unrelated type that merely shares the prefix, like
+/// `multipart/form-data-x` or `multipart/form-dataphoto`. Uses the same
+/// `HeaderValue` parser as the boundary and disposition parameters below, so
+/// a trailing `; boundary=...` (or any other parameter) never confuses the
+/// comparison the way a naive substring check might. A malformed header
+/// parses to a value that simply isn't `multipart/form-data` here — `false`,
+/// not a thrown exception — consistent with how `_boundary` treats the same
+/// input.
+bool _isMultipartFormData(String contentType) {
+  try {
+    return HeaderValue.parse(contentType).value.toLowerCase() ==
+        'multipart/form-data';
+  } on HttpException {
+    return false;
   }
 }
 

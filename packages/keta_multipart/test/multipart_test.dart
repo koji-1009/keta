@@ -51,6 +51,24 @@ void main() {
     );
   });
 
+  test(
+    'a content-type that merely shares the multipart/form-data prefix is a '
+    'BadRequest, not accepted',
+    () {
+      // A `startsWith` gate would let a wholly distinct media type through.
+      // The media type is now parsed and compared for equality instead.
+      expect(
+        parts(
+          ctx(
+            utf8.encode('x'),
+            contentType: 'multipart/form-data-x; boundary=B',
+          ),
+        ).toList(),
+        throwsA(isA<BadRequest>()),
+      );
+    },
+  );
+
   test('a case-insensitive Boundary= parameter name is honored', () async {
     final raw = body('B', [
       ('Content-Disposition: form-data; name="greeting"', 'hello'),
@@ -190,6 +208,26 @@ void main() {
         }(), completes);
       },
     );
+
+    test(
+      'a duplicated parameter is last-wins (current HeaderValue behavior)',
+      () async {
+        // Documented, not newly introduced: `HeaderValue.parse`'s parameters
+        // map is filled by inserting each parameter as it is parsed, so a
+        // name repeated in the header simply overwrites the earlier value.
+        final raw = body('B', [
+          (
+            'Content-Disposition: form-data; name="first"; name="second"',
+            'x',
+          ),
+        ]);
+        final names = <String?>[];
+        await for (final p in parts(ctx(raw))) {
+          names.add(p.name);
+        }
+        expect(names, ['second']);
+      },
+    );
   });
 
   group('boundary parsing', () {
@@ -264,6 +302,61 @@ void main() {
         }
       }(), throwsA(isA<StateError>()));
     });
+
+    test(
+      'a part claimed via .stream but never listened does not hang the '
+      'request — the next part still arrives',
+      () async {
+        // `.stream` sets the single-read guard synchronously but returns a
+        // lazy stream; stashing it away without ever listening used to leave
+        // the underlying MIME transformer waiting forever for a subscriber
+        // that never comes, since a skipped-but-unclaimed part is drained
+        // but a claimed one was not. Draining now happens either way.
+        final raw = body('B', [
+          ('Content-Disposition: form-data; name="grabbed"', 'x' * 50),
+          ('Content-Disposition: form-data; name="keep"', 'ok'),
+        ]);
+        final stashed = <Stream<List<int>>>[];
+        final seen = <String>[];
+        await for (final p in parts(ctx(raw))) {
+          if (p.name == 'grabbed') {
+            stashed.add(p.stream); // claimed, deliberately never listened
+            continue;
+          }
+          seen.add(await p.text());
+        }
+        expect(seen, ['ok']);
+        expect(stashed, hasLength(1));
+      },
+    );
+
+    test(
+      'bytes in a claimed-but-unlistened stream still count toward '
+      'maxTotalBytes',
+      () {
+        // Same scenario as above, but the grabbed part is large enough that
+        // if draining it were skipped (because it was "claimed"), the total
+        // would stay under the limit. Draining it anyway is what makes the
+        // limit unavoidable.
+        final raw = body('B', [
+          ('Content-Disposition: form-data; name="grabbed"', 'x' * 100),
+          ('Content-Disposition: form-data; name="keep"', 'ok'),
+        ]);
+        expect(() async {
+          final stashed = <Stream<List<int>>>[];
+          await for (final p in parts(
+            ctx(raw),
+            limits: const MultipartLimits(maxTotalBytes: 60),
+          )) {
+            if (p.name == 'grabbed') {
+              stashed.add(p.stream);
+              continue;
+            }
+            await p.text();
+          }
+        }(), throwsA(isA<PayloadTooLarge>()));
+      },
+    );
   });
 
   test('Part.stream enforces maxPartBytes', () {

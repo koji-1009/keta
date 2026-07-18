@@ -137,19 +137,33 @@ String _dartStringLiteral(String value) {
 /// Each region is fenced with `// dart format off`/`on`, so what is written
 /// here is what stays: see [_formatOff].
 ///
-/// [source] keeps whatever end-of-line convention it already has. A CRLF
-/// manifest — Windows-checked-out or Windows-authored — would otherwise get a
-/// mixed file back: the preserved lines carry their own `\r\n`, but content
-/// generated here is built on plain `\n`, so a naive `split('\n')` /
-/// `join('\n')` round-trip leaves a stray `\r` on every preserved line and
-/// none on the generated ones. Normalizing to `\n` for the whole rewrite and
-/// converting back only if the source was CRLF to begin with keeps every
-/// line — preserved or generated — in one convention, which is also what
-/// idempotence needs: a second sync must reproduce the same bytes, not just
-/// the same characters.
+/// [source] keeps whatever end-of-line convention the majority of its lines
+/// already use. A CRLF manifest — Windows-checked-out or Windows-authored —
+/// would otherwise get a mixed file back: the preserved lines carry their own
+/// `\r\n`, but content generated here is built on plain `\n`, so a naive
+/// `split('\n')` / `join('\n')` round-trip leaves a stray `\r` on every
+/// preserved line and none on the generated ones.
+///
+/// The convention is decided by counting CRLF- versus bare-LF-terminated
+/// lines, not by `contains('\r\n')`: an any-CRLF-means-CRLF check is
+/// all-or-nothing, so a single stray `\r\n` dragged in by one bad checkout of
+/// an otherwise-LF file would flip the *entire* manifest to CRLF on its next
+/// sync. Counting instead treats that stray line as the minority and
+/// normalizes it to match the rest, in whichever direction the rest goes. A
+/// tie (equal counts, including the all-`\n`-free case of a single-line or
+/// empty file) keeps LF, matching this generator's own untouched output.
+///
+/// Normalizing every `\r\n` to `\n` before splitting — regardless of which
+/// convention wins — and converting back only if CRLF won keeps every line —
+/// preserved, generated, or a corrected minority — in one convention, which is
+/// also what idempotence needs: a second sync must reproduce the same bytes,
+/// not just the same characters (having corrected the minority, there is
+/// nothing left for a second sync to flip).
 String syncManifest(String source, List<RouteFile> files) {
-  final crlf = source.contains('\r\n');
-  final normalized = crlf ? source.replaceAll('\r\n', '\n') : source;
+  final crlfCount = '\r\n'.allMatches(source).length;
+  final bareLfCount = '\n'.allMatches(source).length - crlfCount;
+  final crlf = crlfCount > bareLfCount;
+  final normalized = source.replaceAll('\r\n', '\n');
   // The imports region carries the route files and the middleware files they
   // fall under. Both are derived from `files` — a route file names its own
   // scopes — so `syncManifest` stays a pure function of the route list, and

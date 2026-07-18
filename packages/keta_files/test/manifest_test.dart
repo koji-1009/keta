@@ -361,6 +361,56 @@ void main() {
     });
   });
 
+  group('the EOL convention is decided by majority, not by any-CRLF', () {
+    // An any-CRLF-means-CRLF check is all-or-nothing: one stray '\r\n' line
+    // in an otherwise-LF file (or one stray bare '\n' in an otherwise-CRLF
+    // file) would flip the *whole* manifest to the minority's convention.
+    // Counting terminators instead lets the majority win and corrects the
+    // stray line to match it.
+    final f = file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']);
+
+    test(
+      'a mostly-LF manifest with one stray CRLF line stays LF, normalizing '
+      'the stray',
+      () {
+        // Only the first line ending is CRLF; every other line in `_imports`
+        // stays bare LF, so LF is the majority.
+        final mostlyLf = _imports.replaceFirst('\n', '\r\n');
+        final out = syncManifest(mostlyLf, [f]);
+        expect(out, isNot(contains('\r')));
+      },
+    );
+
+    test('a mostly-LF-with-stray-CRLF sync is idempotent', () {
+      final mostlyLf = _imports.replaceFirst('\n', '\r\n');
+      final synced = syncManifest(mostlyLf, [f]);
+      expect(syncManifest(synced, [f]), synced, reason: 'settled');
+    });
+
+    test(
+      'a mostly-CRLF manifest with one stray bare-LF line stays CRLF, '
+      'normalizing the stray',
+      () {
+        // Every line ending is CRLF except the first, which is knocked back
+        // to a bare LF, so CRLF is the majority.
+        final importsCrlf = _imports.replaceAll('\n', '\r\n');
+        final mostlyCrlf = importsCrlf.replaceFirst('\r\n', '\n');
+        final out = syncManifest(mostlyCrlf, [f]);
+        // Stripping every '\r\n' pair must remove every newline in the
+        // result — a surviving bare '\n' means the stray line did not get
+        // corrected to CRLF.
+        expect(out.replaceAll('\r\n', ''), isNot(contains('\n')));
+      },
+    );
+
+    test('a mostly-CRLF-with-stray-bare-LF sync is idempotent', () {
+      final importsCrlf = _imports.replaceAll('\n', '\r\n');
+      final mostlyCrlf = importsCrlf.replaceFirst('\r\n', '\n');
+      final synced = syncManifest(mostlyCrlf, [f]);
+      expect(syncManifest(synced, [f]), synced, reason: 'settled');
+    });
+  });
+
   group('drift is caught', () {
     final f = file(importPath: 'routes/x.dart', prefix: r'$x', template: ['x']);
 

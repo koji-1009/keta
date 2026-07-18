@@ -106,15 +106,43 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
 /// `uri.query.isEmpty`) decides whether to carry a query component, so a
 /// bare-`?` request keeps its empty-but-present query instead of losing the
 /// `?` entirely.
+///
+/// The parsed `Host` is never reflected wholesale into the base URI: a Host
+/// header names an authority alone (`host[:port]`), so `Uri.parse` recovering
+/// a userInfo, path, query, or fragment from it means the header carried
+/// structure it has no business carrying — `Host: evil.com?inject=1` parses
+/// cleanly to host `evil.com` with query `inject=1`, and `Uri.replace(query:
+/// null)` keeps whatever query the *base* already has, so that injected query
+/// (and likewise a smuggled `#fragment` or `user@` userInfo) would otherwise
+/// reach the shelf handler's `requestedUri` as if the client had put it on the
+/// request line. Such a Host is rejected as a [BadRequest] rather than
+/// stripped down to its host+port: it is already-malformed, attacker-shaped
+/// input, and rejecting it is consistent with the unterminated-bracket and
+/// invalid-port cases above, which are also just "parse failed" from the
+/// caller's point of view. What is reflected forward is a *rebuilt* URI made
+/// only from the validated host and (optional) port — never the parsed Host
+/// URI itself — so no component `Uri.parse` might have recovered from the raw
+/// header can ride along.
 Uri _absolute(Uri uri, String? host) {
   if (uri.hasScheme) return uri;
   final authority = (host == null || host.isEmpty) ? 'localhost' : host;
-  final Uri base;
+  final Uri parsedHost;
   try {
-    base = Uri.parse('http://$authority');
+    parsedHost = Uri.parse('http://$authority');
   } on FormatException {
     throw BadRequest('malformed Host header: $host');
   }
+  if (parsedHost.userInfo.isNotEmpty ||
+      parsedHost.path.isNotEmpty ||
+      parsedHost.hasQuery ||
+      parsedHost.hasFragment) {
+    throw BadRequest('malformed Host header: $host');
+  }
+  final base = Uri(
+    scheme: 'http',
+    host: parsedHost.host,
+    port: parsedHost.hasPort ? parsedHost.port : null,
+  );
   return base.replace(path: uri.path, query: uri.hasQuery ? uri.query : null);
 }
 

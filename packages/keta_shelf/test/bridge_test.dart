@@ -402,6 +402,75 @@ void main() {
       expect(res.status, 200);
       expect(res.text(), 'http://[::1]:8080/token');
     });
+
+    test('passes a valid host:port Host header through unchanged', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'host:8080'});
+      expect(res.status, 200);
+      expect(res.text(), 'http://host:8080/token');
+    });
+
+    // A Host header names an authority alone. `Uri.parse` will nonetheless
+    // recover a query from `evil.com?inject=1` — and `Uri.replace(query:
+    // null)` keeps the *base's* query rather than clearing it — so reflecting
+    // the parsed Host wholesale would let this smuggle a query into
+    // `requestedUri` that the client never put on the request line/path.
+    test(
+      'rejects a Host header smuggling a query as 400, not a reflected query',
+      () async {
+        final app = App<Env>();
+        app.get(
+          '/token',
+          shelfToKeta(
+            (request) => shelf.Response.ok(request.requestedUri.toString()),
+          ),
+        );
+        final res = await TestClient(
+          app,
+          Env(),
+        ).get('/token', headers: {'host': 'evil.com?inject=1'});
+        expect(res.status, 400);
+      },
+    );
+
+    test('rejects a Host header smuggling userInfo as 400', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'a@b.com'});
+      expect(res.status, 400);
+    });
+
+    test('rejects a Host header smuggling a fragment as 400', () async {
+      final app = App<Env>();
+      app.get(
+        '/token',
+        shelfToKeta(
+          (request) => shelf.Response.ok(request.requestedUri.toString()),
+        ),
+      );
+      final res = await TestClient(
+        app,
+        Env(),
+      ).get('/token', headers: {'host': 'evil.com#frag'});
+      expect(res.status, 400);
+    });
   });
 
   group('_ShelfRequest.remoteAddress', () {
