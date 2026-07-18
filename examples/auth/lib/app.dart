@@ -94,6 +94,36 @@ App<Env> buildApp() {
     ),
   );
 
+  // The revocation demonstration: an open SSE feed over the SAME session the
+  // cookie names, that ends itself the instant /logout revokes that session
+  // — see lib/auth.dart's sessionEvents and logout. Unlike ../register's
+  // userListSchema (listSchema(...), built per call, so its RouteDoc cannot
+  // be const), sessionEventSchema is a plain const Schema, so this RouteDoc
+  // stays const same as every other route here — only the handler closure
+  // reads c.env.bus/c.get(sessionId) per request.
+  app.get(
+    '/me/events',
+    (c) => c.sse(
+      sessionEvents(c.env.bus, c.get(sessionId)),
+      keepAlive: const Duration(seconds: 15),
+    ),
+    doc: const RouteDoc(
+      success: Success(
+        schema: sessionEventSchema,
+        contentType: 'text/event-stream',
+      ),
+      security: [cookieAuth],
+      summary: 'The session status feed; closes when the session is revoked',
+      description:
+          'An EventSource stream scoped to the caller\'s own session. '
+          'Emits a single "revoked" event and ends the connection the '
+          'instant /logout (or any other revocation) fires for this '
+          'session — a server-initiated close, not the client giving up.',
+      tags: ['sessions'],
+      operationId: 'streamSessionEvents',
+    ),
+  );
+
   app.post(
     '/logout',
     (c) {

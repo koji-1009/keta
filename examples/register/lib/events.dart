@@ -1,37 +1,37 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:keta/keta.dart';
+import 'package:keta_bus/keta_bus.dart';
 
-/// The per-app broadcast of user mutations — the source the `/users/events`
-/// SSE feed streams to subscribers.
+/// The topic user mutations publish to and `/users/events` streams from — the
+/// single name that must agree between every `bus.publish` call and the one
+/// `bus.subscribe` in [userEventsStream].
 ///
-/// A `buildApp`-scoped value handed to the handlers that need it, never a
-/// top-level global: the write handlers ([publish]) and the SSE route ([stream])
-/// must share one instance, but two apps built in one isolate (the ordinary test
-/// shape, and any multi-tenant host) must not cross-talk. The metrics registry
-/// is scoped the same way and for the same reason.
+/// This used to be an in-process `StreamController.broadcast()` (`UserEvents`,
+/// scoped per `buildApp` so two apps in one isolate never cross-talked). That
+/// reached only the isolate it lived in — a message published while handling a
+/// request on one of `serve(isolates: n)`'s worker isolates never reached a
+/// subscriber parked on another. A [Bus] (keta_bus) closes that gap: the same
+/// `publish`/`subscribe` calls below work unchanged whether `Env.bus` is an
+/// [InMemoryBus] (single isolate) or an [IsolateBus] connection (`serve
+/// (isolates: n)`) — see lib/env.dart and bin/main.dart for which one a given
+/// run gets. The bus is Env-owned and closed on shutdown, not a `buildApp`
+/// local, because it must be reachable from `bin/main.dart`'s isolate-wiring
+/// code too.
+const usersTopic = 'users';
+
+/// Renders [usersTopic]'s messages as the SSE feed `/users/events` streams:
+/// each bus message is already the `{"kind", "id"}` JSON object a write
+/// handler published (see lib/routes.dart's create/update/delete handlers), so
+/// this only has to pick `kind` back out as the SSE `event:` name — the same
+/// projection the old `UserEvents.publish` used to do inline.
 ///
-/// The controller is a *broadcast* one on purpose: an SSE feed may have many
-/// concurrent `EventSource` subscribers, and one create/update/delete fans out
-/// to all of them. A broadcast controller also drops an event when no one is
-/// listening rather than buffering it forever — the right default for a live
-/// feed, where a client that (re)connects wants "what is happening now", not a
-/// replay of everything it missed. Durable delivery would be a log or a queue,
-/// which is deliberately not what this is.
-class UserEvents {
-  final _controller = StreamController<SseEvent>.broadcast();
-
-  /// The live feed. Each subscription is independent, so an SSE client
-  /// disconnecting (its `c.sse` body cancelling) tears down only that one
-  /// subscription and leaves the controller and every other subscriber intact.
-  Stream<SseEvent> get stream => _controller.stream;
-
-  /// Publishes one mutation. [kind] (`created`, `updated`, `deleted`) is the SSE
-  /// `event:` name an `EventSource` keys its listener on; the payload is a small
-  /// JSON object naming the affected id, so a client learns *what* changed
-  /// without the feed having to embed the whole row.
-  void publish(String kind, String id) => _controller.add(
-    SseEvent(jsonEncode({'kind': kind, 'id': id}), event: kind),
-  );
-}
+/// A [Bus] delivers at-most-once with no replay (see keta_bus's README): a
+/// subscriber that starts listening after a mutation simply does not see it,
+/// exactly the "what is happening now, not a backlog" semantics the SSE feed
+/// always had.
+Stream<SseEvent> userEventsStream(Bus bus) =>
+    bus.subscribe(usersTopic).map((raw) {
+      final msg = raw as Map<String, Object?>;
+      return SseEvent(jsonEncode(msg), event: msg['kind'] as String);
+    });

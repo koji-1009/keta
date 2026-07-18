@@ -1,5 +1,4 @@
 import 'package:keta/keta.dart';
-import 'package:keta_db/keta_db.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:keta_otel/keta_otel.dart';
 
@@ -36,8 +35,20 @@ import 'routes/admin/_middleware.dart' as $mw$admin; // ignore: directives_order
 /// timeout, enforceSecurity and the handlers all signal by throwing, so recover
 /// is what turns them into responses; cors adds headers to a response, and
 /// `chain` skips that on an error, so a 504 raised above cors would reach the
-/// browser as an opaque CORS failure instead of the status it is. tx is
-/// innermost, so a request the gate rejects opens no transaction.
+/// browser as an opaque CORS failure instead of the status it is.
+///
+/// There is no app-wide (nor group-scoped) `tx()` here, unlike `../register`.
+/// keta_files' directory-scoped middleware (`ScopedMiddleware`, see
+/// `routes/admin/_middleware.dart`) applies to every verb a route file serves
+/// alike — `Exported.bind` wraps `get`/`post`/`put`/`delete` in the exact same
+/// chain (see keta_files' `Exported.bind` doc) — so there is no keta_files
+/// equivalent of `app.group('/users').use(tx())` scoping a transaction to only
+/// the write verbs of a file that also serves reads (`routes/users.dart` and
+/// `routes/users/_id.dart` both do). The write handlers open their own
+/// transaction directly instead — `c.env.db.transaction((conn) => ...)`, no
+/// `tx()` middleware and no `txConn` Key — which scopes it even tighter than a
+/// route group would (to exactly the write handler's own body) and needs
+/// nothing this router doesn't already have.
 App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
   // Scoped here, not a global: otel records into this registry and
   // routes/metrics.dart scrapes it, and two apps in one isolate must not share
@@ -51,8 +62,7 @@ App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
     ..use(timeout(requestTimeout))
     ..use(otel(metrics: metrics))
     ..use(provideMetrics(metrics))
-    ..use(enforceSecurity(securityPolicy()))
-    ..use(tx());
+    ..use(enforceSecurity(securityPolicy()));
   register(app);
   return app;
 }

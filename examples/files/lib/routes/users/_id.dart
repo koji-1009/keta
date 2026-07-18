@@ -1,5 +1,4 @@
 import 'package:keta/keta.dart';
-import 'package:keta_db/keta_db.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
@@ -25,6 +24,9 @@ final exported = Exported<Env>(
       summary: 'Fetch a user',
     ),
   ),
+  // Neither write below sits under a tx() middleware — see lib/routes.dart's
+  // buildApp doc: keta_files has no per-verb middleware, and this file also
+  // serves GET, so each write opens its own transaction directly instead.
   put: Serve(
     // A write with no matching row is a 404, not a silent no-op.
     (c) async {
@@ -39,9 +41,11 @@ final exported = Exported<Env>(
           'body id "${dto.id}" does not match path id "$pathId"',
         );
       }
-      final changed = await c.get(txConn).execute(
-        'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
-        [dto.name, dto.age, dto.role.name, dto.tags.join(','), pathId],
+      final changed = await c.env.db.transaction(
+        (conn) => conn.execute(
+          'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
+          [dto.name, dto.age, dto.role.name, dto.tags.join(','), pathId],
+        ),
       );
       if (changed == 0) throw const NotFound('user not found');
       return c.json(dto.toJson());
@@ -54,9 +58,10 @@ final exported = Exported<Env>(
   ),
   delete: Serve(
     (c) async {
-      final changed = await c.get(txConn).execute(
-        'delete from users where id = ?',
-        [c.param<String>('id')],
+      final changed = await c.env.db.transaction(
+        (conn) => conn.execute('delete from users where id = ?', [
+          c.param<String>('id'),
+        ]),
       );
       if (changed == 0) throw const NotFound('user not found');
       return Response(204);

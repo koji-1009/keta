@@ -52,6 +52,50 @@ insecure connection outright. A production deployment over TLS must add
 `secure: true`; `SameSite.none` would require it by construction (`SetCookie`
 enforces that pairing at construction, so the mistake is unrepresentable).
 
+## Password storage: this demo has none — a real app needs hashing
+
+`lib/auth.dart`'s `_credentials` table checks a login password with a plain
+`!=` string comparison against a constant, in-memory map — there is no
+hashing, salting, or storage of any kind here, because there is no real
+credential store to protect: `_credentials` is the same kind of demo
+stand-in `_tokens` is for bearer. A real application storing passwords must
+never compare or persist them as plain text; use a purpose-built,
+slow-by-design hash from the **argon2 family** (Argon2id is the current
+general recommendation) via one of the argon2 packages on pub.dev, hash at
+signup, and compare with the algorithm's own verify function at login —
+never `==`/`!=` on a hash or a plaintext password.
+
+## Revocation closes a live connection, from the server's side
+
+`/me/events` is a second SSE feed, alongside `../register`'s `/users/events`,
+demonstrating a different pattern on the same primitives (`keta_bus`,
+`c.sse`): **a token/session is revoked → a revocation notice is published on
+the bus → the server closes the affected live connection itself.** `/logout`
+(`lib/auth.dart`'s `logout`) both removes the session from the store (the
+ordinary auth consequence — `/me` 401s afterward, same as always) and
+publishes `{"kind":"revoked"}` to that session's own bus topic
+(`sessionTopic(sid)`, one topic per session id). `/me/events` subscribes to
+exactly that topic and streams what arrives; the moment it sees `revoked`, its
+generator function `return`s — which ends the source stream `c.sse` is
+built on, and keta closes the HTTP response the instant its source ends (see
+`packages/keta/lib/src/sse.dart`). The client never has to notice anything or
+hang up: the server tears the connection down from its own side, in the same
+tick the revocation notice is delivered.
+
+This is a demonstrated **application pattern**, not a keta mechanism — keta
+supplies `Bus`, `c.sse`, and nothing else; the "revoke → publish → the stream
+watches its own topic and ends itself" shape lives entirely in
+`lib/auth.dart`. `test/revocation_test.dart` proves the connection actually
+terminates (not merely that a `revoked` event was sent), and that a session
+which is never revoked keeps its feed open indefinitely — the close is
+conditional on revocation, not a timeout or a fixed lifetime.
+
+This example runs single-isolate, so its bus is a plain `InMemoryBus`
+(`lib/env.dart`, Env-owned, closed on shutdown like keta_otel's exporter); see
+`../register`'s `Env` and `bin/main.dart` for the `IsolateBus` wiring a
+multi-isolate app needs for the same pattern to reach a revocation published
+on one isolate to a connection held open on another.
+
 ## Run
 
 ```bash

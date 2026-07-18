@@ -1,19 +1,22 @@
 import 'package:keta/keta.dart';
-import 'package:keta_db/keta_db.dart';
 import 'package:keta_openapi/keta_openapi.dart';
 import 'package:keta_otel/keta_otel.dart';
 
 import 'auth.dart';
 import 'env.dart';
-import 'events.dart';
 import 'routes.dart';
 
 /// Builds the fully-configured application: middleware plus every route. Pure
 /// and env-free, so it can build the OpenAPI shadow and be re-run per isolate.
 ///
 /// The middleware stack shows the common cross-cutting concerns: access logging,
-/// CORS, a request deadline, request metrics, error recovery, authentication,
-/// and a transaction per request.
+/// CORS, a request deadline, request metrics, error recovery, and
+/// authentication. `tx()` is NOT here — it used to be, app-wide, but that taxed
+/// every read (and would have pinned a writer-pool connection for the whole
+/// open-ended lifetime of `/users/events`' SSE stream) for no reason. It is
+/// scoped instead to the `/users` write group inside [register] — see that
+/// function's comment and keta_db's `tx()` doc for why that is the approved
+/// shape.
 ///
 /// Order is not decoration, and the rule is one line: everything that can throw
 /// must sit BELOW recover, and everything that decorates a response must sit
@@ -25,8 +28,7 @@ import 'routes.dart';
 /// — `chain` skips that callback on an error, so a 504 or 401 raised above cors
 /// would reach the browser with no access-control-allow-origin and be reported
 /// as an opaque CORS failure instead of the status it is. accessLog is
-/// outermost so it records what was actually sent, rejections included. tx is
-/// innermost, so a request rejected by the gate opens no transaction.
+/// outermost so it records what was actually sent, rejections included.
 ///
 /// Note that the gate applies to unmatched paths too: an anonymous request to a
 /// URL that does not exist is answered 401, not 404 — the API declines to tell
@@ -36,19 +38,14 @@ import 'routes.dart';
 /// untested ordering rule is a comment, not a rule.
 App<Env> buildApp({Duration requestTimeout = const Duration(seconds: 10)}) {
   final metrics = MetricsRegistry();
-  // Scoped here, not a global: the write handlers and the SSE feed share this
-  // one bus, but two apps built in one isolate (every test that calls buildApp)
-  // must not cross-talk — the same reason `metrics` is a local.
-  final events = UserEvents();
   final app = App<Env>()
     ..use(accessLog())
     ..use(cors(allowOrigins: const ['*']))
     ..use(recover())
     ..use(timeout(requestTimeout))
     ..use(otel(metrics: metrics))
-    ..use(enforceSecurity(securityPolicy()))
-    ..use(tx());
-  register(app, events);
+    ..use(enforceSecurity(securityPolicy()));
+  register(app);
   // Metrics are not public: apiKey rather than the bearer everything else uses,
   // so the document carries two schemes and the gate honours both.
   app.get(

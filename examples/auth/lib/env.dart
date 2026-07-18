@@ -1,8 +1,9 @@
 import 'package:keta/keta.dart';
+import 'package:keta_bus/keta_bus.dart';
 
 /// This reference only needs a logger — no database — so Env implements just
 /// [HasLog]. Auth is orthogonal to persistence.
-class Env implements HasLog {
+class Env implements HasLog, Disposable {
   Env(this.log);
   @override
   final Log log;
@@ -16,5 +17,16 @@ class Env implements HasLog {
   /// (`SetCookie`, `c.cookie`) are all keta provides, and they suffice.
   final Map<String, String> sessions = {};
 
+  /// The revocation channel `/me/events` streams from and `logout` publishes
+  /// to (see lib/auth.dart) — Env-owned and closed on shutdown, same as
+  /// keta_otel's exporter. This example runs single-isolate (`bin/main.dart`
+  /// does not pass `isolates:`), so an [InMemoryBus] is the honest choice; see
+  /// `../register`'s `Env` for the `IsolateBus` shape a multi-isolate app
+  /// would need instead.
+  final Bus bus = InMemoryBus();
+
   static Future<Env> boot() async => Env(StdoutLog());
+
+  @override
+  Future<void> close() => bus.close();
 }

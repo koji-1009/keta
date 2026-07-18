@@ -117,21 +117,18 @@ class UserList {
   };
 }
 
-const userListSchema = Schema(
-  'UserList',
-  {
-    'type': 'object',
-    'required': ['items', 'total'],
-    'properties': {
-      'items': {
-        'type': 'array',
-        'items': {r'$ref': '#/components/schemas/UserDto'},
-      },
-      'total': {'type': 'integer'},
-    },
-  },
-  deps: [userDtoSchema],
-);
+/// The canonical `{"items", "total"}` envelope, built by [listSchema] instead
+/// of hand-written — identical in shape to the `const Schema` this replaces,
+/// except [listSchema] closes the object (`additionalProperties: false`),
+/// which the hand-written version left open; adopted rather than fought, since
+/// an unknown key here was never meant to be legal, just never checked. Mirrors
+/// `../register`'s `lib/user_dto.dart` exactly (same [Schema] name, same
+/// deps), which is what keeps `test/files_test.dart`'s cross-example OpenAPI
+/// diff green. [listSchema] builds a new [Schema] per call rather than reading
+/// a `const`, so — unlike the constant this replaces — `userListSchema` is a
+/// `final`, and the `RouteDoc` embedding it can no longer be `const` (see
+/// lib/routes/users.dart).
+final userListSchema = listSchema(userDtoSchema);
 
 /// The multipart upload form — a request-body schema, not a DTO. The file field
 /// is `format: binary`; the app reads it via keta_multipart, not `fromJson`.

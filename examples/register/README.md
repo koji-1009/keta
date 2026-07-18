@@ -15,8 +15,10 @@ dart run bin/main.dart
 (migrations are wired into startup, not run by hand). Stop with SIGTERM for a
 graceful shutdown. For a watch-and-restart dev loop: `dart run tool/dev.dart`.
 
-Configuration is environment-only (§9): `KETA_DB_PATH` (default `app.db`) and
-`PORT` (default `8080`).
+Configuration is environment-only (§9): `KETA_DB_PATH` (default `app.db`),
+`PORT` (default `8080`), `KETA_ISOLATES` (default `1` — see "The SSE feed
+runs on a bus" below for what changes above 1), and `KETA_RDS_URL` (unset by
+default — see "Readiness" below).
 
 The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting concerns, in registration order: `accessLog`, `cors`, `recover`, `timeout`, request metrics (`otel`), `enforceSecurity`, and a `tx` per request. The order is load-bearing, not decoration — see the comment on `buildApp` for why (everything that can throw sits below `recover`; everything that decorates a response sits above it).
 
@@ -25,6 +27,7 @@ The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting
 | Method | Path                       | Description                          |
 |--------|----------------------------|--------------------------------------|
 | GET    | `/health`                  | Liveness check                       |
+| GET    | `/ready`                   | Readiness probe (`RdsDb.poolStats`-backed, when configured) |
 | GET    | `/users`                   | List users (`?limit`, `?role`); nested `UserList` |
 | GET    | `/users/by-role/:role`     | List users of one role (typed `Role` capture) |
 | GET    | `/users/events`            | Live feed of create/update/delete (SSE) |
@@ -49,6 +52,94 @@ curl -sX PUT localhost:8080/users/1 -H 'content-type: application/json' -H 'auth
 curl -sX DELETE localhost:8080/users/1 -H 'authorization: Bearer t-admin' -o /dev/null -w '%{http_code}\n'
 curl -s localhost:8080/metrics -H 'x-api-key: k-metrics'
 ```
+
+## The SSE feed runs on a bus, and can fan out across isolates
+
+`/users/events` used to stream from an in-process `StreamController.broadcast()`
+scoped to one `buildApp()` call — which only ever reached subscribers in the
+SAME isolate. `serve(isolates: n)` runs request handlers across worker
+isolates, so a write landing on one isolate never reached a subscriber parked
+on another. `lib/events.dart` now streams from `c.env.bus` instead (a
+[`keta_bus`](../../packages/keta_bus) `Bus`, Env-owned and closed on
+shutdown — see `lib/env.dart`): the write handlers `publish` to the `users`
+topic and `/users/events` `subscribe`s to it, and the same `publish`/
+`subscribe` calls work unchanged whether the bus is single-isolate or not.
+
+Which `Bus` implementation a run gets depends on `KETA_ISOLATES`
+(`bin/main.dart`):
+
+- **`KETA_ISOLATES` unset or `1`** (the default): `Env.boot` wires an
+  `InMemoryBus` — the honest choice for one isolate, nothing to fan out
+  across.
+- **`KETA_ISOLATES` > 1**: `bin/main.dart` creates the `IsolateBus` **hub**
+  itself, before `serve` is ever called, and captures its `connectPort` (a
+  `SendPort` — the one piece of hub state that can actually cross into a
+  spawned isolate). `Env.connectBus(port)` — the `boot` closure handed to
+  `serve` — attaches to that hub via `IsolateBus.connect` in EVERY isolate
+  `serve` owns, isolate 0 included: `serve` invokes the same `boot` closure
+  identically in every isolate it boots, so there is no "this is the main
+  isolate" special case to write — only the hub itself, created once outside
+  any isolate's `Env`, is not a connection.
+
+```bash
+KETA_ISOLATES=3 dart run bin/main.dart   # three isolates, one shared feed
+```
+
+`test/bus_wiring_test.dart` proves the multi-isolate fan-out claim at the
+level `Env`/`lib/events.dart` actually operate at: it spawns a REAL second
+isolate that attaches to a hub via `IsolateBus.connect` (exactly what
+`Env.connectBus` does) and publishes a `users` event, and asserts a
+subscriber in the test's own isolate receives it through
+`userEventsStream`. It does not attempt a full `serve(isolates: n)` test over
+real HTTP — which isolate's listener accepts a given connection is an OS/
+transport scheduling detail no test can pin, so that version would be flaky
+by construction; the test file's own doc comment says exactly what is and
+is not covered.
+
+## `tx()` is scoped to the write group, not the whole app
+
+`tx()` (keta_db) pins a **writer**-pool connection for its whole span and
+pays a `BEGIN`/`COMMIT` round trip — mounted app-wide, that taxes every read
+too, and would have pinned a writer connection for `/users/events`' entire
+open-ended SSE lifetime. `lib/routes.dart` scopes it instead to a `/users`
+write group:
+
+```dart
+final writeUsers = app.group('/users')..use(tx());
+writeUsers.on(root).post(...);   // POST /users
+writeUsers.put('/:id', ...);     // PUT /users/:id
+writeUsers.delete('/:id', ...);  // DELETE /users/:id
+```
+
+Every read (`GET /users`, `/users/:id`, `/users/by-role/:role`,
+`/users/:uid/tags/:index`, `/users/events`) is registered directly on `app`
+and reaches the database through `c.env.db.reader`, never through this
+group. `/uploads` writes nothing to the database at all, so it stays off the
+group too. See keta_db's `tx()` doc for the full cost accounting this shape
+exists to avoid.
+
+## Readiness: an example policy over `RdsDb.poolStats`
+
+**Honesty note:** this example's actual datastore is, and remains, SQLite
+(`keta_sqlite`) — nothing here runs against Postgres by default. `/ready` and
+`lib/readiness.dart` exist solely to demonstrate `RdsDb.poolStats`
+(keta_rds), since no runnable example currently uses `RdsDb` as its real
+store; wiring one in wholesale would have meant a second migration dialect
+and a live-Postgres dependency for this example's whole test suite, well
+past what "a plain route demonstrating the accessor" calls for. Instead,
+`lib/env.dart`'s `Env` carries an OPTIONAL `RdsDb? rds`, wired only when
+`KETA_RDS_URL` is set (a `postgres://` URL) — every test in this suite, and a
+default `dart run bin/main.dart`, leaves it `null`.
+
+`lib/readiness.dart`'s `readinessPolicy(RdsPoolStats)` is a pure function —
+not-ready (503) when the writer pool is fully leased AND callers are
+queued (`PoolStats.waiting > 0`), degraded (200) past 80% leased with
+nobody queued yet, ready otherwise. It is one deliberately simple example
+policy, not a prescription; `test/readiness_test.dart` exercises it directly
+against constructed `RdsPoolStats` values, no Postgres connection required.
+`/ready` itself answers `{"status": "ready", ...}` when `rds` is null (every
+test env, and the default run) — `test/readiness_test.dart` covers that
+fallback too.
 
 ## OpenAPI
 
@@ -115,9 +206,11 @@ claim above is a passing test, not just this paragraph.
 ## Layout
 
 - `lib/app.dart` — `buildApp`: the middleware stack (the single assembly point)
-- `lib/routes.dart` — every route, registered on the app
+- `lib/routes.dart` — every route, registered on the app; the `/users` write group
 - `lib/auth.dart` — `apiDefaults`, the demo `SecurityPolicy` and its tokens, `requireAdmin`
-- `lib/env.dart` — the dependency graph (`Db`, `Log`) booted per isolate, from env
+- `lib/env.dart` — the dependency graph (`Db`, `Log`, `Bus`, optional `RdsDb`) booted per isolate, from env
+- `lib/events.dart` — the `users` bus topic and `userEventsStream` (`/users/events`'s SSE projection)
+- `lib/readiness.dart` — `readinessPolicy`, the example `/ready` policy over `RdsDb.poolStats`
 - `lib/user_dto.dart` — the canonical DTOs (`UserDto`, and the nested `UserList`)
 - `migrations/` — `NNNN_name.sql`, applied in order and recorded in `_keta_migrations`
 - `bin/main.dart` — migrate then serve; `tool/` — OpenAPI + dev-server scripts

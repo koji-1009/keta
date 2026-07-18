@@ -49,6 +49,32 @@ dart run keta_files:check           # CI gate: fails if any file is unregistered
 `lib/routes/uploads.dart` (a multipart upload via keta_multipart) shows exactly
 this — a route added as its own file and synced in.
 
+## Writes open their own transaction — keta_files has no per-verb middleware
+
+`../register` scopes `tx()` (keta_db) to a `/users` write group via
+`app.group('/users').use(tx())`, so reads never pay for a transaction they
+don't need. keta_files has no equivalent: `ScopedMiddleware` is
+directory-scoped, and `Exported.bind` wraps every verb a route file serves
+(`get`/`post`/`put`/`delete`) in the identical chain — there is no way to
+mount middleware over only `routes/users.dart`'s `post` slot while leaving
+its `get` slot bare. So the write handlers in `routes/users.dart` and
+`routes/users/_id.dart` open their own transaction directly instead —
+`c.env.db.transaction((conn) => conn.execute(...))`, no `tx()` middleware and
+no `txConn` Key — which scopes it even tighter than a route group would (to
+exactly the write handler's own body). See `lib/routes.dart`'s `buildApp` doc
+for the full reasoning.
+
+## The list envelope is `listSchema`, not hand-written
+
+`lib/user_dto.dart`'s `userListSchema` is `listSchema(userDtoSchema)`
+(keta_openapi) rather than a hand-written `const Schema` — mirrors
+`../register`'s identical change, which is what keeps this section's
+"documents identically" claim (and its test) true. One behavior change comes
+with it: `listSchema` closes the envelope (`additionalProperties: false`),
+which the hand-written version left open. `listSchema` builds a new `Schema`
+per call rather than reading a `const`, so `routes/users.dart`'s `RouteDoc`
+that embeds it is no longer `const` either.
+
 ## Layout
 
 - `lib/routes/` — one file per concern, each with its own `register`
