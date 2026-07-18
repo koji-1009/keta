@@ -1,0 +1,15 @@
+name: keta_bus
+description: >-
+  Ring 1 for keta: a minimal publish/subscribe Bus with at-most-once delivery —
+  an in-memory single-isolate implementation and an isolate-spanning hub for
+  serve(isolates: n). No dependency on keta core; zero third-party packages.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dev_dependencies:
+  test: ^1.25.0
