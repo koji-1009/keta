@@ -1,10 +1,27 @@
 /// lib/readiness.dart's `readinessPolicy` is a pure function over
 /// `RdsPoolStats` — a plain value type (see rds_pool_stats_test.dart in
 /// keta_rds itself), so every branch of the policy is testable here with no
-/// Postgres connection anywhere in sight. The `/ready` ROUTE's own behavior —
-/// what it answers when `Env.rds` is null, which is every test env in this
-/// suite, since none of them sets `KETA_RDS_URL` — is covered separately in
-/// api_test.dart.
+/// Postgres connection anywhere in sight (the `readinessPolicy` group below).
+///
+/// The `/ready` ROUTE's own behavior when `Env.rds` is null — every test env
+/// in this suite, since none of them sets `KETA_RDS_URL` — is covered by THIS
+/// file's own `GET /ready` group right below, not api_test.dart: that suite
+/// has no `/ready` test at all.
+///
+/// What is NOT covered anywhere in this suite: `/ready` with a NON-null
+/// `Env.rds`, wired through a real `RdsDb.poolStats`. There is no fake/stub
+/// seam for that — `RdsDb`'s only public constructors (`RdsDb()`,
+/// `RdsDb.url()`) open a real socket to PostgreSQL (its `RdsDb._` constructor
+/// is private; see keta_rds/lib/src/rds_db.dart), and keta_rds's own
+/// rds_pool_stats_test.dart says as much: "constructing an RdsDb needs a real
+/// connection". `Env.rds` (lib/env.dart) is typed as the concrete `RdsDb?`,
+/// not an interface a test double could implement instead, so injecting a
+/// fake here would mean changing that lib code, and driving the real thing
+/// would mean a live Postgres dependency for this example's test suite — both
+/// of which this example's README ("Readiness" section) explicitly declines
+/// to take on. The policy math itself is fully covered by the
+/// `readinessPolicy` group below; only the thin plumbing that reads
+/// `rds.poolStats` and threads it into that policy is unexercised.
 library;
 
 import 'package:keta/test.dart';

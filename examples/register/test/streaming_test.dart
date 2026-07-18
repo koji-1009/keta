@@ -43,8 +43,9 @@ void main() {
     final env = await bootTestEnv();
     addTearDown(env.close);
     // One app instance so the write handlers and the feed share the same
-    // buildApp-scoped event bus; drive the feed through the pipeline (holding the
-    // open stream), and the writes through an ordinary client on the same app.
+    // Env-owned event bus (see lib/env.dart's Env.bus); drive the feed through
+    // the pipeline (holding the open stream), and the writes through an
+    // ordinary client on the same app.
     final app = buildApp();
     final router = app.compile(env);
     final client = TestClient(app, env);

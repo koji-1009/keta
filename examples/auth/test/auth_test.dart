@@ -140,6 +140,44 @@ void main() {
     });
   });
 
+  group('logout(env, sid) direct call', () {
+    // lib/auth.dart's logout doc says a null or already-removed sid is not an
+    // error, but that path is unreachable over HTTP: a second POST /logout
+    // with the same cookie 401s at enforceSecurity (the session is gone from
+    // env.sessions) before the handler ever runs, so a route-level test could
+    // never actually exercise the idempotent branch. Calling logout directly
+    // is the only seam that reaches it.
+    test('a null sid is a no-op, not an error', () {
+      final env = Env(StdoutLog(flushInterval: Duration.zero));
+      expect(() => logout(env, null), returnsNormally);
+    });
+
+    test(
+      'logging out twice is idempotent: the second call — with a sid already '
+      'removed from the store — is still not an error',
+      () {
+        final env = Env(StdoutLog(flushInterval: Duration.zero));
+        final sid = login(env, 'admin', 'admin-pass');
+        expect(sid, isNotNull);
+        expect(env.sessions.containsKey(sid), isTrue);
+
+        logout(env, sid);
+        expect(env.sessions.containsKey(sid), isFalse);
+
+        // The sid is already gone; logging out again must not throw, and
+        // publishing to a topic nobody is listening on is simply dropped
+        // (keta_bus's at-most-once contract), not a failure.
+        expect(() => logout(env, sid), returnsNormally);
+      },
+    );
+
+    test('an sid nobody ever logged in with is also a no-op', () {
+      final env = Env(StdoutLog(flushInterval: Duration.zero));
+      expect(() => logout(env, 'never-existed'), returnsNormally);
+      expect(env.sessions, isEmpty);
+    });
+  });
+
   group('openapi conformance', () {
     test('the same declaration drives the OpenAPI output', () {
       final doc = buildOpenApi().toJson();

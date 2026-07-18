@@ -60,13 +60,16 @@ void main() {
     expect(event.data, contains('"id":"cross-isolate-1"'));
   });
 
-  test('Env.boot (single isolate) and Env.connectBus (isolates: n) both '
-      'satisfy the same Bus contract userEventsStream relies on', () async {
-    // Not a duplicate of keta_bus's own suite (which already proves
-    // InMemoryBus and IsolateBus behave identically) — this pins that THIS
-    // example's usersTopic/userEventsStream plumbing works unchanged
-    // against either seam, which is the thing that could actually regress
-    // here.
+  test('InMemoryBus and IsolateBus — the two Bus implementations Env.boot and '
+      'Env.connectBus each choose between — both satisfy the same contract '
+      'userEventsStream relies on', () async {
+    // Exercises the two Bus implementations directly, NOT through Env.boot/
+    // Env.connectBus themselves (those also open a real SqliteDb and apply
+    // migrations, which this test has no need to drag in). Not a duplicate
+    // of keta_bus's own suite (which already proves InMemoryBus and
+    // IsolateBus behave identically) — this pins that THIS example's
+    // usersTopic/userEventsStream plumbing works unchanged against either
+    // seam, which is the thing that could actually regress here.
     final inMemory = InMemoryBus();
     addTearDown(inMemory.close);
     final viaInMemory = userEventsStream(inMemory).first;
