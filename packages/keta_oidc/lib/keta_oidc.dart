@@ -36,8 +36,13 @@
 ///   `package:keta_native`), caching each key's native conversion by [Jwk]
 ///   identity and doing the JOSE `r ‖ s` → DER adaptation for ES*.
 ///
-/// A later wave adds the oidc() middleware; it does not change what is exported
-/// here.
+/// The middleware layer wires it all into keta's request pipeline:
+///
+/// * [oidc] — Bearer-JWT authentication middleware (RFC 6750): extract, resolve,
+///   validate, and inject an [OidcPrincipal]; answer 401/403/503/500 otherwise.
+/// * [requireScopes] — scope authorization (AND) after [oidc].
+/// * [OidcPrincipal] / [oidcPrincipal] — the authenticated caller and the shared
+///   [Key] a handler reads it back under.
 library;
 
 export 'src/jwks/http_jwks_source.dart'
@@ -62,4 +67,6 @@ export 'src/jwt/rejection.dart'
         JwtUnknownKey;
 export 'src/jwt/signature_verifier.dart' show SignatureVerifier;
 export 'src/jwt/validator.dart' show JwtValidator;
+export 'src/middleware/oidc.dart' show oidc, requireScopes;
+export 'src/middleware/principal.dart' show OidcPrincipal, oidcPrincipal;
 export 'src/verify/boringssl_verifier.dart' show BoringSslVerifier;
