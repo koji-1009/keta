@@ -54,6 +54,24 @@ void main() {
     },
   );
 
+  test(
+    'a 405 unions the Allow header across a literal and a capture path',
+    () async {
+      final app = App<Env>();
+      // Both terminate on /items/active: the literal branch (GET) and the
+      // capture branch (POST). A method that hits neither must advertise both.
+      app.get('/items/active', (c) => c.text('literal'));
+      app.post('/items/:id', (c) => c.text('capture'));
+      final client = TestClient(app, newEnv());
+
+      final r = await client.delete('/items/active');
+      expect(r.status, 405);
+      // Union, literal branch first: GET (from /items/active), then POST (from
+      // /items/:capture).
+      expect(r.headers['allow'], 'GET, POST');
+    },
+  );
+
   test('App.routes exposes registered routes in order with their docs', () {
     final app = App<Env>();
     app.get('/users/:id', (c) => c.text(''), doc: 'get-user');

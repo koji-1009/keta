@@ -22,60 +22,25 @@ class Response {
     this.body = '',
     this.upgrade,
   }) : headers = _normalize(headers) {
-    // Enforced unconditionally (not via assert): in a release binary an invalid
-    // body would otherwise be written as a silent empty 200.
-    if (body is! String && body is! List<int> && body is! Stream<List<int>>) {
-      throw ArgumentError.value(
-        body,
-        'body',
-        'must be String, List<int>, or Stream<List<int>>',
-      );
-    }
-    // An upgrade response answers by switching protocols: its status is fixed at
-    // 101 and it carries no body (the switched protocol carries the bytes). A
-    // mismatched status/body here is an authoring defect, caught at the semantic
-    // layer before any transport tries — and fails — to realize it.
-    if (upgrade != null) {
-      if (status != 101) {
-        throw ArgumentError.value(
-          status,
-          'status',
-          'an upgrade response must have status 101 (switching protocols)',
-        );
-      }
-      if (body is! String || (body as String).isNotEmpty) {
-        throw ArgumentError.value(
-          body,
-          'body',
-          'an upgrade response carries no body',
-        );
-      }
-    }
+    _checkBody(status, body, upgrade);
     // Reject CR/LF and other control characters in header names/values here, at
     // the semantic layer — not every Transport rejects them, and a value built
     // from user input must not carry a header-injection (response-splitting)
     // primitive past this boundary.
-    for (final e in this.headers.entries) {
-      if (_hasControlChar(e.key)) {
-        throw ArgumentError.value(
-          e.key,
-          'headers',
-          'header name must not contain control characters',
-        );
-      }
-      for (final value in e.value) {
-        // A field value may carry HTAB (RFC 9110 §5.5: field-value allows
-        // HTAB alongside VCHAR/SP); only CR/LF and the other controls are the
-        // response-splitting primitive to reject.
-        if (_hasControlChar(value, allowTab: true)) {
-          throw ArgumentError.value(
-            value,
-            'headers',
-            'header value must not contain control characters',
-          );
-        }
-      }
-    }
+    _rejectControlChars(this.headers);
+  }
+
+  /// A copy over already-normalized, already-validated header state. The header
+  /// gate (lower-casing, list-copying, control-char rejection) is deliberately
+  /// skipped, so this is ONLY reachable from header state that already passed
+  /// the public gate: [copyWith] carrying `this.headers` unchanged, merging
+  /// freshly-validated additions over it, or a wholesale replacement that was
+  /// itself just normalized and scanned. The body/upgrade invariants are NOT
+  /// header state — [status] and [body] can change across a copy — so they DO
+  /// re-run here: a copy that would hand an upgrade response a body, or move it
+  /// off 101, still throws rather than mint a malformed value.
+  Response._trusted(this.status, this.headers, this.body, this.upgrade) {
+    _checkBody(status, body, upgrade);
   }
 
   /// A JSON response encoded straight to UTF-8 bytes, with `application/json`.
@@ -150,7 +115,7 @@ class Response {
     ),
   );
 
-  /// Returns a copy with only the named fields replaced; every field left
+  /// Returns a copy with only the named fields changed; every field left
   /// unnamed — including [upgrade] — is carried over unchanged.
   ///
   /// This is the one sanctioned way for a middleware to rebuild a response, and
@@ -163,20 +128,60 @@ class Response {
   /// [upgrade] behind. Routing every rebuild through here makes that class of
   /// bug impossible by construction: any field added to [Response] in future is
   /// preserved by default, so a new rebuild site cannot omit it out of ignorance
-  /// of its existence. The constructor's invariants (the 101/empty-body upgrade
-  /// guard, header control-char rejection) re-run on the copy, so a rebuild that
-  /// *would* violate them — e.g. handing an upgrade response a body — throws
-  /// rather than producing a malformed value.
+  /// of its existence.
+  ///
+  /// The header map can change in two mutually-exclusive ways. [headers]
+  /// *replaces* the map wholesale — the historical contract, kept because it is
+  /// the only way a copy can *remove* a header — and, being a full new header
+  /// state of unknown provenance, it passes the full public gate (normalize +
+  /// control-char scan). [addHeaders] *merges over* the existing map: a supplied
+  /// name overrides that name, every other existing header is carried through,
+  /// and only the additions are re-normalized and re-scanned — the existing map
+  /// already passed the gate at its own construction and is trusted as-is, so a
+  /// rebuild that only adds a header (the middleware pattern: cors, etag, gzip)
+  /// does not re-walk every header the handler already set. Passing both is an
+  /// authoring defect and throws. The body/upgrade invariants (the
+  /// 101/empty-body upgrade guard, valid body type) re-run on every copy —
+  /// [status] and [body] can change here — so a rebuild that *would* violate
+  /// them, e.g. handing an upgrade response a body, still throws rather than
+  /// produce a malformed value.
   Response copyWith({
     int? status,
     Map<String, List<String>>? headers,
+    Map<String, List<String>>? addHeaders,
     Object? body,
-  }) => Response(
-    status ?? this.status,
-    headers: headers ?? this.headers,
-    body: body ?? this.body,
-    upgrade: upgrade,
-  );
+  }) {
+    if (headers != null && addHeaders != null) {
+      throw ArgumentError(
+        'pass either headers (replace) or addHeaders (merge), not both',
+      );
+    }
+    final Map<String, List<String>> nextHeaders;
+    if (headers != null) {
+      // Replace: a full new header state of unknown provenance — full gate.
+      nextHeaders = _normalize(headers);
+      _rejectControlChars(nextHeaders);
+    } else if (addHeaders != null) {
+      // Merge: only the additions pass the header gate; they then merge over
+      // the trusted existing map (a supplied name wins).
+      final additions = _normalize(addHeaders);
+      _rejectControlChars(additions);
+      nextHeaders = this.headers.isEmpty
+          ? additions
+          : {...this.headers, ...additions};
+    } else {
+      // Nothing new: the existing map already passed the public gate, so it is
+      // reused as-is — never re-lowercased, re-copied, or re-scanned.
+      nextHeaders = this.headers;
+    }
+    return Response._trusted(
+      status ?? this.status,
+      nextHeaders,
+      body ?? this.body,
+      upgrade,
+    );
+  }
+
   final int status;
 
   /// Header names are lower-cased; each maps to its ordered values (multi-value,
@@ -192,6 +197,64 @@ class Response {
   /// discriminator a transport keys off to choose the upgrade path. See
   /// `Response.upgrade`.
   final Upgrade? upgrade;
+
+  /// Enforces the body/upgrade invariants shared by every constructor. Run
+  /// unconditionally (not via assert): in a release binary an invalid body would
+  /// otherwise be written as a silent empty 200, and an upgrade response answers
+  /// by switching protocols, so its status is fixed at 101 and it carries no
+  /// body (the switched protocol carries the bytes) — a mismatch here is an
+  /// authoring defect, caught at the semantic layer before any transport tries —
+  /// and fails — to realize it.
+  static void _checkBody(int status, Object body, Upgrade? upgrade) {
+    if (body is! String && body is! List<int> && body is! Stream<List<int>>) {
+      throw ArgumentError.value(
+        body,
+        'body',
+        'must be String, List<int>, or Stream<List<int>>',
+      );
+    }
+    if (upgrade != null) {
+      if (status != 101) {
+        throw ArgumentError.value(
+          status,
+          'status',
+          'an upgrade response must have status 101 (switching protocols)',
+        );
+      }
+      if (body is! String || body.isNotEmpty) {
+        throw ArgumentError.value(
+          body,
+          'body',
+          'an upgrade response carries no body',
+        );
+      }
+    }
+  }
+
+  /// Rejects CR/LF and other control characters in the names/values of an
+  /// already-normalized header map — the response-splitting gate. A field value
+  /// may carry HTAB (RFC 9110 §5.5: field-value allows HTAB alongside VCHAR/SP);
+  /// only CR/LF and the other controls are the injection primitive to reject.
+  static void _rejectControlChars(Map<String, List<String>> headers) {
+    for (final e in headers.entries) {
+      if (_hasControlChar(e.key)) {
+        throw ArgumentError.value(
+          e.key,
+          'headers',
+          'header name must not contain control characters',
+        );
+      }
+      for (final value in e.value) {
+        if (_hasControlChar(value, allowTab: true)) {
+          throw ArgumentError.value(
+            value,
+            'headers',
+            'header value must not contain control characters',
+          );
+        }
+      }
+    }
+  }
 
   static bool _hasControlChar(String s, {bool allowTab = false}) {
     for (final u in s.codeUnits) {

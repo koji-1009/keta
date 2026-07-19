@@ -2,6 +2,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'context.dart';
 import 'response.dart';
@@ -93,7 +94,7 @@ final class SseEvent {
   /// This event's UTF-8 wire bytes — what actually flows down the response
   /// stream. Exposed so a caller assembling their own body has the exact
   /// encoding [Context.sse] uses.
-  List<int> encode() => utf8.encode(toWire());
+  Uint8List encode() => utf8.encode(toWire());
 
   static final RegExp _newline = RegExp('\r\n|\r|\n');
 

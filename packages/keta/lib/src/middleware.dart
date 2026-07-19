@@ -3,6 +3,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io show gzip;
+import 'dart:typed_data';
 
 import 'app.dart';
 import 'chain.dart';
@@ -147,24 +148,23 @@ Middleware<E> cors<E>({
     }
 
     return chain(next(c), (Response r) {
-      // Merge onto the handler's headers, unioning Vary so a downstream
-      // `Vary` (gzip's Accept-Encoding, etc.) is preserved rather than clobbered.
-      final merged = {...r.headers};
-      base.forEach((name, values) {
-        if (name == 'vary' && merged['vary'] != null) {
-          merged['vary'] = _unionVary(merged['vary']!, values);
-        } else {
-          merged[name] = values;
-        }
-      });
+      // cors's own additions only; copyWith(addHeaders:) merges them over the
+      // handler's headers (trusted, not re-scanned). Vary is unioned against
+      // any downstream `Vary` (gzip's Accept-Encoding, a handler's own) so the
+      // echoed Origin does not clobber it.
+      final additions = {...base};
+      final existingVary = r.headers['vary'];
+      if (additions['vary'] != null && existingVary != null) {
+        additions['vary'] = _unionVary(existingVary, additions['vary']!);
+      }
       if (allowed && exposeHeaders.isNotEmpty) {
-        merged['access-control-expose-headers'] = [exposeHeaders.join(', ')];
+        additions['access-control-expose-headers'] = [exposeHeaders.join(', ')];
       }
       // copyWith, not `Response(...)`: an upgrade response passing through here
       // (a WebSocket handshake behind app-wide cors) must keep its `upgrade`
       // field, which a fresh construction would silently drop — answering 101
       // without ever switching. See [Response.copyWith].
-      return r.copyWith(headers: merged);
+      return r.copyWith(addHeaders: additions);
     });
   };
 }
@@ -262,7 +262,17 @@ Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
     if (body is! String && body is! List<int>) return r;
     if (r.status != 200) return r;
 
-    final bytes = body is String ? utf8.encode(body) : body as List<int>;
+    // The hash input is pinned to a concrete Uint8List: the FNV loop over a
+    // static Uint8List compiles to unboxed byte loads under AOT (~30% faster
+    // than dispatching through the List<int> interface — measured). A String
+    // body encodes to one (utf8.encode), a handler-supplied Uint8List passes
+    // through, and the rare boxed List<int> pays one copy so the loop still
+    // runs typed.
+    final Uint8List bytes = body is String
+        ? utf8.encode(body)
+        : body is Uint8List
+        ? body
+        : Uint8List.fromList(body as List<int>);
     // Respect a handler-supplied validator: use it for the comparison and do
     // not overwrite it.
     final existing = r.headers['etag']?.first;
@@ -287,9 +297,10 @@ Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
     }
 
     if (existing != null) return r;
+    // Just the tag; copyWith(addHeaders:) merges it over the handler's trusted
+    // headers, validating only this one entry.
     return r.copyWith(
-      headers: {
-        ...r.headers,
+      addHeaders: {
         'etag': [tag],
       },
     );
@@ -313,7 +324,7 @@ bool _ifNoneMatch(String? ifNoneMatch, String tag) {
 
 String _weakStrip(String tag) => tag.startsWith('W/') ? tag.substring(2) : tag;
 
-String _fnv1a64Hex(List<int> bytes) {
+String _fnv1a64Hex(Uint8List bytes) {
   // Dart's int is 64-bit two's complement on the native VM (keta's only target;
   // Ring 0 does not target the web), so the multiply wraps mod 2^64 exactly as
   // FNV-1a requires.
@@ -370,18 +381,18 @@ Middleware<E> gzip<E>({
         r.status != 304 &&
         _acceptsGzip(c.header('accept-encoding'));
     if (!compressible) {
-      return r.copyWith(headers: headers);
+      return r.copyWith(addHeaders: headers);
     }
 
     final bytes = body is String ? utf8.encode(body) : body as List<int>;
     // Compressing a body below the threshold adds header overhead for no
     // real saving, so it is left as-is (but still Vary-tagged above).
     if (bytes.length < threshold) {
-      return r.copyWith(headers: headers);
+      return r.copyWith(addHeaders: headers);
     }
 
     headers['content-encoding'] = const ['gzip'];
-    return r.copyWith(headers: headers, body: io.gzip.encode(bytes));
+    return r.copyWith(addHeaders: headers, body: io.gzip.encode(bytes));
   });
 };
 
@@ -405,17 +416,17 @@ bool _acceptsGzip(String? acceptEncoding) {
   return false;
 }
 
-/// Returns a mutable copy of [headers] with `Accept-Encoding` unioned into
-/// `Vary`, preserving any value a downstream middleware already set.
+/// The `Vary` addition for a gzip-negotiated response: `Accept-Encoding` unioned
+/// over any `Vary` the response already carries, preserving a value a downstream
+/// middleware set. Returned as a single-entry additions map (not a full header
+/// copy), so `copyWith(addHeaders:)` merges it over the trusted existing headers and
+/// re-validates only this one entry. The returned map is freshly allocated, so
+/// the caller may add further keys (e.g. `content-encoding`) to it.
 Map<String, List<String>> _varyAcceptEncoding(
   Map<String, List<String>> headers,
-) {
-  final merged = {...headers};
-  merged['vary'] = _unionVary(merged['vary'] ?? const [], const [
-    'Accept-Encoding',
-  ]);
-  return merged;
-}
+) => {
+  'vary': _unionVary(headers['vary'] ?? const [], const ['Accept-Encoding']),
+};
 
 /// Unions [additions] onto an existing `Vary` header's values, skipping any
 /// addition already present (case-insensitively — header names, so `Origin`

@@ -598,9 +598,15 @@ class _H1Request implements TransportRequest {
     out.persistentConnection = false;
   }
 
+  String? _remoteAddress;
+
+  /// Cached after the first read so an admission key like `c.remoteAddress`
+  /// pays the `connectionInfo` syscall once per request rather than per access.
+  /// After teardown `connectionInfo` is null, resolving to `''` (the caller's
+  /// documented fallback), which is then the cached value.
   @override
   String get remoteAddress =>
-      _request.connectionInfo?.remoteAddress.address ?? '';
+      _remoteAddress ??= _request.connectionInfo?.remoteAddress.address ?? '';
 
   @override
   Map<String, List<String>> get headers {

@@ -40,7 +40,7 @@ Context<E> testContext<E>(
           headers: {
             for (final e in headers.entries) e.key.toLowerCase(): [e.value],
           },
-          remoteAddress: 'test',
+          remoteAddress: () => 'test',
           params: params,
           orderedCaptures: params.values.toList(),
           log: baseLog.withFields({'reqId': 'test', 'route': path}),

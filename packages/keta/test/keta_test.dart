@@ -564,6 +564,66 @@ void main() {
       expect(r.headers['content-type'], ['application/json; charset=utf-8']);
     });
   });
+
+  group('copyWith header semantics', () {
+    final base = Response(
+      200,
+      headers: {
+        'x-a': ['1'],
+        'x-b': ['2'],
+      },
+    );
+
+    test('headers: replaces the map wholesale (the way to remove one)', () {
+      final r = base.copyWith(
+        headers: {
+          'x-c': ['3'],
+        },
+      );
+      expect(r.headers, {
+        'x-c': ['3'],
+      });
+    });
+
+    test('addHeaders: merges over the existing map, supplied name wins', () {
+      final r = base.copyWith(
+        addHeaders: {
+          'x-b': ['9'],
+          'x-c': ['3'],
+        },
+      );
+      expect(r.headers, {
+        'x-a': ['1'],
+        'x-b': ['9'],
+        'x-c': ['3'],
+      });
+    });
+
+    test('addHeaders still rejects control characters in the additions', () {
+      expect(
+        () => base.copyWith(
+          addHeaders: {
+            'x-evil': ['a\r\nb'],
+          },
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('headers and addHeaders together is an authoring defect', () {
+      expect(
+        () => base.copyWith(
+          headers: {
+            'x-c': ['3'],
+          },
+          addHeaders: {
+            'x-d': ['4'],
+          },
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
 }
 
 /// A plain (non-Keta) failure, standing in for an I/O error on the body stream.

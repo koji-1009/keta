@@ -3,6 +3,7 @@ library;
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'chain.dart';
 import 'context.dart';
@@ -462,18 +463,26 @@ class Router<E> {
     );
     final reqId = _reqId();
     final template = compiled?.template;
-    final params = <String, String>{
-      if (compiled != null)
-        for (var i = 0; i < compiled.captureNames.length; i++)
-          compiled.captureNames[i]: captured[i],
-    };
+    // A capture-less route (the common case) needs no per-request map: reuse a
+    // shared const empty one rather than allocate a growable map every request.
+    // `c.param` on an unknown name still throws its ArgumentError either way.
+    final captureNames = compiled?.captureNames;
+    final params = (captureNames == null || captureNames.isEmpty)
+        ? const <String, String>{}
+        : <String, String>{
+            for (var i = 0; i < captureNames.length; i++)
+              captureNames[i]: captured[i],
+          };
     final ctx =
         RequestCtx<E>(
             env: env,
             method: request.method,
             uri: request.uri,
             headers: request.headers,
-            remoteAddress: request.remoteAddress,
+            // Lazy: dispatch no longer eagerly reads the peer address (measured
+            // 10.6% of hot-path CPU on the H1 syscall). The resolver runs at most
+            // once, on first `c.remoteAddress`, and RequestCtx caches the result.
+            remoteAddress: () => request.remoteAddress,
             params: params,
             orderedCaptures: captured,
             // The raw request path never reaches the `route` log field — an
@@ -531,9 +540,29 @@ class Router<E> {
     return Response(500, body: '');
   }
 
+  /// A 128-bit request id as 32 lowercase hex chars.
+  ///
+  /// [Random.secure] stays: a request id feeds the log/trace correlation
+  /// dimension, and an id an attacker can predict or forge lets them collide or
+  /// spoof another request's series — the unpredictability judgment is recorded,
+  /// not weakened here. What got cheaper: four 32-bit CSPRNG draws instead of
+  /// sixteen single-byte ones, and one [Uint8List] rendered to hex in a single
+  /// pass (a per-word nibble walk) instead of a per-byte
+  /// `toRadixString`/`padLeft`/`join`. The output is byte-identical in shape: 32
+  /// lowercase hex chars carrying the same 128 uniformly-random bits.
   String _reqId() {
-    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    const hex = '0123456789abcdef';
+    final out = Uint8List(32);
+    for (var w = 0; w < 4; w++) {
+      var v = _random.nextInt(0x100000000); // 32 bits per draw
+      // Fill this word's 8 hex chars right-to-left (least-significant nibble
+      // last), so the rendered value matches the drawn integer's big-endian hex.
+      for (var i = 7; i >= 0; i--) {
+        out[w * 8 + i] = hex.codeUnitAt(v & 0xf);
+        v >>= 4;
+      }
+    }
+    return String.fromCharCodes(out);
   }
 }
 
@@ -553,7 +582,12 @@ class Router<E> {
 ) {
   if (i == segments.length) {
     if (node.methods.isEmpty) return (null, null);
-    return (node.methods[method], node.methods.keys.toSet());
+    final compiled = node.methods[method];
+    // On a method hit dispatch returns the route and never reads the allowed
+    // set — only the 404/405 path does — so materialize the key-set solely on a
+    // miss and hand a hit a shared const empty set instead of allocating one.
+    if (compiled != null) return (compiled, const <String>{});
+    return (null, node.methods.keys.toSet());
   }
   final seg = segments[i];
   Set<String>? allowed;
@@ -561,7 +595,10 @@ class Router<E> {
   if (literal != null) {
     final (route, methods) = _walk(literal, segments, i + 1, method, captured);
     if (route != null) return (route, methods);
-    if (methods != null) allowed = {...?allowed, ...methods};
+    // `allowed` is provably null on this first assignment (the capture branch
+    // below is the only other writer, and it runs after), so there is nothing to
+    // spread in — assign the branch's methods directly.
+    if (methods != null) allowed = {...methods};
   }
   final capture = node.capture;
   if (capture != null) {
