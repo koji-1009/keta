@@ -43,15 +43,14 @@ void main() {
       expect(loadMigrations(dir.path), isEmpty);
     });
 
-    test('the version, name, and sql are parsed off the filename', () {
+    test('the version and sql are parsed off the filename', () {
       m('0002_add_users.sql', 'create table users (id integer);');
       m('0003_add_users_index.sql');
       final migrations = loadMigrations(dir.path);
+      // The name half of the filename is documentation for humans; only the
+      // version and content are carried (see [Migration]).
       expect(migrations.map((x) => x.version), ['0002', '0003']);
-      expect(migrations.first.name, 'add_users');
       expect(migrations.first.sql, 'create table users (id integer);');
-      // Only the first underscore splits version from name.
-      expect(migrations[1].name, 'add_users_index');
     });
 
     test('migrations are sorted by numeric version, not lexically', () {

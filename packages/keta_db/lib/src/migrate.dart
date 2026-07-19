@@ -8,11 +8,13 @@ import 'package:keta/keta.dart' show KetaException;
 import 'db.dart';
 
 /// One migration file: `NNNN_name.sql`, identified by its numeric [version]
-/// prefix and applied in ascending numeric order.
+/// prefix and applied in ascending numeric order. The name half of the
+/// filename is documentation for humans browsing the directory; it is not
+/// carried here — the ledger, ordering, and drift detection key on [version]
+/// and [checksum] alone.
 class Migration {
-  const Migration(this.version, this.name, this.sql, this.checksum);
+  const Migration(this.version, this.sql, this.checksum);
   final String version;
-  final String name;
   final String sql;
 
   /// FNV-1a 64-bit hex of the migration file's raw bytes, recorded in the
@@ -216,14 +218,7 @@ List<Migration> loadMigrations(String directory) {
     if (sql.trim().isEmpty) {
       throw FormatException('migration file is empty', base);
     }
-    migrations.add(
-      Migration(
-        version,
-        stem.substring(underscore + 1),
-        sql,
-        _fnv1a64Hex(bytes),
-      ),
-    );
+    migrations.add(Migration(version, sql, _fnv1a64Hex(bytes)));
   }
   migrations.sort(
     (a, b) => int.parse(a.version).compareTo(int.parse(b.version)),
