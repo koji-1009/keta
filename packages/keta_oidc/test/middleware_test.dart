@@ -213,6 +213,19 @@ void main() {
       expectInvalid(res, 'the token is expired');
     });
 
+    test('no expiration', () async {
+      // Build a token with no exp: null in the override drops the default exp.
+      final noExp = compactJws(
+        header: {'alg': 'RS256', 'kid': 'k1'},
+        payload: {
+          'iss': 'https://issuer',
+          'aud': 'api://resource',
+          'sub': 'user-1',
+        },
+      );
+      expectInvalid(await run(noExp), 'the token has no expiration');
+    });
+
     test('not yet valid (nbf)', () async {
       final res = await run(
         _token(

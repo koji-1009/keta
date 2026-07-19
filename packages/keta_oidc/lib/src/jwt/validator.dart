@@ -28,8 +28,8 @@ import 'signature_verifier.dart';
 ///    agree with the resolved key (declared `alg`, key type, and EC curve).
 /// 2. **Signature** — verified before any claim is read, so no unverified claim
 ///    is ever trusted.
-/// 3. **Claims** — well-typedness (via [JwtClaims]), then `exp`/`nbf` (with
-///    [leeway]), then `iss`, then `aud`.
+/// 3. **Claims** — well-typedness (via [JwtClaims]), then `exp` (required, with
+///    [leeway]), then `nbf` (with [leeway]), then `iss`, then `aud`.
 ///
 /// Each failure is the corresponding [JwtRejection] subtype; a success returns
 /// the [JwtClaims].
@@ -87,9 +87,10 @@ final class JwtValidator {
   ///
   /// Throws the matching [JwtRejection] subtype otherwise: [JwtAlgorithmNotAllowed]
   /// (algorithm not permitted, or disagreeing with the key), [JwtBadSignature]
-  /// (signature did not verify), [JwtExpired] / [JwtNotYetValid] (temporal),
-  /// [JwtIssuerMismatch], [JwtAudienceMismatch], or [JwtMalformed] (a
-  /// wrong-typed registered claim surfaced while reading claims).
+  /// (signature did not verify), [JwtExpirationRequired] (no `exp` claim),
+  /// [JwtExpired] / [JwtNotYetValid] (temporal), [JwtIssuerMismatch],
+  /// [JwtAudienceMismatch], or [JwtMalformed] (a wrong-typed registered claim
+  /// surfaced while reading claims).
   JwtClaims validate(Jws jws, Jwk key) {
     final algorithm = jws.header.algorithm;
 
@@ -118,8 +119,19 @@ final class JwtValidator {
     final claims = JwtClaims.fromJson(jws.payload);
     final now = _now();
 
+    // `exp` is required — a resource-server token must be expirable (RFC 9068 §4
+    // and keta_oidc's short-TTL revocation model). Symmetric with `iss`/`aud`,
+    // and deliberately not configurable. Checked after the signature (like every
+    // claims check) so a missing `exp` is never reported before the signature is
+    // proven.
     final exp = claims.expiration;
-    if (exp != null && now.isAfter(exp.add(leeway))) {
+    if (exp == null) {
+      throw const JwtExpirationRequired(
+        'token has no "exp" claim; a token this server accepts must be '
+        'expirable',
+      );
+    }
+    if (now.isAfter(exp.add(leeway))) {
       throw JwtExpired(
         'token expired at ${exp.toIso8601String()} '
         '(leeway ${leeway.inSeconds}s, now ${now.toUtc().toIso8601String()})',

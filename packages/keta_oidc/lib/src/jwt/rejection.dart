@@ -73,6 +73,24 @@ final class JwtBadSignature extends JwtRejection {
   const JwtBadSignature(super.message);
 }
 
+/// The token carries no `exp` (expiration) claim at all.
+///
+/// A token an OIDC resource server accepts **must** be expirable: RFC 9068 §4
+/// makes `exp` REQUIRED for JWT access tokens, and keta_oidc's whole revocation
+/// story is short token lifetimes (introspection is a judged absence, E-33) — a
+/// token with no `exp` never expires and would validate forever on a signature
+/// that never has to be reissued, defeating that model. So an absent `exp` is a
+/// rejection, symmetric with the already-required `iss`/`aud`.
+///
+/// This is the **default and only** behavior: there is deliberately no
+/// "allow non-expiring tokens" knob. A concrete use case for one is a future
+/// ruling, not a speculative option added now. It is a distinct sealed reason
+/// (not folded into [JwtExpired]) so a middleware's exhaustive `switch` is
+/// forced to map "no expiry" rather than silently defaulting it.
+final class JwtExpirationRequired extends JwtRejection {
+  const JwtExpirationRequired(super.message);
+}
+
 /// The token is past its `exp` (expiration), accounting for the configured
 /// leeway.
 final class JwtExpired extends JwtRejection {

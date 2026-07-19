@@ -248,6 +248,7 @@ String _describeRejection(JwtRejection rejection) => switch (rejection) {
   JwtMalformed() => 'the token is malformed',
   JwtAlgorithmNotAllowed() => 'the token algorithm is not allowed',
   JwtBadSignature() => 'the token signature is invalid',
+  JwtExpirationRequired() => 'the token has no expiration',
   JwtExpired() => 'the token is expired',
   JwtNotYetValid() => 'the token is not yet valid',
   JwtIssuerMismatch() => 'the token issuer is not accepted',

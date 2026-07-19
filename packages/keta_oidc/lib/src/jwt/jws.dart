@@ -63,7 +63,10 @@ final class Jws {
   ///   — see [decodeBase64Url];
   /// * the header and payload each decode to a JSON **object**;
   /// * the header carries a string `alg` that is in keta_oidc's allowlist (so
-  ///   `none`/`HS*`/`PS*`/unknown are rejected here, before any key is touched).
+  ///   `none`/`HS*`/`PS*`/unknown are rejected here, before any key is touched);
+  /// * the header carries **no** `crit` parameter (RFC 7515 §4.1.11) — keta_oidc
+  ///   implements no critical extension, so any `crit` marks processing this
+  ///   server cannot honor and the token MUST be rejected.
   ///
   /// Parsing is **structural only**: it does not type the claims. The payload is
   /// required to be a JSON object, but whether its registered claims are
@@ -99,6 +102,22 @@ final class Jws {
         'JOSE header "alg" "$algRaw" is not an accepted algorithm — keta_oidc '
         'accepts only RS256/RS384/RS512/ES256/ES384 (asymmetric only; "none", '
         'any HS*, and any PS* are rejected)',
+      );
+    }
+
+    // RFC 7515 §4.1.11: `crit` lists header parameters the recipient MUST
+    // understand and process. keta_oidc implements no critical extension, so any
+    // `crit` names processing it cannot honor — its mere presence makes the JWS
+    // invalid. Reject on presence alone; validating crit's internal shape (a
+    // non-empty array of non-standard names) is unnecessary when every value is
+    // a rejection anyway. Without this, a legitimately-signed token that
+    // *demands* critical processing (e.g. an issuer-marked token-binding
+    // extension) would be silently accepted as a plain bearer token, dropping a
+    // constraint the issuer intended.
+    if (header.containsKey('crit')) {
+      throw const JwtMalformed(
+        'the JOSE header marks extension(s) critical ("crit") that this server '
+        'does not implement',
       );
     }
 

@@ -59,6 +59,7 @@ export 'src/jwt/rejection.dart'
         JwtAlgorithmNotAllowed,
         JwtAudienceMismatch,
         JwtBadSignature,
+        JwtExpirationRequired,
         JwtExpired,
         JwtIssuerMismatch,
         JwtMalformed,

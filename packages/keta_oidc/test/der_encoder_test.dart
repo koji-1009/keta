@@ -96,6 +96,64 @@ void main() {
     });
   });
 
+  group('DER length boundary (the 127/128 question)', () {
+    // For P-256/P-384 the SEQUENCE content is at most 2*(2 + fieldSize + 1)
+    // bytes (102 for P-384), always < 128, so the length octet is always the
+    // single-byte short form and the `0x81` long-form branch is provably dead
+    // for these two curves. This pins the worst case: an all-0xFF r AND s on
+    // P-384 (each magnitude gets a 0x00 sign byte → 49-byte body → 51-byte
+    // INTEGER TLV → 102-byte content). The content-length octet must be a single
+    // byte < 128 (no long form, no off-by-one at the boundary), and the whole
+    // thing must re-parse to the two 48-byte magnitudes.
+    test('all-0xFF r and s on P-384 stays in DER short form (< 128)', () {
+      final raw = Uint8List(96)..fillRange(0, 96, 0xFF);
+      final der = joseEcdsaSignatureToDer(raw, 48)!;
+      expect(der[0], 0x30); // SEQUENCE
+      final lenOctet = der[1];
+      expect(lenOctet, lessThan(0x80), reason: 'must be short-form length');
+      expect(lenOctet, 102); // 2 * (2 + 49) — the documented worst case
+      expect(der.length, 2 + 102);
+      final (r, s) = encodedDerIntegers(der);
+      // Each is 49 bytes: a 0x00 sign byte + 48 magnitude bytes.
+      expect(r.length, 49);
+      expect(r.first, 0x00);
+      expect(s.length, 49);
+      expect(s.first, 0x00);
+    });
+
+    test('all-0xFF r and s on P-256 stays in short form', () {
+      final der = joseEcdsaSignatureToDer(
+        Uint8List(64)..fillRange(0, 64, 0xFF),
+        32,
+      )!;
+      expect(der[1], lessThan(0x80));
+      expect(der[1], 70); // 2 * (2 + 33)
+    });
+
+    test(
+      'high leading-zero density r/s still re-encodes to canonical minimal DER',
+      () {
+        // Drive the leading-zero strip path hard: r and s with 0..fieldSize-1
+        // leading zero bytes, each ending in a high-bit byte to also exercise
+        // the sign-byte prepend. Re-decode must recover the minimal magnitude.
+        for (var zeros = 0; zeros < 32; zeros++) {
+          final raw = Uint8List(64);
+          raw[zeros] = 0xFF; // r: first non-zero byte, high bit set
+          raw[32 + zeros] = 0x80; // s: first non-zero byte, high bit set
+          final der = joseEcdsaSignatureToDer(raw, 32)!;
+          expect(der[1], lessThan(0x80));
+          final (r, s) = encodedDerIntegers(der);
+          // Minimal: leading zeros stripped, one 0x00 sign byte kept.
+          expect(r.first, 0x00, reason: 'zeros=$zeros r sign byte');
+          expect(r[1], 0xFF);
+          expect(r.length, (32 - zeros) + 1);
+          expect(s.first, 0x00, reason: 'zeros=$zeros s sign byte');
+          expect(s.length, (32 - zeros) + 1);
+        }
+      },
+    );
+  });
+
   group('wrong length returns null (never throws)', () {
     test('too long', () {
       expect(joseEcdsaSignatureToDer(Uint8List(96), 32), isNull); // 96 != 64
