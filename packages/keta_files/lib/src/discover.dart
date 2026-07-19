@@ -102,11 +102,11 @@ class Discovery {
 /// scope; the file is not a URL at all.
 const _middlewareFilename = '_middleware.dart';
 
-/// Every `*.dart` file under [routesDir], recursively, with the URL its location
-/// denotes. Sorted by URL, so the manifest is a function of the tree alone and
-/// not of directory listing order.
+/// The route files and the `_middleware.dart` files under [routesDir], from one
+/// walk of the tree. Routes are sorted by URL, so the manifest is a function of
+/// the tree alone and not of directory listing order.
 ///
-/// The mapping, and all of it:
+/// The location→URL mapping, and all of it:
 ///
 ///   routes/index.dart                  → /
 ///   routes/health.dart                 → /health
@@ -117,13 +117,8 @@ const _middlewareFilename = '_middleware.dart';
 /// A leading `_` on a file or directory marks a capture; `index` denotes the
 /// directory itself. Every file under the tree is a route — there is nowhere to
 /// hide a helper, which is what makes the tree readable as the route table.
-List<RouteFile> discoverRouteFiles(
-  String routesDir, {
-  String importBase = 'routes',
-}) => discover(routesDir, importBase: importBase).routes;
-
-/// The route files and the `_middleware.dart` files under [routesDir], from one
-/// walk of the tree. A `_middleware.dart` file is never a route — its directory
+///
+/// A `_middleware.dart` file is never a route — its directory
 /// is its scope — so it is partitioned out before any capture interpretation
 /// and surfaced as a [MiddlewareFile] with the subtree it scopes.
 ///

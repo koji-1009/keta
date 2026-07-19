@@ -9,6 +9,11 @@ import 'dart:io';
 import 'package:keta_files/keta_files.dart';
 import 'package:test/test.dart';
 
+/// The routes half of [discover] — this suite's subject is the file→URL
+/// mapping, so most cases never look at the middleware half.
+List<RouteFile> discoverRouteFiles(String routesDir) =>
+    discover(routesDir).routes;
+
 /// Builds a routes tree on disk. Values are file bodies; a bare `get` export is
 /// enough to be a route.
 Directory tree(Map<String, String> files) {

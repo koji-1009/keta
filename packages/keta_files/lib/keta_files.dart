@@ -18,13 +18,7 @@
 library;
 
 export 'src/discover.dart'
-    show
-        Discovery,
-        MiddlewareFile,
-        RouteFile,
-        discover,
-        discoverRouteFiles,
-        orphanMiddleware;
+    show Discovery, MiddlewareFile, RouteFile, discover, orphanMiddleware;
 export 'src/export.dart'
     show
         Exported,

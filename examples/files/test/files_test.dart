@@ -20,6 +20,11 @@ import 'package:keta_register_example/app.dart' as register;
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 
+/// The routes half of [discover]; the cases below only diff the file→URL
+/// mapping against the manifest.
+List<RouteFile> discoverRouteFiles(String routesDir) =>
+    discover(routesDir).routes;
+
 Future<Env> bootTestEnv() async {
   final db = SqliteDb.memory();
   await applyMigrations(db, directory: 'migrations');
