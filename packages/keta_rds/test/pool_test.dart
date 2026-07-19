@@ -112,6 +112,50 @@ void main() {
       expect(identical(a, b), isTrue); // handed the freed connection
       expect(f.opened, 1);
     });
+
+    test('a timed-out waiter is fully removed: a later release does not hand '
+        'the permit to it, and FIFO continues correctly for the next real '
+        'waiter', () async {
+      // Regression for the waiter queue's O(1) timeout removal: if the
+      // timed-out entry were left in the queue (or the wrong entry were
+      // unlinked), _givePermit's removeFirst() would hand the freed slot to
+      // the dead waiter instead of the live one, hanging `waiting` below
+      // until its own acquireTimeout.
+      final f = Factory();
+      final pool = Pool<FakeConn>(
+        f.open,
+        f.close,
+        maxConnections: 1,
+        acquireTimeout: const Duration(milliseconds: 50),
+      );
+
+      final a = await pool.acquire(); // holds the only slot
+
+      await expectLater(
+        pool.acquire(), // parks, then times out ~50ms later
+        throwsA(isA<Unavailable>()),
+      );
+      // Gone from the queue, not just ignored.
+      expect(pool.stats.waiting, 0);
+
+      // A genuinely new waiter parks after the first one timed out...
+      final waiting = pool.acquire();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(pool.stats.waiting, 1);
+
+      // ...and release() must reach THIS waiter.
+      pool.release(a);
+      final b = await waiting.timeout(
+        const Duration(seconds: 1),
+        onTimeout: () => fail(
+          'release did not reach the live waiter — a stale timed-out '
+          'waiter entry may still be occupying the queue',
+        ),
+      );
+      expect(identical(a, b), isTrue);
+      expect(pool.checkedOut, 1);
+      expect(pool.stats.waiting, 0);
+    });
   });
 
   group('failed open', () {

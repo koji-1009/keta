@@ -99,7 +99,17 @@ class Pool<C> {
   final Duration maxIdleTime;
 
   final ListQueue<_Idle<C>> _idle = ListQueue<_Idle<C>>();
-  final ListQueue<Completer<void>> _waiters = ListQueue<Completer<void>>();
+  // A doubly-linked queue rather than [ListQueue]: [_takePermit] keeps the
+  // [DoubleLinkedQueueEntry] handed back by [DoubleLinkedQueue.addLast] (via
+  // [DoubleLinkedQueue.lastEntry]) for the waiter it just parked, so its
+  // timeout branch can unlink that exact node in O(1) — `entry.remove()` —
+  // instead of [ListQueue.remove]'s linear scan-then-shift. A saturation burst
+  // times out many waiters near together; the queue length is `w`, so an O(w)
+  // removal per timeout makes clearing the burst O(w²), right when the pool
+  // most needs to shed cheaply. FIFO order is unaffected: [_givePermit] still
+  // pops from the front with [DoubleLinkedQueue.removeFirst], itself O(1).
+  final DoubleLinkedQueue<Completer<void>> _waiters =
+      DoubleLinkedQueue<Completer<void>>();
 
   // The resources genuinely checked out right now, by identity. release() is a
   // membership test against this set: a double release, or a resource this pool
@@ -273,11 +283,15 @@ class Pool<C> {
       return Future<void>.value();
     }
     final waiter = Completer<void>();
-    _waiters.add(waiter);
+    _waiters.addLast(waiter);
+    // The entry for the node just appended — grabbed immediately, so the
+    // timeout branch below can unlink exactly this waiter in O(1) regardless
+    // of how many others are queued ahead of or behind it.
+    final entry = _waiters.lastEntry()!;
     return waiter.future.timeout(
       acquireTimeout,
       onTimeout: () {
-        _waiters.remove(waiter);
+        entry.remove();
         throw const Unavailable(
           'database busy: could not acquire a pooled connection in time',
         );
