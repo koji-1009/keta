@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -36,6 +40,13 @@ jobs:
       # build-essential are preinstalled on ubuntu-latest, installed explicitly
       # here so a runner-image change can't silently break the native build.
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev clang
+      # build.yml's BoringSSL reuse under a separate key: the JIT test path
+      # builds different hook configs than the AOT path, and a saved key is
+      # immutable, so sharing build.yml's would never cache the test objects.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .dart_tool/hooks_runner
+          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze --fatal-infos
@@ -44,11 +55,19 @@ jobs:
       # file added but never synced — see packages/keta_files/README.md.
       - name: keta_files:check (examples/files)
         run: (cd examples/files && dart run keta_files:check)
-      - name: Test every package and example
+      # Hook-free, so it cannot contend for .dart_tool/hooks_runner with the
+      # hook-running packages, which stay serial in the loop below.
+      - name: Test keta_lints (background)
+        id: test-lints
+        run: (cd packages/keta_lints && dart test)
+        background: true
+      - name: Test every package and example (keta_lints runs in the background)
         run: |
           for d in packages/*/ examples/*/; do
+            if [ "$d" = "packages/keta_lints/" ]; then continue; fi
             if [ -d "$d/test" ]; then
               echo "=== $d"
               (cd "$d" && dart test)
             fi
           done
+      - wait: [test-lints]
