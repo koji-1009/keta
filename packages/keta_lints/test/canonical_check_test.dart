@@ -70,12 +70,15 @@ class Bad {
 
   group('canonicalDiagnostics — alternate branches', () {
     test('an extra toJson key is reported as drift', () {
+      // The extra key's value is a live field (`id`), so the entry is still
+      // plainly enumerable (the value-shape gate only refuses values the fixer
+      // could not re-emit); the extra WIRE KEY `legacy` is the genuine drift.
       const source = '''
 class Dto {
   final String id;
   Dto({required this.id});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
-  Map<String, Object?> toJson() => {'id': id, 'legacy': 1};
+  Map<String, Object?> toJson() => {'id': id, 'legacy': id};
 }
 ''';
       final d = canonicalDiagnostics(source);
@@ -392,6 +395,71 @@ class Dto {
       );
     },
   );
+
+  group('canonicalDiagnostics — a toJson value the fixer cannot re-emit is '
+      'hand-authored (value-shape gate)', () {
+    test('a getter-backed entry is neither flagged nor rewritten (regression: '
+        'the key-only gate read fullName as an extra key, reported drift, and '
+        'the fix silently deleted the computed entry — a wire change)', () {
+      const source = '''
+class Dto {
+  final String first;
+  final String last;
+  Dto({required this.first, required this.last});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(first: json['first'] as String, last: json['last'] as String);
+  String get fullName => first + last;
+  Map<String, Object?> toJson() => {'first': first, 'last': last, 'fullName': fullName};
+}
+''';
+      // fullName is a getter, not a final field, so its value is one the field
+      // model cannot re-emit — the whole toJson is hand-authored. No drift that
+      // steers the user to a fix, and the fix is byte-for-byte a no-op.
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a computed-expression value is hand-authored too (no false drift, no '
+        'destructive fix)', () {
+      const source = '''
+class Dto {
+  final int price;
+  final int tax;
+  Dto({required this.price, required this.tax});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(price: json['price'] as int, tax: json['tax'] as int);
+  Map<String, Object?> toJson() => {'price': price, 'tax': tax, 'total': price + tax};
+}
+''';
+      // `price + tax` is rooted at no single field, so the field model cannot
+      // re-emit it — hand-authored, left alone.
+      expect(canonicalDiagnostics(source), isEmpty);
+      expect(applyCanonicalFix(source), source);
+    });
+
+    test('a genuine missing-field drift with all-field-rooted values still '
+        'reports and fixes exactly as before (the gate did not over-reject the '
+        'enumerable case)', () {
+      const source = '''
+class Dto {
+  final String id;
+  final String name;
+  Dto({required this.id, required this.name});
+  factory Dto.fromJson(Map<String, Object?> json) =>
+      Dto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final d = canonicalDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_canonical_drift');
+      expect(d.single.message, contains('fields not in toJson: name'));
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("'name': name,"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
+    });
+  });
 
   group('type drift', () {
     test('a fromJson cast that disagrees with the field type is keta_type_drift '

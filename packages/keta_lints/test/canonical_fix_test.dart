@@ -80,7 +80,11 @@ class Dto {
   Dto({required this.a, required this.d});
   factory Dto.fromJson(Map<String, Object?> json) =>
       Dto(a: json['a'] as String, b: json['b'] as String, c: json['c'] as String, d: json['d'] as String);
-  Map<String, Object?> toJson() => {'a': a, 'b': b, 'c': c, 'd': d};
+  // The stale `b`/`c` entries carry a live field value (`a`), so the value-shape
+  // gate still reads toJson as enumerable and it regenerates alongside fromJson —
+  // the point under test is that removing the two adjacent entries from BOTH
+  // members (plus the schema) yields non-overlapping edits, not the values.
+  Map<String, Object?> toJson() => {'a': a, 'b': a, 'c': a, 'd': d};
 }
 
 const dtoSchema = Schema('Dto', {
@@ -106,7 +110,9 @@ class One {
   final String uuid;
   One({required this.uuid});
   factory One.fromJson(Map<String, Object?> json) => One(id: json['id'] as String);
-  Map<String, Object?> toJson() => {'id': id};
+  // The stale wire key is `id` while the value reads the live `uuid` field, so
+  // toJson stays enumerable and the fix renames the key to match the field.
+  Map<String, Object?> toJson() => {'id': uuid};
 }
 
 const oneSchema = Schema('One', {

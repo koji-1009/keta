@@ -16,13 +16,20 @@ List<Diagnostic> contractDrift(
   String file = 'openapi.yaml',
 }) {
   final diagnostics = <Diagnostic>[];
-  void report(String scope, String message) => diagnostics.add(
-    Diagnostic(
-      rule: 'keta_contract_drift',
-      message: message,
-      file: file,
-      scope: scope,
-    ),
+  // Distinct drift AXES on one `$name.$field` scope must carry distinct rule
+  // ids, or their ids (sha256(file|scope|rule)) collide and one finding hides
+  // the other in dedup/suppression bookkeeping. A field present on both sides
+  // can drift in TYPE and in REQUIRED-ness at once — same scope — so each axis
+  // gets its own rule id, exactly as canonical.dart splits keta_canonical_drift
+  // / keta_type_drift / keta_schema_drift per axis for the same reason. The
+  // name-presence and structural findings keep the base id; only the two
+  // co-occurring axes need splitting.
+  void report(
+    String scope,
+    String message, {
+    String rule = 'keta_contract_drift',
+  }) => diagnostics.add(
+    Diagnostic(rule: rule, message: message, file: file, scope: scope),
   );
 
   final oraclePaths = _paths(oracle, 'the contract', report);
@@ -70,7 +77,7 @@ List<Diagnostic> contractDrift(
 void _schemaDrift(
   Map<String, Object?> oracle,
   Map<String, Object?> shadow,
-  void Function(String scope, String message) report,
+  void Function(String scope, String message, {String rule}) report,
 ) {
   final oracleSchemas = _schemas(oracle, 'the contract', report);
   final shadowSchemas = _schemas(shadow, 'the code', report);
@@ -108,6 +115,7 @@ void _schemaDrift(
         report(
           '$name.$field',
           'contract field "$name.$field" is $o but the code has $s; reconcile the type',
+          rule: 'keta_contract_type_drift',
         );
       }
     }
@@ -118,12 +126,14 @@ void _schemaDrift(
       report(
         '$name.$field',
         'contract requires "$name.$field" but the code makes it optional',
+        rule: 'keta_contract_required_drift',
       );
     }
     for (final field in shadowReq.difference(oracleReq)) {
       report(
         '$name.$field',
         'the code requires "$name.$field" but the contract makes it optional',
+        rule: 'keta_contract_required_drift',
       );
     }
   }
@@ -239,7 +249,17 @@ String _typeSignature(Map<String, Object?> prop) {
     return 'array<${_typeSignature((prop['items'] as Map).cast<String, Object?>())}>';
   }
   final values = prop['enum'];
-  if (values is List) return '$type enum[${values.join('|')}]';
+  if (values is List) {
+    // An enum's members are a SET on the wire — reordering the Dart constants
+    // (or the `enum:` list) is not a contract change, so compare order- (and
+    // duplicate-) independently by canonicalizing to a sorted set, the same
+    // set-wise discipline `_requiredNames` uses. Only the COMPARISON key is
+    // normalized; the emitted document keeps its declaration order. The message
+    // still lists every value (now sorted), so a genuine set difference reads
+    // clearly.
+    final members = {for (final v in values) v.toString()}.toList()..sort();
+    return '$type enum[${members.join('|')}]';
+  }
   return type;
 }
 

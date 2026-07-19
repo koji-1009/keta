@@ -34,7 +34,13 @@ void main() {
       final messages = drift.map((d) => d.message).join('\n');
       expect(messages, contains('"post /users"'));
       expect(drift.any((d) => d.message.contains('UserDto.role')), isTrue);
-      expect(drift.every((d) => d.rule == 'keta_contract_drift'), isTrue);
+      // Endpoint- and field-presence findings keep the base rule id; the
+      // required-ness axis carries its own id (Fix 2) so two axes on one
+      // `$name.$field` scope don't hash to a single colliding id.
+      expect(
+        drift.map((d) => d.rule).toSet(),
+        containsAll({'keta_contract_drift', 'keta_contract_required_drift'}),
+      );
       expect(drift.first.id, hasLength(16));
     });
 
@@ -180,6 +186,90 @@ void main() {
         drift.map((d) => d.message).join('\n'),
         contains('"paths" is not a mapping'),
       );
+    });
+  });
+
+  group('contractDrift — distinct axes on one field get distinct ids', () {
+    test('a field that drifts in both type and required-ness yields two '
+        'findings with distinct ids (regression: both once shared '
+        'keta_contract_drift on the same "\$name.\$field" scope, so their ids '
+        'collided and one hid the other)', () {
+      final oracle = {
+        'components': {
+          'schemas': {
+            'U': {
+              'type': 'object',
+              'required': ['a'],
+              'properties': {
+                'a': {'type': 'string'},
+              },
+            },
+          },
+        },
+      };
+      final shadow = {
+        'components': {
+          'schemas': {
+            'U': {
+              'type': 'object',
+              'required': <String>[],
+              'properties': {
+                'a': {'type': 'integer'},
+              },
+            },
+          },
+        },
+      };
+      final onA = contractDrift(
+        oracle,
+        shadow,
+      ).where((d) => d.message.contains('"U.a"')).toList();
+      expect(onA, hasLength(2)); // one type axis, one required axis
+      expect(onA.map((d) => d.rule).toSet(), {
+        'keta_contract_type_drift',
+        'keta_contract_required_drift',
+      });
+      expect(onA.map((d) => d.id).toSet(), hasLength(2)); // distinct ids
+    });
+  });
+
+  group('contractDrift — enum member order is not drift (Fix 3)', () {
+    Map<String, Object?> docWithEnum(List<String> values) => {
+      'components': {
+        'schemas': {
+          'Dto': {
+            'type': 'object',
+            'properties': {
+              'role': {'type': 'string', 'enum': values},
+            },
+          },
+        },
+      },
+    };
+
+    test('reordering the same enum members is not drift (the comparison is '
+        'set-wise)', () {
+      expect(
+        contractDrift(
+          docWithEnum(['a', 'b', 'c']),
+          docWithEnum(['c', 'b', 'a']),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('a genuinely different member set still drifts, and the message names '
+        'the field and lists the members so the difference reads', () {
+      final drift = contractDrift(
+        docWithEnum(['a', 'b']),
+        docWithEnum(['a', 'c']),
+      );
+      expect(drift, isNotEmpty);
+      final msg = drift.map((d) => d.message).join('\n');
+      expect(msg, contains('"Dto.role"'));
+      expect(msg, contains('reconcile the type'));
+      expect(msg, contains('enum[a|b]'));
+      expect(msg, contains('enum[a|c]'));
     });
   });
 

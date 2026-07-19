@@ -161,7 +161,7 @@ void _checkClass(
   // fixer honors by leaving it untouched. This is also where a spread /
   // collection-for / computed-key toJson lands (toJsonKeys returns null), so a
   // hand-authored literal is never misread as an incomplete key set.
-  final jsonKeys = toJsonKeys(dto.toJson!);
+  final jsonKeys = toJsonKeys(dto.toJson!, dto.allFinalFieldNames);
   if (jsonKeys == null) return;
   if (!isCanonicalFromJson(dto.fromJson!, className)) return;
 
@@ -246,7 +246,7 @@ bool _presentMapperDrifted(CanonicalClass dto, String className) {
   final fields = dto.allFinalFieldNames;
   final enumDrift = dto.enumAccessorDrifts;
   if (dto.fromJson == null && dto.toJson != null) {
-    final keys = toJsonKeys(dto.toJson!);
+    final keys = toJsonKeys(dto.toJson!, fields);
     if (keys == null) return false; // hand-modified — fixer leaves it
     return !setEquals(keys, fields) || enumDrift.toJson.isNotEmpty;
   }

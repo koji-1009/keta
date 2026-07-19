@@ -39,7 +39,8 @@ List<Diagnostic> internalAwaitDiagnosticsUnit(
   final diagnostics = <Diagnostic>[];
 
   void report(int offset, int length) {
-    final line = lineInfo.getLocation(offset).lineNumber; // 1-based
+    final location = lineInfo.getLocation(offset);
+    final line = location.lineNumber; // 1-based
     final current = line <= lines.length ? lines[line - 1] : '';
     final previous = line >= 2 ? lines[line - 2] : '';
     if (current.contains('keta:allow-await') ||
@@ -53,7 +54,11 @@ List<Diagnostic> internalAwaitDiagnosticsUnit(
             'await on line $line defeats the synchronous path; use '
             'chain()/guard(), or justify it with // keta:allow-await',
         file: file,
-        scope: 'L$line',
+        // Two awaits on one line share a line number, so the id keys on
+        // line:column, not the line alone. The column is stable against edits
+        // elsewhere in the file (unlike a raw byte offset, which shifts on any
+        // earlier insertion) while still separating same-line awaits.
+        scope: 'L$line:C${location.columnNumber}',
         offset: offset,
         length: length,
       ),

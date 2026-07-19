@@ -45,6 +45,22 @@ void register(app) {
       final rules = routeDiagnostics(source).map((d) => d.rule).toSet();
       expect(rules, containsAll(['keta_param_unknown', 'keta_capture_unused']));
     });
+
+    test('the same unknown capture referenced under two verbs on one path gets '
+        'distinct ids (regression: the method-less "\$path#\$name" scope hashed '
+        'both to one id)', () {
+      const source = '''
+void register(app) {
+  app.get('/u', (c) => c.text(c.param('id')));
+  app.post('/u', (c) => c.text(c.param('id')));
+}
+''';
+      final d = routeDiagnostics(
+        source,
+      ).where((e) => e.rule == 'keta_param_unknown').toList();
+      expect(d, hasLength(2));
+      expect(d.map((e) => e.id).toSet(), hasLength(2));
+    });
   });
 
   group('internalAwaitDiagnostics', () {
@@ -85,6 +101,19 @@ Future<void> g() async {}
       const source =
           'Future<void> f(Stream<int> s) async {\n  // keta:allow-await\n  await for (final _ in s) {}\n}';
       expect(internalAwaitDiagnostics(source), isEmpty);
+    });
+
+    test('two awaits on one line get distinct ids (regression: the "L\$line" '
+        'scope hashed both to one id)', () {
+      const source =
+          'Future<void> f() async { await g(); await g(); }\n'
+          'Future<void> g() async {}';
+      final d = internalAwaitDiagnostics(source);
+      expect(d, hasLength(2));
+      expect(
+        d.map((e) => e.id).toSet(),
+        hasLength(2),
+      ); // line:column disambiguates
     });
   });
 
@@ -263,6 +292,25 @@ void register(app) {
 }
 ''';
       expect(queryDiagnostics(source), isEmpty);
+    });
+
+    test('the same undeclared query name on two routes gets distinct ids '
+        '(regression: the bare-name scope hashed both to one id)', () {
+      const source = '''
+void register(app) {
+  app.get('/a', (c) => c.json({'p': c.query<int>('page')}),
+      doc: const RouteDoc(query: []));
+  app.get('/b', (c) => c.json({'p': c.query<int>('page')}),
+      doc: const RouteDoc(query: []));
+}
+''';
+      final d = queryDiagnostics(source);
+      expect(d, hasLength(2));
+      expect(d.every((e) => e.rule == 'keta_query_undeclared'), isTrue);
+      expect(
+        d.map((e) => e.id).toSet(),
+        hasLength(2),
+      ); // method+path disambiguates
     });
   });
 

@@ -195,7 +195,7 @@ class CanonicalClass {
     }
     // A present mapper the fixer can't recognize is hand-modified: it would be
     // flattened, so the fixer leaves the whole class alone.
-    if (toJson != null && toJsonKeys(toJson!) == null) {
+    if (toJson != null && toJsonKeys(toJson!, allFinalFieldNames) == null) {
       return 'a hand-modified toJson';
     }
     if (fromJson != null && !isCanonicalFromJson(fromJson!, className)) {
@@ -705,24 +705,44 @@ class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
 }
 
 /// The string keys of the map [toJson] returns, or null when the body is not a
-/// *plainly enumerable* key set — not a map literal at all, or a map literal
-/// carrying a spread (`...other`), a collection-`for`, or a non-literal key.
+/// *plainly enumerable* key set — not a map literal at all, a map literal
+/// carrying a spread (`...other`), a collection-`for`, or a non-literal key, OR
+/// an entry whose VALUE is not one the fixer could re-emit from the field model.
 ///
-/// Returning null (rather than a partial set) for those is load-bearing: such a
-/// literal is hand-authored, and reading it as an incomplete key set produced a
-/// false drift *and* let the fixer flatten the member, dropping the spread. A
-/// null here routes both check and fix to the same "leave it alone" posture as
-/// the other hand-modified gates. Conditional entries (`if (x != null) 'k': v`)
-/// are the one composite the fixer itself emits, so they are recognized.
-Set<String>? toJsonKeys(MethodDeclaration toJson) {
+/// Both the key *and* the value shape are gated, for the same reason. The fixer
+/// regenerates a drifted toJson WHOLE, from the final-field model — so an entry
+/// it cannot re-emit is one its regeneration would silently delete. It can only
+/// ever emit a value rooted at a final field ([fieldNames]): `field`, an enum
+/// accessor `field.name`/`field!.wire`, a nested `field.toJson()`, a collection
+/// `field.map(...)…`. A value NOT rooted at a final field — a getter read
+/// (`'fullName': fullName`), a literal (`'legacy': 1`), a computed expression
+/// (`'total': a + b`) — is data the field model cannot express, so the fixer
+/// must not delete it. Reading such a literal as an enumerable key set produced
+/// a false drift *and* let the fixer flatten the member, dropping that value's
+/// contribution to the wire with no warning. Returning null instead routes both
+/// check and fix to the same "leave it alone" posture as the other hand-modified
+/// gates. Conditional entries (`if (x != null) 'k': v`) are the one composite
+/// the fixer itself emits, so they (and their field-rooted value) are recognized.
+///
+/// [fieldNames] is passed in rather than derived here (or returned as structure
+/// for callers to judge) so the value-vs-field decision lives in ONE place: all
+/// callers already hold the final-field set and would otherwise each re-implement
+/// this test, the exact divergence between check and fix this module exists to
+/// prevent. Callers pass the FULL final-field set (`allFinalFieldNames`), the
+/// desired key set drift is measured against.
+Set<String>? toJsonKeys(MethodDeclaration toJson, Set<String> fieldNames) {
   final returned = _returnedMap(toJson);
   if (returned == null) return null;
   final keys = <String>{};
   bool collect(Iterable<CollectionElement> elements) {
     for (final element in elements) {
       switch (element) {
-        case MapLiteralEntry(:final key):
+        case MapLiteralEntry(:final key, :final value):
           if (key is! SimpleStringLiteral) return false; // computed key
+          final root = _valueFieldRoot(value);
+          if (root == null || !fieldNames.contains(root)) {
+            return false; // value the fixer could not re-emit — hand-authored
+          }
           keys.add(key.value);
         case IfElement():
           if (!collect([element.thenElement])) return false;
@@ -737,6 +757,35 @@ Set<String>? toJsonKeys(MethodDeclaration toJson) {
   }
 
   return collect(returned.elements) ? keys : null;
+}
+
+/// The name of the final field a toJson value is rooted at, or null when the
+/// value does not read a single field's state. Walks to the leftmost identifier
+/// through every access shape the fixer emits — a bare `field`, an accessor
+/// `field.name`/`field!.wire`, a call `field.toJson()`/`field!.map(...)`, and
+/// chained forms (`field.map(...).toList()`). A literal, a binary/conditional
+/// expression, or a bare call (`compute()`) has no such root and yields null, so
+/// the caller treats the entry as hand-authored.
+String? _valueFieldRoot(Expression value) {
+  var expr = value;
+  while (true) {
+    switch (expr) {
+      case SimpleIdentifier(:final name):
+        return name;
+      case PrefixedIdentifier(:final prefix):
+        return prefix.name; // `field.name` — prefix is the field
+      case PropertyAccess(:final target):
+        if (target == null) return null;
+        expr = target; // `field!.wire` → PostfixExpression → SimpleIdentifier
+      case MethodInvocation(:final target):
+        if (target == null) return null; // a bare call reads no field
+        expr = target;
+      case PostfixExpression(:final operand):
+        expr = operand; // the `!` in `field!.wire`
+      default:
+        return null;
+    }
+  }
 }
 
 SetOrMapLiteral? _returnedMap(MethodDeclaration toJson) {

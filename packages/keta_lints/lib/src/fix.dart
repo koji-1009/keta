@@ -149,7 +149,7 @@ void _fixClass(
       enumDrift.fromJson.isNotEmpty;
   final toJsonDrifted =
       toJson == null ||
-      !setEquals(toJsonKeys(toJson)!, fieldNames) ||
+      !setEquals(toJsonKeys(toJson, dto.allFinalFieldNames)!, fieldNames) ||
       enumDrift.toJson.isNotEmpty;
   if (!fromJsonDrifted && !toJsonDrifted) {
     return; // mappers already canonical (the Schema was handled above).

@@ -48,20 +48,32 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
   void visitMethodInvocation(MethodInvocation node) {
     if (_verbs.contains(node.methodName.name) && node.target != null) {
       FunctionExpression? handler;
+      String? path;
       for (final arg in node.argumentList.arguments) {
         if (arg is FunctionExpression) {
-          handler = arg;
-          break;
+          handler ??= arg;
+        } else if (arg is SimpleStringLiteral) {
+          path ??= arg.value; // the route template — the verb call's first arg
         }
       }
       if (handler != null) {
-        _check(handler, _namedArg(node.argumentList, 'doc'));
+        _check(
+          node.methodName.name,
+          path ?? '',
+          handler,
+          _namedArg(node.argumentList, 'doc'),
+        );
       }
     }
     super.visitMethodInvocation(node);
   }
 
-  void _check(FunctionExpression handler, Expression? doc) {
+  void _check(
+    String method,
+    String path,
+    FunctionExpression handler,
+    Expression? doc,
+  ) {
     final accesses = <(String, String, SimpleStringLiteral)>[];
     handler.body.accept(_QueryAccessCollector(accesses));
     if (accesses.isEmpty) return;
@@ -78,7 +90,11 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
                 "c.$accessor('$name') is not declared in RouteDoc.query; "
                 "add QueryParam('$name', ...) or fix the name",
             file: file,
-            scope: name,
+            // The same undeclared name can appear on two routes in one file, so
+            // the scope keys on the route (method+path), not the bare name —
+            // otherwise the two findings hash to one id. Method+path is stable
+            // against edits elsewhere, where a byte offset would not be.
+            scope: '$method $path#$name',
             offset: literal.offset,
             length: literal.length,
           ),
@@ -91,7 +107,8 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
                 'query "$name" is declared required but read with tryQuery; '
                 'use c.query for a required parameter (or drop required:)',
             file: file,
-            scope: name,
+            // Route-qualified for the same reason as keta_query_undeclared.
+            scope: '$method $path#$name',
             offset: literal.offset,
             length: literal.length,
           ),

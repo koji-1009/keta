@@ -50,12 +50,20 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
         args.length >= 2 &&
         args[0] is SimpleStringLiteral &&
         args[1] is FunctionExpression) {
-      _check(args[0] as SimpleStringLiteral, args[1] as FunctionExpression);
+      _check(
+        node.methodName.name,
+        args[0] as SimpleStringLiteral,
+        args[1] as FunctionExpression,
+      );
     }
     super.visitMethodInvocation(node);
   }
 
-  void _check(SimpleStringLiteral pathLiteral, FunctionExpression handler) {
+  void _check(
+    String method,
+    SimpleStringLiteral pathLiteral,
+    FunctionExpression handler,
+  ) {
     final path = pathLiteral.value;
     final captures = _captures(path);
     final used = <String, SimpleStringLiteral>{};
@@ -70,7 +78,11 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
               'c.param(\'$name\') is not a capture in "$path"; '
               'add :$name to the route or fix the name',
           file: file,
-          scope: '$path#$name',
+          // Two verbs on one path can reference the same unknown capture, so the
+          // scope keys on the METHOD too — `POST /p` and `GET /p` are distinct
+          // findings with distinct ids. Method+path names the route stably
+          // (unlike a byte offset, which drifts on any edit above the call).
+          scope: '$method $path#$name',
           offset: at.offset,
           length: at.length,
         ),
@@ -84,7 +96,9 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
               'capture ":$capture" in "$path" is never read via c.param; '
               'read it or remove it from the route',
           file: file,
-          scope: '$path#$capture',
+          // Method-qualified for the same reason as keta_param_unknown above:
+          // the same path registered under two verbs is two distinct findings.
+          scope: '$method $path#$capture',
           offset: pathLiteral.offset,
           length: pathLiteral.length,
         ),
