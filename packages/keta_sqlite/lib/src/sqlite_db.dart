@@ -247,14 +247,31 @@ class SqliteDb implements Db {
     }
   }
 
+  /// Maps [sql]'s result to `List<Map<String, Object?>>`, one map per row.
+  ///
+  /// Builds each map from [ResultSet.rows] (`List<List<Object?>>`, positional,
+  /// 1:1 with [ResultSet.columnNames]) by direct indexing, rather than
+  /// iterating `result` as `Row` objects: each [Row] construction pays a
+  /// defensive copy (`List.unmodifiable(data)`, sqlite3 3.3.4
+  /// result_set.dart:107) and each `row[column]` lookup is a String-keyed
+  /// hashmap probe (`_calculatedIndexes[key]`) — both wasted here, since this
+  /// adapter fully materializes every row into a fresh map anyway. A
+  /// duplicate column name (`SELECT 1 AS x, 2 AS x`) keeps the same result
+  /// either way: `Row`'s map resolves via `_columnNames.lastIndexOf(column)`
+  /// (last occurrence wins), and a forward positional write into the map
+  /// comprehension below also ends on the last occurrence — pinned by a test.
   List<Map<String, Object?>> rawQuery(String sql, List<Object?> params) =>
       _translating(() {
         final result = _db.select(sql, params);
         final columns = result.columnNames;
-        return [
-          for (final row in result)
-            {for (final column in columns) column: _mapValue(row[column])},
-        ];
+        final rows = result.rows;
+        return List<Map<String, Object?>>.generate(rows.length, (i) {
+          final row = rows[i];
+          return {
+            for (var c = 0; c < columns.length; c++)
+              columns[c]: _mapValue(row[c]),
+          };
+        }, growable: false);
       });
 
   int rawExecute(String sql, List<Object?> params) => _translating(() {

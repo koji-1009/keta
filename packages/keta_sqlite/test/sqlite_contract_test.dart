@@ -203,6 +203,14 @@ void main() {
       },
     );
 
+    test('a duplicate column name collapses to its last occurrence', () async {
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      final row = (await db.reader.query('SELECT 1 AS x, 2 AS x')).single;
+      expect(row.length, 1);
+      expect(row['x'], 2);
+    });
+
     test('BLOB results are fixed-length lists', () async {
       final db = SqliteDb.memory();
       addTearDown(db.close);
