@@ -155,6 +155,13 @@ class SqliteDb implements Db {
   /// all) still takes the write lock at `BEGIN`, and so still serializes behind
   /// every other writer — even with [SqliteDb.open]'s `wal: true`, where a
   /// plain read normally would not block on the writer at all.
+  ///
+  /// Inside [f], use the `conn` handed in. A [writer]/[reader] call made from
+  /// within [f] JOINS this open transaction here (the active-tx zone shortcut
+  /// runs it on this same serialized connection without re-locking) — but that
+  /// is a single-writer accident, not the portable contract: on keta_rds the
+  /// same call runs on a separate pooled connection outside the transaction.
+  /// See [Db.transaction] for the cross-adapter rule.
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) {
     if (_inActiveTxZone) {
@@ -164,14 +171,26 @@ class SqliteDb implements Db {
     return _synchronized(
       () => runZoned(() async {
         _currentTx = token;
-        _db.execute('BEGIN IMMEDIATE');
+        // Route BEGIN and COMMIT through _translating, the same wrapper
+        // rawQuery/rawExecute use, so the whole BEGIN..COMMIT span speaks
+        // keta's vocabulary — not just the statements inside `f`. Without this,
+        // a cross-connection lock timeout at `BEGIN IMMEDIATE` (the moment this
+        // adapter deliberately takes the write lock, so it is exactly where a
+        // contending writer surfaces) would escape as a raw SQLITE_BUSY
+        // SqliteException, breaking the loud, timed [Unavailable] the open-time
+        // doc promises. keta_rds wraps its BEGIN/COMMIT/ROLLBACK span the same
+        // way (RdsDb.transaction); this restores that symmetry.
+        _translating(() => _db.execute('BEGIN IMMEDIATE'));
         try {
           final result = await f(_conn);
-          _db.execute('COMMIT');
+          _translating(() => _db.execute('COMMIT'));
           return result;
         } catch (_) {
           // Never let a ROLLBACK failure (e.g. the txn was already closed)
-          // mask the original error.
+          // mask the original error. Left raw, NOT routed through _translating:
+          // its outcome is swallowed either way, so translating the driver's
+          // vocabulary here would only build a keta exception nothing ever
+          // reads — the original error is what rethrows.
           try {
             _db.execute('ROLLBACK');
           } catch (_) {}

@@ -161,5 +161,58 @@ void main() {
       gate.complete();
       await held;
     });
+
+    test('a second connection whose transaction() cannot open (BEGIN blocked) '
+        'gets Unavailable, not a raw SqliteException', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_busy_tx');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/app.db';
+
+      final holder = SqliteDb.open(path);
+      addTearDown(holder.close);
+      await holder.writer.execute('create table t (n integer)');
+
+      // Hold an open write transaction on `holder`: its BEGIN IMMEDIATE takes
+      // SQLite's write lock and does not release it until `gate` completes.
+      final locked = Completer<void>();
+      final gate = Completer<void>();
+      final held = holder.transaction<int>((c) async {
+        await c.execute('insert into t values (1)');
+        locked.complete();
+        await gate.future;
+        return 0;
+      });
+      await locked.future;
+
+      final contender = SqliteDb.open(
+        path,
+        lockTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(contender.close);
+
+      // The contender's transaction() cannot even open: BEGIN IMMEDIATE
+      // contends for the write lock `holder` holds and, past busy_timeout,
+      // sqlite3 raises SQLITE_BUSY *at BEGIN*. Before the fix this escaped as a
+      // raw SqliteException (BEGIN went through the untranslated _db.execute);
+      // now BEGIN is routed through _translating, so the contract the open-time
+      // doc promises — a loud, timed Unavailable — holds for transaction() too,
+      // and the body never runs.
+      var bodyRan = false;
+      await expectLater(
+        contender.transaction<int>((c) async {
+          bodyRan = true;
+          return 0;
+        }),
+        throwsA(isA<Unavailable>().having((e) => e.status, 'status', 503)),
+      );
+      expect(
+        bodyRan,
+        isFalse,
+        reason: 'BEGIN failed, so the body must not run',
+      );
+
+      gate.complete();
+      await held;
+    });
   });
 }
