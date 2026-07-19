@@ -81,11 +81,10 @@ Handler<E> shelfToKeta<E>(shelf.Handler handler, {int maxBodyBytes = 1 << 20}) {
     // through and corrupt the wire). headersAll keeps multi-value headers (e.g.
     // several set-cookie) faithful across the bridge.
     final headers = {...response.headersAll}
-      ..removeWhere(
-        (k, _) =>
-            k.toLowerCase() == 'content-length' ||
-            k.toLowerCase() == 'transfer-encoding',
-      );
+      ..removeWhere((k, _) {
+        final lower = k.toLowerCase();
+        return lower == 'content-length' || lower == 'transfer-encoding';
+      });
     return Response(
       response.statusCode,
       headers: headers,
