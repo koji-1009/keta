@@ -30,8 +30,14 @@
 /// * [JwksUnavailable] / [JwksDiscoveryException] / [JwksMalformed] — the typed,
 ///   non-[JwtRejection] failures of the key source itself.
 ///
-/// Later waves add the oidc() middleware and the BoringSSL-backed
-/// [SignatureVerifier]; neither changes what is exported here.
+/// The production [SignatureVerifier] closes the seam with real crypto:
+///
+/// * [BoringSslVerifier] — verifies RS*/ES* signatures over BoringSSL (via
+///   `package:keta_native`), caching each key's native conversion by [Jwk]
+///   identity and doing the JOSE `r ‖ s` → DER adaptation for ES*.
+///
+/// A later wave adds the oidc() middleware; it does not change what is exported
+/// here.
 library;
 
 export 'src/jwks/http_jwks_source.dart'
@@ -56,3 +62,4 @@ export 'src/jwt/rejection.dart'
         JwtUnknownKey;
 export 'src/jwt/signature_verifier.dart' show SignatureVerifier;
 export 'src/jwt/validator.dart' show JwtValidator;
+export 'src/verify/boringssl_verifier.dart' show BoringSslVerifier;
