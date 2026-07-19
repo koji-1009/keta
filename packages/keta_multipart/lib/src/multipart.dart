@@ -82,6 +82,18 @@ class Part {
   /// The `filename` for a file part, or null for a plain field.
   String? get filename => _disposition('filename');
 
+  /// Memoized result of parsing `content-disposition`, computed at most once
+  /// per part. A real consumer typically reads [name] and [filename] (and
+  /// sometimes both, more than once) off the same part, and the header string
+  /// never changes underneath it — `HeaderValue.parse` is a pure function of
+  /// that string — so re-tokenizing the full RFC 2183 quoted-string grammar
+  /// on every access is pure waste. `null` here means either "not parsed
+  /// yet" or "parsed and failed"; [_dispositionParsed] disambiguates those
+  /// two so a malformed header (which legitimately parses to nothing) is
+  /// also cached rather than re-thrown-and-caught on every read.
+  Map<String, String?>? _dispositionParams;
+  bool _dispositionParsed = false;
+
   /// The raw part body, unbuffered, but still bounded: the returned stream
   /// throws [PayloadTooLarge] the moment cumulative bytes exceed `maxPartBytes`.
   /// A caller that legitimately needs more must raise `maxPartBytes` — the limit
@@ -92,8 +104,10 @@ class Part {
   }
 
   /// The part body buffered into bytes, failing with [PayloadTooLarge] past
-  /// `maxPartBytes`.
-  Future<List<int>> bytes() async {
+  /// `maxPartBytes`. Typed [Uint8List] deliberately — the buffer is contiguous
+  /// bytes, and the concrete static type lets an AOT-compiled consumer loop
+  /// read it unboxed (the same judgment as `Context.bodyBytes`).
+  Future<Uint8List> bytes() async {
     final builder = BytesBuilder(copy: false);
     // Route through [stream] so the per-part limit lives in exactly one place.
     await for (final chunk in stream) {
@@ -154,22 +168,30 @@ class Part {
   }
 
   String? _disposition(String key) {
-    final value = _source.headers['content-disposition'];
-    if (value == null) return null;
-    try {
-      // `HeaderValue.parse` implements the RFC 2183 / 6266 quoted-string rules
-      // that a regex cannot: backslash-escaped quotes inside a quoted value
-      // (`filename="a\"b"`), bare unquoted tokens (legal, emitted by non-browser
-      // clients), and case-insensitive parameter names (all lower-cased). RFC
-      // 5987 extended values (`filename*=`) stay unsupported by design — they
-      // land under the distinct key `filename*`, so a percent-encoded name reads
-      // as absent here rather than being mis-decoded.
-      return HeaderValue.parse(value).parameters[key];
-    } on HttpException {
-      // A malformed header (e.g. an unterminated quote) yields no parameter
-      // rather than tearing down the whole part stream from a synchronous getter.
-      return null;
+    if (!_dispositionParsed) {
+      _dispositionParsed = true;
+      final value = _source.headers['content-disposition'];
+      if (value != null) {
+        try {
+          // `HeaderValue.parse` implements the RFC 2183 / 6266 quoted-string
+          // rules that a regex cannot: backslash-escaped quotes inside a
+          // quoted value (`filename="a\"b"`), bare unquoted tokens (legal,
+          // emitted by non-browser clients), and case-insensitive parameter
+          // names (all lower-cased). RFC 5987 extended values (`filename*=`)
+          // stay unsupported by design — they land under the distinct key
+          // `filename*`, so a percent-encoded name reads as absent here
+          // rather than being mis-decoded.
+          _dispositionParams = HeaderValue.parse(value).parameters;
+        } on HttpException {
+          // A malformed header (e.g. an unterminated quote) yields no
+          // parameters rather than tearing down the whole part stream from a
+          // synchronous getter. Cached as such — every later read of [name]
+          // or [filename] degrades to null again, without re-parsing.
+          _dispositionParams = null;
+        }
+      }
     }
+    return _dispositionParams?[key];
   }
 }
 

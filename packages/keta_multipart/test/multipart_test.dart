@@ -215,6 +215,39 @@ void main() {
       },
     );
 
+    test('name and filename are memoized: repeated reads return identical '
+        'values off the same parse', () async {
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="f"; filename="a.txt"', 'x'),
+      ]);
+      await for (final p in parts(ctx(raw))) {
+        // Read each accessor more than once; a memoized parse must still
+        // agree with itself on every call, not just the first.
+        expect(p.name, 'f');
+        expect(p.name, 'f');
+        expect(p.filename, 'a.txt');
+        expect(p.filename, 'a.txt');
+        expect(p.name, 'f');
+      }
+    });
+
+    test('a malformed disposition header keeps degrading to null on every '
+        'repeated read, not just the first', () async {
+      // Pins the memoized failure case specifically: caching must store
+      // "parsed and failed" distinctly from "not yet parsed", or a later
+      // read could re-attempt the parse (harmless here, but not what
+      // memoization promises) or misbehave in some other way.
+      final raw = body('B', [
+        ('Content-Disposition: form-data; name="unterminated', 'x'),
+      ]);
+      await for (final p in parts(ctx(raw))) {
+        expect(p.name, isNull);
+        expect(p.filename, isNull);
+        expect(p.name, isNull);
+        expect(p.filename, isNull);
+      }
+    });
+
     test(
       'a duplicated parameter is last-wins (current HeaderValue behavior)',
       () async {
