@@ -105,6 +105,25 @@ void main() {
         () => bad.validate('x'),
         throwsAuthoringDefect(['"BadRegex"', 'pattern']),
       );
+      // A failed compile is never cached, so it re-throws on a second call
+      // rather than being masked by the cache.
+      expect(
+        () => bad.validate('y'),
+        throwsAuthoringDefect(['"BadRegex"', 'pattern']),
+      );
+    });
+
+    test('the compiled pattern is reused across calls and schemas (cache is '
+        'transparent)', () {
+      // Two distinct schemas share one pattern string; the compiled RegExp is
+      // memoized on that string, so both must behave identically to a fresh
+      // compile — a match passes, a miss is the same violation, repeatedly.
+      const a = Schema('PatA', {'type': 'string', 'pattern': r'\d{3}'});
+      const b = Schema('PatB', {'type': 'string', 'pattern': r'\d{3}'});
+      expect(a.validate('123'), isEmpty);
+      expect(b.validate('456'), isEmpty);
+      expect(a.validate('ab'), [r'$: "ab" does not match pattern \d{3}']);
+      expect(b.validate('cd'), [r'$: "cd" does not match pattern \d{3}']);
     });
   });
 
@@ -398,6 +417,54 @@ void main() {
       expect(s.validate([1, 2, 1]), [
         r'$: array items at [0] and [2] are equal (uniqueItems)',
       ]);
+    });
+
+    test('an int and its zero-fraction double twin collide (1 vs 1.0)', () {
+      // The scalar fast path uses a HashSet keyed by Dart `==`/`hashCode`, and
+      // `1 == 1.0` with `1.hashCode == 1.0.hashCode`, so the twin is caught
+      // exactly as _jsonEquals (which also treats them equal) would. Pinned
+      // because the fast path would silently diverge if that agreement broke.
+      const s = Schema('Twin', {'type': 'array', 'uniqueItems': true});
+      expect(s.validate(<Object?>[1, 1.0]), [
+        r'$: array items at [0] and [1] are equal (uniqueItems)',
+      ]);
+      // Distinct numeric values (no twin) still pass through the fast path.
+      expect(s.validate(<Object?>[1, 2.0, 3]), isEmpty);
+    });
+
+    test('null and booleans are deduplicated on the scalar fast path', () {
+      const s = Schema('Nullable', {'type': 'array', 'uniqueItems': true});
+      expect(s.validate(<Object?>[null, true, false]), isEmpty);
+      expect(s.validate(<Object?>[null, 1, null]), [
+        r'$: array items at [0] and [2] are equal (uniqueItems)',
+      ]);
+    });
+
+    test('composite fallback: distinct scalars but colliding composites', () {
+      // Scalars precede composites here, so the fast path adds the scalars to
+      // the set, then falls back to the pairwise scan on the first composite —
+      // which finds the two equal lists. The reported pair is the pairwise
+      // one, byte-identical to the pre-optimization output.
+      const s = Schema('Mixed', {'type': 'array', 'uniqueItems': true});
+      expect(
+        s.validate(<Object?>[
+          1,
+          2,
+          [3, 4],
+          [3, 4],
+        ]),
+        [r'$: array items at [2] and [3] are equal (uniqueItems)'],
+      );
+      // No collision anywhere: composites force the pairwise scan, which finds
+      // nothing, so the array is valid.
+      expect(
+        s.validate(<Object?>[
+          1,
+          [2, 3],
+          {'k': 4},
+        ]),
+        isEmpty,
+      );
     });
 
     test('equal nested objects collide by value, not identity', () {

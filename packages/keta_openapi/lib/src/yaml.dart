@@ -103,10 +103,15 @@ const Set<String> _reserved = {
 // invalid inside a double-quoted scalar as a bare NUL.
 final RegExp _control = RegExp(r'[\x00-\x1f\x7f]');
 
-// The C0/DEL controls with no named double-quoted escape (\n, \r, \t cover
-// the other three) — these get \xHH instead, or they'd be emitted raw and
-// violate the double-quoted scalar grammar.
-final RegExp _unnamedControl = RegExp(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]');
+// Every character a double-quoted scalar must escape, in one class: the two
+// structural characters (`\` and `"`) plus the whole C0/DEL control range. The
+// replacer in [_quoteIfNeeded] maps each to its named escape (`\n`, `\r`, `\t`,
+// `\\`, `\"`) or, for a control with no named form, to `\xHH`. A single pass
+// over this class replaces the former six chained scans; it is byte-identical
+// because each source character is rewritten exactly once, so the backslash a
+// named escape introduces is never itself re-escaped (the old first-pass
+// `\`→`\\` ordering guaranteed the same thing).
+final RegExp _quotedEscape = RegExp(r'[\\"\x00-\x1f\x7f]');
 
 String _quoteIfNeeded(String value) {
   final needsQuote =
@@ -116,15 +121,22 @@ String _quoteIfNeeded(String value) {
       _control.hasMatch(value) ||
       _reserved.contains(value.toLowerCase());
   if (!needsQuote) return value;
-  final escaped = value
-      .replaceAll(r'\', r'\\')
-      .replaceAll('"', r'\"')
-      .replaceAll('\n', r'\n')
-      .replaceAll('\r', r'\r')
-      .replaceAll('\t', r'\t')
-      .replaceAllMapped(
-        _unnamedControl,
-        (m) => '\\x${m[0]!.codeUnitAt(0).toRadixString(16).padLeft(2, '0')}',
-      );
+  final escaped = value.replaceAllMapped(_quotedEscape, (m) {
+    final ch = m[0]!;
+    switch (ch) {
+      case '\\':
+        return r'\\';
+      case '"':
+        return r'\"';
+      case '\n':
+        return r'\n';
+      case '\r':
+        return r'\r';
+      case '\t':
+        return r'\t';
+      default:
+        return '\\x${ch.codeUnitAt(0).toRadixString(16).padLeft(2, '0')}';
+    }
+  });
   return '"$escaped"';
 }

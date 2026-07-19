@@ -1,5 +1,7 @@
 library;
 
+import 'dart:collection';
+
 import 'package:keta/keta.dart';
 
 /// A named JSON Schema fragment that is the single source of truth for a type:
@@ -128,7 +130,7 @@ final class Schema {
   /// list — that defect is never the client's to be told about.
   List<String> validate(Object? value) {
     final errors = <String>[];
-    _validate(json, value, r'$', errors, _refIndex(), name);
+    _validate(json, value, _Path.root, errors, _refIndex(), name);
     return errors;
   }
 
@@ -172,7 +174,22 @@ final class Schema {
   }
 
   /// Indexes this schema and its transitive [deps] by their `$ref` target.
+  ///
+  /// The result is memoized in [_refIndexCache], keyed on `this` by identity:
+  /// a [Schema]'s `deps` graph is fixed at construction (the fields are `final`
+  /// and the whole graph is authored as `const`), so the index is a pure
+  /// function of the instance and is safe to build once and reuse across every
+  /// [validate]/[require] call. The walk itself has no posture-(1) throw — its
+  /// only dedup is the silent `containsKey` guard below, which keeps the first
+  /// binding of a duplicated name — so memoizing changes nothing observable:
+  /// the first build wins, exactly as a fresh build's first `walk` did, and the
+  /// graph's immutability means a later build could only reproduce it. Const
+  /// instances are canonicalized, so structurally identical schemas share one
+  /// cache entry (their indexes would be equal anyway); [listSchema]'s
+  /// non-`const` results are distinct instances that each memoize their own.
   Map<String, Schema> _refIndex() {
+    final cached = _refIndexCache[this];
+    if (cached != null) return cached;
     final index = <String, Schema>{};
     void walk(Schema s) {
       final key = '#/components/schemas/${s.name}';
@@ -182,9 +199,18 @@ final class Schema {
     }
 
     walk(this);
+    _refIndexCache[this] = index;
     return index;
   }
 }
+
+/// Per-[Schema] memo of [Schema._refIndex], keyed on the instance by identity.
+/// An [Expando] holds the entry weakly, so it costs nothing once a schema is
+/// unreachable, and it accepts a `const`-canonicalized [Schema] as a key (only
+/// numbers, strings, booleans, `null`, and records are barred — a user class
+/// instance, const or not, is a valid key on this SDK). The `$ref` graph is
+/// immutable, so a cached index never goes stale.
+final Expando<Map<String, Schema>> _refIndexCache = Expando();
 
 /// Builds the canonical list-endpoint envelope: an object [Schema] wrapping
 /// [itemSchema] as a page of results alongside the un-paginated match count.
@@ -230,6 +256,52 @@ Schema listSchema(Schema itemSchema) => Schema(
   deps: [itemSchema],
 );
 
+/// A node in the JSON path to the value currently being validated, carried as a
+/// cheap parent-linked chain instead of an eagerly-built `$.a.b[0]` string.
+///
+/// Every recursion step used to concatenate `'$path.$key'` / `'$path[$i]'` to
+/// descend, materializing a path string for *every* node even when the body is
+/// fully valid and no violation ever cites it — O(depth²) characters of pure
+/// waste on the common path. Descending now allocates one small [_Path] node
+/// (O(1), no character copying), and the dotted/indexed string is built by
+/// [toString] only where a message is actually emitted (`errors.add`, an
+/// authoring [StateError]) — the error path, which is rare. The rendered string
+/// is byte-identical to the old concatenation: [root] renders `$`, [key]
+/// prepends `.` to its segment, [index] wraps it in `[...]`, so a chain
+/// stringifies to exactly the `$.a.b[0]` the old code spelled out.
+final class _Path {
+  const _Path._(this.parent, this.segment);
+
+  /// The document root, `$`.
+  static const _Path root = _Path._(null, r'$');
+
+  final _Path? parent;
+
+  /// This node's own text: `$` at the root, `.key` for a property step, `[i]`
+  /// for an array-index step. The delimiter lives in the segment so [toString]
+  /// is a plain parent-then-self concatenation.
+  final String segment;
+
+  /// A property step: `path.key('city')` renders as `<path>.city`.
+  _Path key(String name) => _Path._(this, '.$name');
+
+  /// An array-index step: `path.index(3)` renders as `<path>[3]`.
+  _Path index(int i) => _Path._(this, '[$i]');
+
+  @override
+  String toString() {
+    if (parent == null) return segment;
+    final buffer = StringBuffer();
+    _write(buffer);
+    return buffer.toString();
+  }
+
+  void _write(StringBuffer buffer) {
+    parent?._write(buffer);
+    buffer.write(segment);
+  }
+}
+
 /// Throws the [StateError] a malformed SCHEMA fragment gets under the class
 /// doc's two-posture rule — never a violation, never a silent pass.
 /// [schemaName] and [path] locate the fragment (the schema currently being
@@ -238,7 +310,7 @@ Schema listSchema(Schema itemSchema) => Schema(
 /// the value found there.
 Never _authoringDefect(
   String schemaName,
-  String path,
+  _Path path,
   String key,
   String problem,
 ) {
@@ -248,7 +320,7 @@ Never _authoringDefect(
 void _validate(
   Map<String, Object?> schema,
   Object? value,
-  String path,
+  _Path path,
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
@@ -368,7 +440,7 @@ void _validate(
 void _validateObject(
   Map<String, Object?> schema,
   Object? value,
-  String path,
+  _Path path,
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
@@ -434,12 +506,12 @@ void _validateObject(
       if (sub is! Map<String, Object?>) {
         _authoringDefect(
           schemaName,
-          '$path.${entry.key}',
+          path.key(entry.key),
           'properties.${entry.key}',
           'must be an object schema fragment, got ${_typeName(sub)}',
         );
       }
-      _validate(sub, v, '$path.${entry.key}', errors, refs, schemaName);
+      _validate(sub, v, path.key(entry.key), errors, refs, schemaName);
     }
   }
   // additionalProperties governs undeclared keys: absent leaves them
@@ -464,7 +536,7 @@ void _validateObject(
         _validate(
           additionalSchema,
           entry.value,
-          '$path.${entry.key}',
+          path.key(entry.key.toString()),
           errors,
           refs,
           schemaName,
@@ -484,7 +556,7 @@ void _validateObject(
 void _validateArray(
   Map<String, Object?> schema,
   Object? value,
-  String path,
+  _Path path,
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
@@ -509,14 +581,14 @@ void _validateArray(
   }
   final items = itemsRaw.cast<String, Object?>();
   for (var i = 0; i < value.length; i++) {
-    _validate(items, value[i], '$path[$i]', errors, refs, schemaName);
+    _validate(items, value[i], path.index(i), errors, refs, schemaName);
   }
 }
 
 void _validateEnum(
   Map<String, Object?> schema,
   Object? value,
-  String path,
+  _Path path,
   List<String> errors,
   String schemaName,
 ) {
@@ -541,7 +613,7 @@ void _validateEnum(
 void _validateOneOf(
   Map<String, Object?> schema,
   Object? value,
-  String path,
+  _Path path,
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
@@ -667,7 +739,7 @@ const _unenforcedValidationKeywords = <String>{
 /// branches so a stray keyword beside either is caught too.
 void _rejectUnenforcedKeywords(
   Map<String, Object?> schema,
-  String path,
+  _Path path,
   String schemaName,
 ) {
   for (final key in schema.keys) {
@@ -702,11 +774,18 @@ const _patternInputCeiling = 4096;
 void _stringKeywords(
   Map<String, Object?> schema,
   String value,
-  String path,
+  _Path path,
   List<String> errors,
   String schemaName,
 ) {
-  final length = value.runes.length;
+  // Counting code points is an O(len) walk of the whole string, but only
+  // `minLength`/`maxLength`/`pattern` ever read the count. A string with no
+  // length constraint (a plain `type: string`, or one carrying only a
+  // `format` annotation) must not pay that walk, so the count is deferred:
+  // `late final` computes it at most once, on the first keyword that needs it,
+  // and never at all otherwise. Behavior is identical — the same code-point
+  // count, just not eagerly materialized.
+  late final int length = value.runes.length;
   var maxLengthExceeded = false;
   if (schema.containsKey('minLength')) {
     final min = _nonNegativeIntKeyword(schema, 'minLength', path, schemaName);
@@ -731,21 +810,11 @@ void _stringKeywords(
         'must be a string, got ${_typeName(raw)}',
       );
     }
-    final RegExp regExp;
-    try {
-      regExp = RegExp(raw);
-    } on FormatException catch (e) {
-      // An uncompilable pattern is the author's mistake, not the client's:
-      // no request could ever make it a valid regular expression. Compiled
-      // unconditionally (before the length gates below) so this authoring
-      // defect surfaces regardless of the instance that happens to arrive.
-      _authoringDefect(
-        schemaName,
-        path,
-        'pattern',
-        'is not a valid regular expression: ${e.message}',
-      );
-    }
+    // Compiled unconditionally (before the length gates below) so an
+    // uncompilable pattern — the author's mistake, unreachable by any request —
+    // surfaces as an authoring defect regardless of the instance that arrives.
+    // The compiled [RegExp] is cached across calls (see [_compilePattern]).
+    final regExp = _compilePattern(raw, path, schemaName);
     // The length bound gates the regex. A value that already exceeds the
     // enforced `maxLength` is condemned; also running the author's ECMAScript
     // pattern over it adds nothing but the ReDoS exposure the bound exists to
@@ -787,12 +856,45 @@ void _stringKeywords(
   }
 }
 
+/// Compiles a `pattern` string to a [RegExp], memoized in [_patternCache].
+/// A `pattern` that does not compile is authoring damage (posture (1)): the
+/// [_authoringDefect] fires on the first attempt and — because a failed compile
+/// is never cached — on every attempt after, so the defect can never be masked
+/// by a later instance slipping past it. `schema.validate` is hot (per validated
+/// request), yet `RegExp(raw)` was the one uncached regex construction left in
+/// the package (the `format` regexes are top-level finals), rebuilt on every
+/// call. Caching it removes that per-request cost.
+RegExp _compilePattern(String raw, _Path path, String schemaName) {
+  final cached = _patternCache[raw];
+  if (cached != null) return cached;
+  final RegExp regExp;
+  try {
+    regExp = RegExp(raw);
+  } on FormatException catch (e) {
+    _authoringDefect(
+      schemaName,
+      path,
+      'pattern',
+      'is not a valid regular expression: ${e.message}',
+    );
+  }
+  return _patternCache[raw] = regExp;
+}
+
+/// Compiled-[RegExp] memo for `pattern`, keyed on the raw pattern string. No
+/// flags are ever applied, so the string alone fully determines the regex's
+/// semantics and is a sound cache key. The cache is deliberately unbounded: a
+/// `pattern` originates only from an author's `const Schema` graph, never from a
+/// request, so the set of distinct keys is bounded by the code's size, not by
+/// anything an attacker can grow — it is code-sized, not attacker-sized.
+final Map<String, RegExp> _patternCache = <String, RegExp>{};
+
 /// Applies the numeric value keywords (`minimum`, `maximum`,
 /// `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`) to a numeric [value].
 void _numberKeywords(
   Map<String, Object?> schema,
   num value,
-  String path,
+  _Path path,
   List<String> errors,
   String schemaName,
 ) {
@@ -841,7 +943,7 @@ void _numberKeywords(
 void _arrayKeywords(
   Map<String, Object?> schema,
   List<Object?> value,
-  String path,
+  _Path path,
   List<String> errors,
   String schemaName,
 ) {
@@ -887,23 +989,48 @@ void _arrayKeywords(
           'uniqueItems-validation ceiling of $_uniqueItemsCeiling items',
         );
       } else {
-        // Deep JSON-value equality, so two equal nested objects collide even
-        // though they are distinct instances. This scan is O(n²), so the cheap
-        // `maxItems` bound gates it: an array that already exceeds `maxItems`
-        // is condemned, and running the quadratic uniqueness scan over it as
-        // well is the DoS the bound exists to foreclose — pairing `uniqueItems`
-        // with a `maxItems` is what keeps the cost in check. One violation is
-        // enough to condemn the array, so the first colliding pair ends the
-        // scan.
-        outer:
-        for (var i = 0; i < value.length; i++) {
-          for (var j = i + 1; j < value.length; j++) {
-            if (_jsonEquals(value[i], value[j])) {
-              errors.add(
-                '$path: array items at [$i] and [$j] are equal '
-                '(uniqueItems)',
-              );
-              break outer;
+        // Deep pairwise equality is O(n²) and is needed only for *composite*
+        // elements (Map/List), whose equality is structural. Scalars
+        // (String/num/bool/null) carry value semantics, so a single O(n)
+        // [HashSet] pass detects a duplicate among them — and it agrees with
+        // [_jsonEquals] exactly, because [HashSet] uses Dart's own `==`/
+        // `hashCode` and those match `_jsonEquals` on scalars: notably
+        // `1 == 1.0` is `true` *and* `1.hashCode == 1.0.hashCode`, so an int
+        // collides with its zero-fraction double twin here just as it does
+        // under `_jsonEquals`. (The lone divergence — two *identical* NaN
+        // instances, which `==` treats as distinct but `_jsonEquals` catches
+        // via its `identical` fast path — cannot arise from decoded JSON, which
+        // has no NaN, so it is unreachable at this boundary.)
+        //
+        // The pass walks the array once: on the first *composite* element, or
+        // the first scalar the set proves is a repeat, it falls back to the
+        // existing pairwise scan (the simplest correct composition) — which is
+        // what emits the violation. So the common case, a valid all-scalar
+        // array, pays one linear pass and stops; every case that must report a
+        // collision (or deep-compare composites) still runs the pairwise scan
+        // and its byte-identical message and pair indices. The `maxItems` gate
+        // above still bounds the pairwise cost when it does run.
+        var needsPairwise = false;
+        final seen = HashSet<Object?>();
+        for (final element in value) {
+          if (element is Map || element is List || !seen.add(element)) {
+            needsPairwise = true;
+            break;
+          }
+        }
+        if (needsPairwise) {
+          // One violation is enough to condemn the array, so the first
+          // colliding pair ends the scan.
+          outer:
+          for (var i = 0; i < value.length; i++) {
+            for (var j = i + 1; j < value.length; j++) {
+              if (_jsonEquals(value[i], value[j])) {
+                errors.add(
+                  '$path: array items at [$i] and [$j] are equal '
+                  '(uniqueItems)',
+                );
+                break outer;
+              }
             }
           }
         }
@@ -927,7 +1054,7 @@ const _uniqueItemsCeiling = 8192;
 int _nonNegativeIntKeyword(
   Map<String, Object?> schema,
   String key,
-  String path,
+  _Path path,
   String schemaName,
 ) {
   final raw = schema[key];
@@ -955,7 +1082,7 @@ int _nonNegativeIntKeyword(
 num _numberKeyword(
   Map<String, Object?> schema,
   String key,
-  String path,
+  _Path path,
   String schemaName,
 ) {
   final raw = schema[key];

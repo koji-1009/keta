@@ -244,6 +244,66 @@ void main() {
     });
   });
 
+  group('deep JSON path rendering (object keys and array indices)', () {
+    // The path is carried down as a parent-linked chain and stringified only
+    // where a violation is emitted; these pins prove that lazy chain renders
+    // the dotted/indexed `$.a[i].b` string byte-identically at depth, and that
+    // a fully-valid deep body reports nothing (its path is never materialized).
+    const deep = Schema('Deep', {
+      'type': 'object',
+      'required': ['rows'],
+      'properties': {
+        'rows': {
+          'type': 'array',
+          'items': {
+            'type': 'object',
+            'required': ['cell'],
+            'properties': {
+              'cell': {'type': 'integer'},
+            },
+          },
+        },
+      },
+    });
+
+    test('a valid deeply-nested body reports nothing', () {
+      expect(
+        deep.validate({
+          'rows': [
+            {'cell': 1},
+            {'cell': 2},
+          ],
+        }),
+        isEmpty,
+      );
+    });
+
+    test('a violation deep in an array element carries the full path', () {
+      expect(
+        deep.validate({
+          'rows': [
+            {'cell': 1},
+            {'cell': 'nope'},
+          ],
+        }),
+        [r'$.rows[1].cell: expected integer, got string'],
+      );
+    });
+
+    test('a required property missing deep in the tree carries the full '
+        'path', () {
+      expect(
+        deep.validate({
+          'rows': [
+            {'cell': 1},
+            <String, Object?>{},
+          ],
+        }),
+        [r'$.rows[1].cell: required property is missing'],
+      );
+    });
+  });
+
   group('oneOf', () {
     test('a non-Map value is rejected', () {
       expect(eventSchema.validate('created'), [
