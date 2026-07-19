@@ -6,7 +6,7 @@ carried by a constructor graph and routes-as-values. User code reads as plain
 Dart. This file is enough to write handlers, DTOs, mappers, schema constants,
 and tests by hand.
 
-Packages: `keta` (core), `keta_db` + `keta_sqlite` + `keta_rds` (database), `keta_openapi` (Schema + OpenAPI). Dependencies flow inward; `keta` has zero production dependencies beyond the SDK — `test` resolves only for the shipped test harness and is absent from compiled binaries.
+Packages: `keta` (core), `keta_db` + `keta_sqlite` + `keta_rds` (database), `keta_openapi` (Schema + OpenAPI), `keta_oidc` (Bearer-JWT resource server, over `keta_native`'s BoringSSL crypto). Dependencies flow inward; `keta` has zero production dependencies beyond the SDK — `test` resolves only for the shipped test harness and is absent from compiled binaries.
 
 ## Routing
 
@@ -207,6 +207,33 @@ Emit the document (the code's shadow):
 final spec = OpenApi.fromRoutes(app.routes, title: 'API', version: '0.1.0');
 stdout.write(spec.toYaml()); // or spec.toJson()
 ```
+
+## OIDC (keta_oidc)
+
+`keta_oidc` is a Bearer-JWT **resource server** only — it verifies tokens an identity provider issues; it never mints, brokers, or logs a user in (the IdP-client side — Authorization Code + PKCE, refresh tokens, a login page — is a judged absence, a different program with a different threat model). Verification is **asymmetric-only**: `RS256`/`RS384`/`RS512`/`ES256`/`ES384`. `HS*` (HMAC) is rejected by design — HMAC verifies with the same secret it signs with, and on a resource server that would let an `HS256` token "signed" with the server's own trusted public key turn that key into a signing oracle (the classic key-confusion attack); refusing to model a symmetric algorithm at all kills the attack class at the type level. `alg: none` is rejected (an unsigned token is not a credential). `PS*` (RSASSA-PSS) is simply out of scope for now, not disallowed for cause. Remote token introspection (RFC 7662) is a judged absence too: validation is local against cached JWKS, never a per-request round-trip to the IdP; revocation is short token TTL plus your own out-of-band revocation-notice pattern (`examples/auth` shows the shape — a revocation event over `keta_bus` that closes a live SSE stream from the server side), not a live introspection check.
+
+Wire `oidc()` in front of whatever it protects — including an SSE or WebSocket route, since the check runs (and can 401) before the handler, and therefore the stream, ever starts — and `requireScopes([...])` (AND semantics) after it on routes that need a scope beyond bare authentication:
+
+```dart
+import 'package:keta_oidc/keta_oidc.dart';
+
+final jwks = HttpJwksSource.discover(issuer: 'https://your-idp.example.com/');
+final validator = JwtValidator(
+  verifier: BoringSslVerifier(),
+  algorithms: {JwsAlgorithm.rs256},
+  issuer: 'https://your-idp.example.com/',
+  audience: 'api://your-api',
+);
+
+app.use(oidc(jwks: jwks, validator: validator));
+app.get('/me', (c) {
+  final p = c.get(oidcPrincipal);
+  return c.json({'sub': p.subject, 'scopes': p.scopes.toList(), 'org': p.claims.raw['org']});
+});
+app.group('/admin')..use(requireScopes(['admin:write']))..get('/panel', handler);
+```
+
+`JwksSource` is the one seam a key comes through: `HttpJwksSource.discover(issuer:)` (or `.fromJwksUri(uri)` when the endpoint is already known) for production — OIDC Discovery once, then a cached, single-flight, cooldown-throttled, serve-stale-on-failure refresh loop — versus `StaticJwks.parse(jwksJson)` for tests, no network and no live IdP but the same real `BoringSslVerifier` doing the same signature check (see `package:keta_native/testing.dart` for minting test keys and signing test tokens). A missing or bad token is `401` (`WWW-Authenticate: Bearer` bare when no Bearer credentials were presented at all, or `error="invalid_token"` with a category description — never a claim value or key material — when they were bad); a missing required scope is `403` (`error="insufficient_scope"`); the key source being unreachable with nothing cached is `503` (the token was never judged — not the caller's fault); a discovery trust failure (the discovery document's own `issuer` not matching the one configured) is `500` (a server-side config/trust failure, never laundered into a `401`). `c.get(oidcPrincipal)` returns an `OidcPrincipal`: `subject` (`sub`, nullable), `scopes` (the union of the token's `scope` and `scp` claims), and `claims` (the full validated claim set — read any application/custom claim from `claims.raw`).
 
 ## SSE & WebSocket
 

@@ -33,3 +33,4 @@ workspace:
   - examples/files
   - examples/auth
   - examples/websocket
+  - examples/oidc

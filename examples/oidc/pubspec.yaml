@@ -1,0 +1,25 @@
+name: keta_oidc_example
+description: >-
+  A runnable OIDC/OAuth2 resource server for keta: the real production wiring
+  (HttpJwksSource.discover + BoringSslVerifier) beside the StaticJwks test
+  wiring, gating a public route, a Bearer-protected /me, a
+  requireScopes()-guarded route, and an SSE feed — all behind the same
+  oidc() middleware.
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+  keta_oidc: ^0.1.0
+  keta_openapi: ^0.1.0
+
+dev_dependencies:
+  test: ^1.25.0
+  # testing.dart: RsaKeyPair/EcKeyPair mint the real keys the test suite signs
+  # tokens with and builds StaticJwks fixtures from. Test-only — never a
+  # production dependency of this example.
+  keta_native: ^0.1.0
