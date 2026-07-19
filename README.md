@@ -45,21 +45,21 @@ A streaming response lives on the isolate that produced it. To reach subscribers
 
 Dependencies flow inward only — Optional → Recommended → Core — and peeling off an outer ring never breaks an inner one. `keta` itself has no production dependency beyond the SDK: `test` resolves only to back the shipped `test.dart` harness and is tree-shaken out of `dart compile exe` binaries.
 
-| Package | Ring / tier | What it is |
-|---|---|---|
-| `keta` | 0 · Core | Router, Context, middleware, server, Log, and the `TestClient` harness. Zero production dependencies (`test` resolves only for the shipped harness). |
-| `keta_db` | 1 · Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
-| `keta_sqlite` | 1 · Core | A thin adapter over the `package:sqlite3` family; `:memory:` supported. |
-| `keta_rds` | 3 · Optional | The PostgreSQL adapter — bounded pool, SQLSTATE → keta-exception translation, delegating the wire protocol to `package:postgres`. |
-| `keta_openapi` | 2 · Recommended | `Schema` (validate/require) and the route-table walk that emits OpenAPI 3.1. Runtime assembly only. |
-| `keta_lints` | 3 · Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, and field types. |
-| `keta_files` | 3 · Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
-| `keta_shelf` | 3 · Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
-| `keta_multipart` | 3 · Optional | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`. Boundary parsing via `package:mime`. |
-| `keta_otel` | 3 · Optional | `traceparent` → OTLP and a `/metrics` endpoint, with every label axis bounded (no attacker-controlled cardinality). |
-| `keta_bus` | 3 · Optional | A publish/subscribe seam, standalone and core-unaware (SDK-only, zero dependencies): `publish(topic)` / `subscribe(topic)` fan a JSON message out to live listeners, at-most-once. `InMemoryBus` (one isolate) and `IsolateBus` (fan-out across the worker isolates of `serve(isolates: n)`). |
-| `keta_native` | 3 · Optional | The BoringSSL-backed native crypto layer, built via `dart hooks` (native assets): SHA-2 digests, HMAC, and RSA/ECDSA signature verification. BoringSSL is fetched pinned to a commit hash and built from source at hook time — never a prebuilt binary. |
-| `keta_oidc` | 3 · Optional | An OIDC/OAuth2 **resource server**: it verifies the Bearer JWTs an identity provider issues and never mints or brokers tokens itself. Asymmetric-only JWT validation (RS256/RS384/RS512/ES256/ES384 — `HS*`, `alg: none`, and `PS*` are rejected by design) over `keta_native`, a `JwksSource` seam (`StaticJwks` for fixed keys, `HttpJwksSource` for a live JWKS endpoint with OIDC Discovery and refresh discipline), and an `oidc()` / `requireScopes()` middleware pair that injects a principal and answers RFC 6750 challenges. |
+| Package | Ring | Tier | What it is |
+|---|---|---|---|
+| `keta` | 0 | Core | Router, Context, middleware, server, Log, and the `TestClient` harness. Zero production dependencies (`test` resolves only for the shipped harness). |
+| `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
+| `keta_sqlite` | 1 | Core | A thin adapter over the `package:sqlite3` family; `:memory:` supported. |
+| `keta_openapi` | 2 | Recommended | `Schema` (validate/require) and the route-table walk that emits OpenAPI 3.1. Runtime assembly only. |
+| `keta_rds` | 3 | Optional | The PostgreSQL adapter — bounded pool, SQLSTATE → keta-exception translation, delegating the wire protocol to `package:postgres`. |
+| `keta_lints` | 3 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, and field types. |
+| `keta_files` | 3 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
+| `keta_shelf` | 3 | Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
+| `keta_multipart` | 3 | Optional | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`. Boundary parsing via `package:mime`. |
+| `keta_otel` | 3 | Optional | `traceparent` → OTLP and a `/metrics` endpoint, with every label axis bounded (no attacker-controlled cardinality). |
+| `keta_bus` | 3 | Optional | A publish/subscribe seam, standalone and core-unaware (SDK-only, zero dependencies): `publish(topic)` / `subscribe(topic)` fan a JSON message out to live listeners, at-most-once. `InMemoryBus` (one isolate) and `IsolateBus` (fan-out across the worker isolates of `serve(isolates: n)`). |
+| `keta_native` | 3 | Optional | The BoringSSL-backed native crypto layer, built via `dart hooks` (native assets): SHA-2 digests, HMAC, and RSA/ECDSA signature verification. BoringSSL is fetched pinned to a commit hash and built from source at hook time — never a prebuilt binary. |
+| `keta_oidc` | 3 | Optional | An OIDC/OAuth2 **resource server**: it verifies the Bearer JWTs an identity provider issues and never mints or brokers tokens itself. Asymmetric-only JWT validation (RS256/RS384/RS512/ES256/ES384 — `HS*`, `alg: none`, and `PS*` are rejected by design) over `keta_native`, a `JwksSource` seam (`StaticJwks` for fixed keys, `HttpJwksSource` for a live JWKS endpoint with OIDC Discovery and refresh discipline), and an `oidc()` / `requireScopes()` middleware pair that injects a principal and answers RFC 6750 challenges. |
 
 ## Deliberately out of scope for v0.1
 
