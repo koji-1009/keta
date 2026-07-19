@@ -230,6 +230,109 @@ void main() {
       expect(r.headers.containsKey('content-encoding'), isFalse);
       expect(r.headers['vary'], contains('Accept-Encoding'));
     });
+
+    // RFC 9110 §12.5.3: an explicitly named coding's q-value governs even when
+    // `*` is also present. `gzip;q=0, *` refuses gzip (the named q=0 wins) — the
+    // loop must not fall through to `*` and compress anyway.
+    test('gzip;q=0, * refuses gzip despite the wildcard', () async {
+      final r = await run(
+        gzip(),
+        testContext(newEnv(), headers: {'accept-encoding': 'gzip;q=0, *'}),
+        Response.text(big),
+      );
+      expect(r.headers.containsKey('content-encoding'), isFalse);
+      expect(r.headers['vary'], contains('Accept-Encoding'));
+      expect(r.body, big);
+    });
+
+    test('* alone (gzip not named) compresses', () async {
+      final r = await run(
+        gzip(),
+        testContext(newEnv(), headers: {'accept-encoding': '*'}),
+        Response.text(big),
+      );
+      expect(r.headers['content-encoding'], ['gzip']);
+    });
+
+    // `identity;q=0` names a *different* coding, so it neither refuses nor
+    // advertises gzip; the explicit `gzip` still decides and compression runs.
+    test('identity;q=0 does not affect an explicit gzip', () async {
+      final r = await run(
+        gzip(),
+        testContext(
+          newEnv(),
+          headers: {'accept-encoding': 'identity;q=0, gzip'},
+        ),
+        Response.text(big),
+      );
+      expect(r.headers['content-encoding'], ['gzip']);
+    });
+
+    // Content-type gate: already-compressed / opaque media is never gzipped
+    // (CPU for no gain), but the response still Varies since it passed through
+    // the negotiating middleware.
+    test(
+      'an already-compressed media type (image/jpeg) is not gzipped',
+      () async {
+        final r = await run(
+          gzip(),
+          testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+          Response(
+            200,
+            headers: {
+              'content-type': const ['image/jpeg'],
+            },
+            body: big,
+          ),
+        );
+        expect(r.headers.containsKey('content-encoding'), isFalse);
+        expect(r.headers['vary'], contains('Accept-Encoding'));
+        expect(r.body, big);
+      },
+    );
+
+    test(
+      'an unknown/absent content type is not gzipped (conservative default)',
+      () async {
+        final r = await run(
+          gzip(),
+          testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+          Response(200, body: big),
+        );
+        expect(r.headers.containsKey('content-encoding'), isFalse);
+        expect(r.headers['vary'], contains('Accept-Encoding'));
+      },
+    );
+
+    test('application/json (charset param and all) is gzipped', () async {
+      final r = await run(
+        gzip(),
+        testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+        Response(
+          200,
+          headers: {
+            'content-type': const ['application/json; charset=utf-8'],
+          },
+          body: big,
+        ),
+      );
+      expect(r.headers['content-encoding'], ['gzip']);
+    });
+
+    test('a +xml structured suffix (image/svg+xml) is gzipped', () async {
+      final r = await run(
+        gzip(),
+        testContext(newEnv(), headers: {'accept-encoding': 'gzip'}),
+        Response(
+          200,
+          headers: {
+            'content-type': const ['image/svg+xml'],
+          },
+          body: big,
+        ),
+      );
+      expect(r.headers['content-encoding'], ['gzip']);
+    });
   });
 
   group('composed stack (gzip outer, etag inner)', () {

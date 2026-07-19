@@ -89,10 +89,18 @@ Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
 /// A preflight is an `OPTIONS` request carrying `access-control-request-method`;
 /// it is answered here with 204. A plain `OPTIONS` (no such header) falls
 /// through to the routes, so a user-registered `OPTIONS` handler stays
-/// reachable. Echoing a specific (non-`'*'`) origin always adds `Vary: Origin`,
-/// without which a shared cache could serve one origin's response to another.
+/// reachable. Any origin-specific config (anything but a pure `'*'`) adds
+/// `Vary: Origin` to *every* response it produces — including one to a
+/// *disallowed* origin, which carries no `access-control-allow-origin` at all —
+/// without which a shared cache could store that header-less response and later
+/// serve it to an allowed origin, which would then see no allow-origin header.
 ///
-/// [allowCredentials] projects `Access-Control-Allow-Credentials: true`;
+/// [allowCredentials] projects `Access-Control-Allow-Credentials: true`. It is
+/// rejected at construction (an [ArgumentError]) when combined with a `'*'`
+/// origin: the Fetch spec forbids `Access-Control-Allow-Origin: *` together with
+/// credentials, and browsers reject the pair — a credentialed request needs a
+/// specifically echoed origin, never the wildcard.
+///
 /// [maxAge] projects `Access-Control-Max-Age` (seconds) onto the preflight; and
 /// [exposeHeaders] projects `Access-Control-Expose-Headers` onto actual
 /// responses.
@@ -113,20 +121,37 @@ Middleware<E> cors<E>({
 }) {
   final origins = allowOrigins.toSet();
   final wildcard = origins.contains('*');
+  // The Fetch spec forbids `Access-Control-Allow-Origin: *` together with
+  // `Access-Control-Allow-Credentials: true`, and every browser rejects the
+  // pair: a credentialed request must be answered with a specifically echoed
+  // origin, never the wildcard. Emitting it anyway is an authoring defect that
+  // only ever surfaces in a browser console, so — like every other authoring
+  // defect in this framework — it is refused loudly at construction rather than
+  // silently written onto the wire.
+  if (wildcard && allowCredentials) {
+    throw ArgumentError.value(
+      allowOrigins,
+      'allowOrigins',
+      "a '*' origin cannot be combined with allowCredentials: true (the Fetch "
+          'spec forbids it; list specific origins to use credentials)',
+    );
+  }
   return (Context<E> c, Handler<E> next) {
     final origin = c.header('origin');
     final allowed = wildcard || (origin != null && origins.contains(origin));
 
-    // Headers shared by preflight and actual responses when the origin passes.
+    // Headers shared by preflight and actual responses. The allow-origin and
+    // credentials headers project only when the origin passes; `Vary: Origin`
+    // is added whenever the config is origin-specific — even for a *rejected*
+    // origin. That response carries no `access-control-allow-origin`, and
+    // without `Vary` a shared cache could key it under a request that then
+    // serves an *allowed* origin, which would then see no allow-origin header.
+    // The wildcard alone is origin-independent, so it needs no Vary.
     final base = <String, List<String>>{
-      if (allowed) ...{
-        'access-control-allow-origin': [wildcard ? '*' : origin!],
-        // A specific echoed origin makes the response vary by Origin; the
-        // wildcard is origin-independent and needs no Vary.
-        if (!wildcard) 'vary': const ['Origin'],
-        if (allowCredentials)
-          'access-control-allow-credentials': const ['true'],
-      },
+      if (allowed) 'access-control-allow-origin': [wildcard ? '*' : origin!],
+      if (!wildcard) 'vary': const ['Origin'],
+      if (allowed && allowCredentials)
+        'access-control-allow-credentials': const ['true'],
     };
 
     final isPreflight =
@@ -349,10 +374,13 @@ String _fnv1a64Hex(Uint8List bytes) {
 /// existing `Vary`, the same discipline as [cors]) because its representation is
 /// negotiated on that header. Compression itself is skipped — the body passes
 /// through unchanged — when the request does not accept gzip (including an
-/// explicit `gzip;q=0`), the response is already `Content-Encoding`d, the status
-/// is 204/304, or the body is smaller than [threshold] bytes (compressing a
-/// tiny body spends more bytes than it saves). A `Stream` body passes through
-/// entirely untouched (no `Vary`), since it is not buffered.
+/// explicit `gzip;q=0`), the response is already `Content-Encoding`d, its
+/// `Content-Type` is not a compressible (text-shaped) media type (see
+/// [_isCompressible] — already-compressed media such as JPEG/PNG/zip gains
+/// nothing but CPU), the status is 204/304, or the body is smaller than
+/// [threshold] bytes (compressing a tiny body spends more bytes than it saves).
+/// A `Stream` body passes through entirely untouched (no `Vary`), since it is
+/// not buffered.
 ///
 /// The compressed body is a `List<int>`, so the transport frames it with the
 /// correct post-compression `Content-Length` — gzip runs before framing.
@@ -379,6 +407,7 @@ Middleware<E> gzip<E>({
         !alreadyEncoded &&
         r.status != 204 &&
         r.status != 304 &&
+        _isCompressible(r.headers['content-type']?.first) &&
         _acceptsGzip(c.header('accept-encoding'));
     if (!compressible) {
       return r.copyWith(addHeaders: headers);
@@ -396,14 +425,26 @@ Middleware<E> gzip<E>({
   });
 };
 
-/// True when [acceptEncoding] advertises gzip with a non-zero q-value — an
-/// explicit `gzip` token, or `*`, in either case not overridden by `;q=0`.
+/// True when [acceptEncoding] advertises gzip with a non-zero q-value.
+///
+/// Precedence follows RFC 9110 §12.5.3: an *explicitly named* coding's q-value
+/// governs even when `*` is also present, so `gzip;q=0, *` refuses gzip (the
+/// named `gzip;q=0` wins) rather than falling back to the wildcard. `*` decides
+/// only when neither `gzip` nor its `x-gzip` alias is named. A missing q-value
+/// defaults to 1 (acceptable); a `q=0` — named or wildcard — is a refusal.
+///
+/// `identity` and any other coding are ignored here: they name a different
+/// content-coding, so an `identity;q=0` neither advertises nor refuses gzip and
+/// simply does not participate in this decision.
 bool _acceptsGzip(String? acceptEncoding) {
   if (acceptEncoding == null) return false;
+  double? gzipQ; // q for an explicit gzip / x-gzip token, if named at all
+  double? starQ; // q for a `*` token, if present
   for (final raw in acceptEncoding.split(',')) {
     final parts = raw.split(';');
     final coding = parts.first.trim().toLowerCase();
-    if (coding != 'gzip' && coding != '*') continue;
+    final isGzip = coding == 'gzip' || coding == 'x-gzip';
+    if (!isGzip && coding != '*') continue;
     var q = 1.0;
     for (final param in parts.skip(1)) {
       final p = param.trim();
@@ -411,9 +452,60 @@ bool _acceptsGzip(String? acceptEncoding) {
         q = double.tryParse(p.substring(2)) ?? 1.0;
       }
     }
-    if (q > 0) return true;
+    if (isGzip) {
+      gzipQ = q;
+    } else {
+      starQ = q;
+    }
   }
-  return false;
+  // An explicit gzip entry decides; `*` applies only when gzip is not named.
+  final q = gzipQ ?? starQ;
+  return q != null && q > 0;
+}
+
+/// Whether a response body of [contentType] is worth gzipping. keta is
+/// JSON-first, so the compressible set is an explicit allowlist of text-shaped
+/// media types; everything else — already-compressed media (JPEG/PNG/GIF/WebP,
+/// MP4, zip, gzip, br, …) and every type keta does not recognize — is left
+/// uncompressed, because gzipping an incompressible body spends CPU for a body
+/// that does not shrink (often grows).
+///
+/// The default for an unknown *or absent* content type is deliberately "do not
+/// compress". The gate exists precisely to stop wasting CPU on bodies that do
+/// not benefit; an unrecognized type is as likely to be opaque binary as text,
+/// and every response keta itself compresses (JSON, plain text, SVG, XML, JS)
+/// carries a `Content-Type` this allowlist names. The trade is asymmetric:
+/// failing to compress the rare unlabelled text type costs a little bandwidth,
+/// whereas compressing every opaque blob costs CPU on *every* such response —
+/// so the conservative default is an allowlist, not a denylist.
+///
+/// The compressible table, kept deliberately small:
+/// - `text/*`                     — HTML, CSS, plain, CSV, calendar, …
+/// - `application/json` + `+json` — JSON and any structured-suffix JSON media
+///   type (RFC 6839), e.g. `application/problem+json`
+/// - `application/xml` + `+xml`   — XML and any `+xml`, which covers
+///   `image/svg+xml`, `application/atom+xml`, `application/xhtml+xml`
+/// - JavaScript / ECMAScript, including the legacy `x-` spellings
+///
+/// The match is on the media type only (the part before `;`) and is
+/// case-insensitive (RFC 9110 §8.3.1), so a `; charset=utf-8` parameter does
+/// not defeat it.
+bool _isCompressible(String? contentType) {
+  if (contentType == null) return false;
+  final semi = contentType.indexOf(';');
+  final type = (semi == -1 ? contentType : contentType.substring(0, semi))
+      .trim()
+      .toLowerCase();
+  if (type.startsWith('text/')) return true;
+  if (type == 'application/json' || type.endsWith('+json')) return true;
+  if (type == 'application/xml' || type.endsWith('+xml')) return true;
+  return switch (type) {
+    'application/javascript' ||
+    'application/ecmascript' ||
+    'application/x-javascript' ||
+    'application/x-ecmascript' => true,
+    _ => false,
+  };
 }
 
 /// The `Vary` addition for a gzip-negotiated response: `Accept-Encoding` unioned
