@@ -84,6 +84,23 @@ void main() {
       }
     });
 
+    test('C0 controls and DEL without a named escape use \\xHH', () {
+      // \x01 (SOH) and \x1b (ESC) have no named double-quoted escape, unlike
+      // \n/\r/\t — they must come out as \xHH or the emitted scalar would
+      // embed a raw control byte, which the YAML double-quoted grammar
+      // forbids (the project's own parser is lenient about this, which is
+      // exactly why this case needs its own pin).
+      expect(encodeYaml('a\x01b\x1bc'), '"a\\x01b\\x1bc"\n');
+      expect(loadYaml(encodeYaml('a\x01b\x1bc')), 'a\x01b\x1bc');
+      // DEL (0x7f) is grouped with the C0 controls: also non-printable per
+      // the YAML spec, also unescaped by name, also needs \xHH.
+      expect(encodeYaml('a\x7fb'), '"a\\x7fb"\n');
+      expect(loadYaml(encodeYaml('a\x7fb')), 'a\x7fb');
+      // The named escapes are unchanged: \n/\r/\t still render as \n/\r/\t,
+      // not \x0a/\x0d/\x09.
+      expect(encodeYaml('a\nb\rc\td'), '"a\\nb\\rc\\td"\n');
+    });
+
     test('reserved words are quoted (case-insensitively)', () {
       const words = [
         'true',

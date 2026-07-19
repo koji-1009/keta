@@ -97,7 +97,16 @@ const Set<String> _reserved = {
   '~',
 };
 
-final RegExp _control = RegExp(r'[\x00-\x1f]');
+// DEL (0x7f) is grouped with the C0 controls (0x00-0x1f) here, not just for
+// the quoting trigger below but for escaping too: the YAML spec's
+// c-printable set excludes it exactly as it excludes C0, so a bare DEL is as
+// invalid inside a double-quoted scalar as a bare NUL.
+final RegExp _control = RegExp(r'[\x00-\x1f\x7f]');
+
+// The C0/DEL controls with no named double-quoted escape (\n, \r, \t cover
+// the other three) — these get \xHH instead, or they'd be emitted raw and
+// violate the double-quoted scalar grammar.
+final RegExp _unnamedControl = RegExp(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]');
 
 String _quoteIfNeeded(String value) {
   final needsQuote =
@@ -112,6 +121,10 @@ String _quoteIfNeeded(String value) {
       .replaceAll('"', r'\"')
       .replaceAll('\n', r'\n')
       .replaceAll('\r', r'\r')
-      .replaceAll('\t', r'\t');
+      .replaceAll('\t', r'\t')
+      .replaceAllMapped(
+        _unnamedControl,
+        (m) => '\\x${m[0]!.codeUnitAt(0).toRadixString(16).padLeft(2, '0')}',
+      );
   return '"$escaped"';
 }
