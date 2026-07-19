@@ -446,4 +446,282 @@ void main() {
       expect(source.resolvedJwksUri, isNull);
     });
   });
+
+  group('transport security (https enforcement)', () {
+    String discoveryDoc(String issuer, String jwksUri) =>
+        '{"issuer":"$issuer","jwks_uri":"$jwksUri"}';
+
+    test('a non-loopback http jwks_uri is rejected at construction', () {
+      expect(
+        () => HttpJwksSource.fromJwksUri(Uri.parse('http://issuer.example/j')),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('a non-loopback http issuer is rejected at construction', () {
+      expect(
+        () => HttpJwksSource.discover(issuer: 'http://idp.example'),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('an issuer with no scheme is rejected at construction', () {
+      expect(
+        () => HttpJwksSource.discover(issuer: 'idp.example'),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('a non-http(s) scheme is rejected at construction', () {
+      expect(
+        () => HttpJwksSource.fromJwksUri(Uri.parse('file:///etc/keys')),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('https jwks_uri and issuer are accepted', () {
+      expect(
+        HttpJwksSource.fromJwksUri(Uri.parse('https://issuer.example/jwks')),
+        isA<HttpJwksSource>(),
+      );
+      expect(
+        HttpJwksSource.discover(issuer: 'https://idp.example'),
+        isA<HttpJwksSource>(),
+      );
+    });
+
+    test(
+      'loopback http jwks_uri and issuer are accepted (local development)',
+      () {
+        for (final u in const [
+          'http://127.0.0.1:8080/jwks',
+          'http://localhost:8080/jwks',
+          'http://[::1]:8080/jwks',
+          'http://127.9.9.9/jwks', // anywhere in 127.0.0.0/8
+        ]) {
+          expect(
+            HttpJwksSource.fromJwksUri(Uri.parse(u)),
+            isA<HttpJwksSource>(),
+            reason: u,
+          );
+        }
+        expect(
+          HttpJwksSource.discover(issuer: 'http://localhost:8080'),
+          isA<HttpJwksSource>(),
+        );
+      },
+    );
+
+    test('a plaintext jwks_uri smuggled into the discovery doc is a '
+        'JwksDiscoveryException', () async {
+      final fetcher = Fetcher(
+        (u, i) async =>
+            discoveryDoc('https://idp.example', 'http://idp.example/keys'),
+      );
+      final source = HttpJwksSource.discover(
+        issuer: 'https://idp.example',
+        fetch: fetcher.call,
+      );
+      await expectLater(
+        source.resolve(headerWith(kid: 'k1')),
+        throwsA(isA<JwksDiscoveryException>()),
+      );
+    });
+
+    test(
+      'a loopback http jwks_uri from the discovery doc is accepted',
+      () async {
+        final body = jwksJson([rsaJwkJson(kid: 'k1')]);
+        final fetcher = Fetcher(
+          (u, i) async => u.path.endsWith('openid-configuration')
+              ? discoveryDoc('https://idp.example', 'http://127.0.0.1:9/keys')
+              : body,
+        );
+        final source = HttpJwksSource.discover(
+          issuer: 'https://idp.example',
+          fetch: fetcher.call,
+        );
+        final jwk = await source.resolve(headerWith(kid: 'k1'));
+        expect(jwk.kid, 'k1');
+        expect(source.resolvedJwksUri, Uri.parse('http://127.0.0.1:9/keys'));
+      },
+    );
+  });
+
+  group('cold-start throttle', () {
+    test(
+      'repeated cold failures within the cooldown fetch ONCE and re-surface the '
+      'same parked failure, then recover fast once the IdP is back',
+      () async {
+        final clock = Clock();
+        final v1 = jwksJson([rsaJwkJson(kid: 'k1')]);
+        var down = true;
+        final fetcher = Fetcher((u, i) async {
+          if (down) throw const SocketException('unreachable');
+          return v1;
+        });
+        final source = HttpJwksSource.fromJwksUri(
+          jwksUri,
+          fetch: fetcher.call,
+          minRefreshInterval: const Duration(minutes: 5),
+          now: clock.now,
+        );
+
+        // First cold read: one fetch, fails cold with JwksUnavailable.
+        Object? e1;
+        try {
+          await source.resolve(headerWith(kid: 'k1'));
+        } catch (e) {
+          e1 = e;
+        }
+        expect(e1, isA<JwksUnavailable>());
+        expect(fetcher.count, 1);
+
+        // Second cold read within the cooldown: NO new fetch, and the very same
+        // parked failure object is re-surfaced.
+        Object? e2;
+        try {
+          await source.resolve(headerWith(kid: 'k1'));
+        } catch (e) {
+          e2 = e;
+        }
+        expect(
+          fetcher.count,
+          1,
+          reason: 'throttled: the down IdP is not re-hit',
+        );
+        expect(
+          identical(e1, e2),
+          isTrue,
+          reason: 'the parked failure re-surfaced',
+        );
+
+        // Past the cooldown: a fresh attempt is allowed (still down).
+        clock.advance(const Duration(minutes: 6));
+        await expectLater(
+          source.resolve(headerWith(kid: 'k1')),
+          throwsA(isA<JwksUnavailable>()),
+        );
+        expect(fetcher.count, 2);
+
+        // The IdP recovers: the next attempt loads and resolves immediately,
+        // and further reads are cache-only (fast recovery, no lingering throttle).
+        down = false;
+        clock.advance(const Duration(minutes: 6));
+        final jwk = await source.resolve(headerWith(kid: 'k1'));
+        expect(jwk.kid, 'k1');
+        expect(fetcher.count, 3);
+        await source.resolve(headerWith(kid: 'k1'));
+        expect(fetcher.count, 3, reason: 'healthy again: cache-only');
+      },
+    );
+
+    test(
+      'the first cold load is still exempt: a miss immediately after startup '
+      'may refresh within the cooldown window',
+      () async {
+        // Guards against a regression where stamping the cold *success* would
+        // wrongly throttle the first miss-refresh.
+        final clock = Clock();
+        final body = jwksJson([rsaJwkJson(kid: 'k1')]);
+        final fetcher = Fetcher((u, i) async => body);
+        final source = HttpJwksSource.fromJwksUri(
+          jwksUri,
+          fetch: fetcher.call,
+          minRefreshInterval: const Duration(minutes: 5),
+          now: clock.now,
+        );
+
+        await source.resolve(headerWith(kid: 'k1')); // cold load: fetch #1
+        await expectLater(
+          source.resolve(headerWith(kid: 'x')), // immediate miss: fetch #2
+          throwsA(isA<JwtUnknownKey>()),
+        );
+        expect(fetcher.count, 2);
+      },
+    );
+  });
+
+  group('response size cap (real HttpServer over loopback)', () {
+    // The cap lives in the default HttpClient fetch, so these tests must drive a
+    // real socket (a fetch hook would bypass it). Loopback http is permitted by
+    // the transport policy, which is what makes an in-process server usable here.
+    late HttpServer server;
+    late Uri url;
+
+    Future<void> start(void Function(HttpRequest) handler) async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen(handler);
+      url = Uri.parse('http://127.0.0.1:${server.port}/jwks');
+    }
+
+    tearDown(() async => server.close(force: true));
+
+    test(
+      'a valid JWKS under the cap resolves end-to-end over loopback',
+      () async {
+        final body = jwksJson([rsaJwkJson(kid: 'k1')]);
+        await start((req) {
+          req.response
+            ..statusCode = HttpStatus.ok
+            ..write(body);
+          req.response.close();
+        });
+        final source = HttpJwksSource.fromJwksUri(url);
+        final jwk = await source.resolve(headerWith(kid: 'k1'));
+        expect(jwk.kid, 'k1');
+      },
+    );
+
+    test('a body whose declared Content-Length exceeds the cap fails cold '
+        '(JwksUnavailable wrapping an HttpException)', () async {
+      // One write with a known length => the server sets Content-Length, so
+      // the client rejects before reading the body.
+      final oversized = List<int>.filled(1024 * 1024 + 4096, 0x61); // > 1 MiB
+      await start((req) {
+        req.response
+          ..statusCode = HttpStatus.ok
+          ..add(oversized);
+        req.response.close();
+      });
+      final source = HttpJwksSource.fromJwksUri(url);
+      await expectLater(
+        source.resolve(headerWith(kid: 'k1')),
+        throwsA(
+          isA<JwksUnavailable>().having(
+            (e) => e.cause,
+            'cause',
+            isA<HttpException>(),
+          ),
+        ),
+      );
+    });
+
+    test('a chunked (no Content-Length) body over the cap fails cold via the '
+        'streaming check', () async {
+      await start((req) {
+        req.response
+          ..statusCode = HttpStatus.ok
+          ..headers.chunkedTransferEncoding = true;
+        // 32 chunks of 64 KiB = 2 MiB, streamed with no declared length: the
+        // client aborts once the running total passes the cap.
+        final chunk = List<int>.filled(64 * 1024, 0x61);
+        for (var i = 0; i < 32; i++) {
+          req.response.add(chunk);
+        }
+        req.response.close();
+      });
+      final source = HttpJwksSource.fromJwksUri(url);
+      await expectLater(
+        source.resolve(headerWith(kid: 'k1')),
+        throwsA(
+          isA<JwksUnavailable>().having(
+            (e) => e.cause,
+            'cause',
+            isA<HttpException>(),
+          ),
+        ),
+      );
+    });
+  });
 }

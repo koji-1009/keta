@@ -3,6 +3,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../jwt/jwk.dart';
 import '../jwt/jws.dart';
@@ -29,6 +30,23 @@ typedef JwksFetch = Future<String> Function(Uri url);
 ///   issuer exactly (RFC 8414 §3.3) or it is a [JwksDiscoveryException]. The
 ///   discovered `jwks_uri` is cached; discovery runs once, not per refresh.
 ///
+/// ## Transport security
+///
+/// * **HTTPS is required.** RFC 8414 §2 mandates an `https` issuer, and a
+///   plaintext `jwks_uri` lets a network attacker substitute signing keys. Both
+///   the configured issuer/`jwks_uri` (checked at construction, an
+///   [ArgumentError]) and a `jwks_uri` learned from a discovery document
+///   (checked when discovery runs, a [JwksDiscoveryException]) must be `https`.
+/// * **Loopback exception.** Plaintext `http` is permitted **only** to a
+///   loopback host (`localhost`, `127.0.0.0/8`, `::1`), where there is no
+///   on-path attacker to defend against — this keeps local development against a
+///   dev IdP possible without a global "trust plaintext" escape hatch.
+/// * **Response size is capped.** Every fetch (discovery and JWKS) is bounded to
+///   [_maxResponseBytes]; a body that exceeds it aborts the read and is treated
+///   as a failed refresh (serve-stale if warm, [JwksUnavailable] if cold), so a
+///   hostile or misbehaving endpoint cannot exhaust memory under the
+///   coarse-grained total timeout alone.
+///
 /// ## Refresh discipline (the availability / anti-DoS core)
 ///
 /// * **Happy path is cache-only.** A known `kid` in the cached set resolves with
@@ -49,6 +67,13 @@ typedef JwksFetch = Future<String> Function(Uri url);
 ///   not JWKS freshness (a judged posture; introspection is out of scope). Only
 ///   a **cold** source (nothing ever loaded) surfaces the failure, as
 ///   [JwksUnavailable] wrapping the cause.
+/// * **Cold failures are throttled too.** The very first cold load is exempt
+///   from the cooldown (so startup is not delayed), but a cold load that *fails*
+///   stamps the attempt time and parks its error: further reads within
+///   [minRefreshInterval] re-surface that same failure with **no** fetch, so a
+///   down IdP with nothing cached cannot be hammered once per request. The
+///   parked error is cleared the instant a load succeeds, so recovery is
+///   immediate.
 /// * **No retry loops.** One fetch per trigger; no automatic re-tries (the
 ///   idempotency of a retried operation is not knowable here).
 final class HttpJwksSource implements JwksSource {
@@ -62,6 +87,17 @@ final class HttpJwksSource implements JwksSource {
     required this.totalTimeout,
     required DateTime Function()? now,
   }) : _now = now ?? DateTime.now {
+    // Reject a plaintext transport up front, before any I/O: a configured
+    // `jwks_uri`, or the issuer whose discovery URL is derived from it. A
+    // `jwks_uri` learned later from discovery is checked in [_resolveJwksUri].
+    final configuredJwksUri = _jwksUri;
+    if (configuredJwksUri != null) {
+      _requireSecureUrl(configuredJwksUri, 'jwksUri');
+    }
+    final configuredIssuer = issuer;
+    if (configuredIssuer != null) {
+      _requireSecureUrl(_parseIssuer(configuredIssuer), 'issuer');
+    }
     _fetch = fetch ?? (url) => _defaultFetch(url, connectTimeout, totalTimeout);
   }
 
@@ -135,8 +171,16 @@ final class HttpJwksSource implements JwksSource {
   /// When [_set] was last successfully loaded, for TTL staleness.
   DateTime? _loadedAt;
 
-  /// When a non-cold refresh was last *attempted*, for [minRefreshInterval].
+  /// When a refresh was last *attempted*, for [minRefreshInterval]. Set for
+  /// non-cold refreshes and for *failed* cold loads (see [_recordColdFailure]);
+  /// a successful cold load stays exempt, so the first miss after startup can
+  /// still refresh immediately.
   DateTime? _lastRefreshAt;
+
+  /// The error from the most recent *cold* refresh failure (nothing cached),
+  /// parked so reads within [minRefreshInterval] re-surface it without another
+  /// fetch. Cleared the moment a load succeeds. `null` while warm or healthy.
+  Object? _coldFailure;
 
   /// The single in-flight fetch, if one is running (single-flight).
   Future<JwkSet>? _inFlight;
@@ -170,7 +214,20 @@ final class HttpJwksSource implements JwksSource {
   /// refreshed if past [ttl] and not throttled.
   Future<JwkSet> _currentSet() {
     final set = _set;
-    if (set == null) return _startRefresh(); // cold load
+    if (set == null) {
+      // Cold: nothing cached. Join a load already in flight; otherwise attempt
+      // one — unless a prior cold attempt failed within the cooldown, in which
+      // case re-surface that parked failure with no I/O (a down IdP must not be
+      // fetched once per request). The first-ever attempt is exempt because
+      // _lastRefreshAt is still null, so _cooldownElapsed() is true.
+      final inflight = _inFlight;
+      if (inflight != null) return inflight;
+      if (!_cooldownElapsed()) {
+        final parked = _coldFailure;
+        if (parked != null) return Future.error(parked);
+      }
+      return _startRefresh();
+    }
     final loadedAt = _loadedAt!;
     if (_now().difference(loadedAt) >= ttl && _cooldownElapsed()) {
       return _startRefresh(); // lazy TTL refresh (serve-stale on failure)
@@ -210,16 +267,18 @@ final class HttpJwksSource implements JwksSource {
     final Uri jwksUri;
     try {
       jwksUri = await _resolveJwksUri();
-    } on JwksDiscoveryException {
-      // A trust/config failure (issuer mismatch, malformed discovery doc) is
-      // never masked by serving stale keys and never wrapped — it propagates.
+    } on JwksDiscoveryException catch (e) {
+      // A trust/config failure (issuer mismatch, malformed discovery doc,
+      // plaintext discovered jwks_uri) is never masked by serving stale keys and
+      // never wrapped — it propagates. When cold, still record it so a
+      // persistently bad discovery doc is not re-fetched once per request.
+      if (_set == null) _recordColdFailure(e);
       rethrow;
     } on Exception catch (e) {
       final stale = _set;
       if (stale != null) return stale;
-      throw JwksUnavailable(
-        'OIDC discovery failed for issuer "$issuer"',
-        cause: e,
+      throw _recordColdFailure(
+        JwksUnavailable('OIDC discovery failed for issuer "$issuer"', cause: e),
       );
     }
 
@@ -229,7 +288,9 @@ final class HttpJwksSource implements JwksSource {
     } on Exception catch (e) {
       final stale = _set;
       if (stale != null) return stale;
-      throw JwksUnavailable('failed to fetch JWKS from $jwksUri', cause: e);
+      throw _recordColdFailure(
+        JwksUnavailable('failed to fetch JWKS from $jwksUri', cause: e),
+      );
     }
 
     final JwkSet parsed;
@@ -238,9 +299,8 @@ final class HttpJwksSource implements JwksSource {
     } on JwksMalformed catch (e) {
       final stale = _set;
       if (stale != null) return stale;
-      throw JwksUnavailable(
-        'JWKS document from $jwksUri is malformed',
-        cause: e,
+      throw _recordColdFailure(
+        JwksUnavailable('JWKS document from $jwksUri is malformed', cause: e),
       );
     }
 
@@ -250,7 +310,18 @@ final class HttpJwksSource implements JwksSource {
     final reconciled = parsed.reconcileWith(_set);
     _set = reconciled;
     _loadedAt = _now();
+    _coldFailure = null; // a healthy load clears any parked cold failure
     return reconciled;
+  }
+
+  /// Records a *cold* refresh failure so reads within [minRefreshInterval]
+  /// re-surface it without another fetch: stamps the attempt time (engaging the
+  /// cooldown the cold path is otherwise exempt from) and parks the cause.
+  /// Returns [error] so a caller can `throw _recordColdFailure(...)`.
+  T _recordColdFailure<T extends Exception>(T error) {
+    _lastRefreshAt = _now();
+    _coldFailure = error;
+    return error;
   }
 
   /// The `jwks_uri`, running OIDC Discovery once if it was not given directly.
@@ -302,8 +373,64 @@ final class HttpJwksSource implements JwksSource {
         '"$ju": ${e.message}',
       );
     }
+    // A plaintext jwks_uri smuggled into the discovery document is exactly the
+    // MITM this source refuses: a discovered http:// endpoint (non-loopback) is
+    // a trust failure, kept inside the discovery-error contract.
+    if (!_isSecureTransport(resolved)) {
+      throw JwksDiscoveryException(
+        'OIDC discovery document from $discoveryUri has a non-https "jwks_uri" '
+        '"$resolved"; plaintext transport is refused except to a loopback host',
+      );
+    }
     _jwksUri = resolved;
     return resolved;
+  }
+
+  /// The hard upper bound on a single fetched body (discovery or JWKS), in
+  /// bytes. A real JWKS is a few KiB; 1 MiB is orders of magnitude of headroom
+  /// while still denying an endpoint the ability to stream an unbounded body
+  /// into memory under only the coarse total timeout.
+  static const int _maxResponseBytes = 1024 * 1024;
+
+  /// Parses an issuer identifier to a [Uri] for the transport-security check.
+  /// An issuer that is not a parseable absolute URL yields a scheme-less [Uri]
+  /// that [_requireSecureUrl] then rejects — a loud, correct construction error.
+  static Uri _parseIssuer(String issuer) {
+    try {
+      return Uri.parse(issuer);
+    } on FormatException {
+      throw ArgumentError.value(issuer, 'issuer', 'is not a valid URL');
+    }
+  }
+
+  /// Throws [ArgumentError] unless [url] is an acceptable transport (see
+  /// [_isSecureTransport]). Used for construction-time (programmer-supplied)
+  /// URLs; a discovery-supplied URL uses [JwksDiscoveryException] instead.
+  static void _requireSecureUrl(Uri url, String name) {
+    if (_isSecureTransport(url)) return;
+    throw ArgumentError.value(
+      url.toString(),
+      name,
+      'must use https (RFC 8414 §2 requires an https issuer); plaintext http is '
+      'permitted only to a loopback host (localhost, 127.0.0.0/8, ::1)',
+    );
+  }
+
+  /// Whether [url] may be fetched: `https` always, `http` only to a loopback
+  /// host (no on-path attacker exists on loopback), any other scheme never.
+  static bool _isSecureTransport(Uri url) {
+    if (url.isScheme('https')) return true;
+    if (url.isScheme('http')) return _isLoopbackHost(url.host);
+    return false;
+  }
+
+  /// Whether [host] is a loopback address — `localhost`, an IPv4 `127.0.0.0/8`
+  /// address, or IPv6 `::1`. [Uri.host] returns IPv6 hosts without brackets, so
+  /// a bare `::1` parses correctly.
+  static bool _isLoopbackHost(String host) {
+    if (host == 'localhost') return true;
+    final address = InternetAddress.tryParse(host);
+    return address != null && address.isLoopback;
   }
 
   static Uri _discoveryUri(String issuer) {
@@ -333,13 +460,44 @@ final class HttpJwksSource implements JwksSource {
           uri: url,
         );
       }
-      return await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(totalTimeout);
+      // A declared Content-Length over the cap fails fast without reading a
+      // byte; the streaming check below is the authority, since Content-Length
+      // may be absent (-1, chunked) or a lie.
+      final declared = response.contentLength;
+      if (declared > _maxResponseBytes) {
+        await response.drain<void>();
+        throw HttpException(
+          'response Content-Length $declared exceeds the $_maxResponseBytes '
+          'byte cap',
+          uri: url,
+        );
+      }
+      final bytes = await _readCapped(response, url).timeout(totalTimeout);
+      return utf8.decode(bytes);
     } finally {
       client.close(force: true);
     }
+  }
+
+  /// Reads [response] into memory, aborting once the accumulated bytes exceed
+  /// [_maxResponseBytes]. Throwing out of the `await for` cancels the
+  /// subscription, so an oversized body stops streaming immediately rather than
+  /// being buffered in full and rejected after the fact.
+  static Future<List<int>> _readCapped(
+    Stream<List<int>> response,
+    Uri url,
+  ) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in response) {
+      builder.add(chunk);
+      if (builder.length > _maxResponseBytes) {
+        throw HttpException(
+          'response exceeded the $_maxResponseBytes byte cap',
+          uri: url,
+        );
+      }
+    }
+    return builder.takeBytes();
   }
 }
 
