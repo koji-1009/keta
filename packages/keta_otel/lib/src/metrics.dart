@@ -53,21 +53,17 @@ class MetricsRegistry {
   ];
 
   final List<double> _buckets;
-  final Map<_Key, int> _count = {};
-  // `double`, not `int`: most in-process handlers finish in well under a
-  // millisecond, and truncating each sample to whole seconds before summing
-  // would collapse essentially every sample to 0 rather than just losing
-  // sub-unit precision on the total.
-  final Map<_Key, double> _durationSecondsSum = {};
-  // One counter per entry in [_buckets], indexed to match it. Each slot holds
-  // only the observations that land in *that* bucket specifically (value <=
-  // this edge and, implicitly, > every earlier edge) — not yet the cumulative
-  // count the exposition format requires. `prometheus()` runs the cumulative
-  // sum across slots, in ascending `le` order, at render time. An observation
-  // greater than every configured edge increments no slot here: it is still
-  // captured by `_count` (and so by the implicit `+Inf` bucket), just by no
-  // finite one.
-  final Map<_Key, List<int>> _bucketCounts = {};
+
+  /// One entry per distinct (method, route, status) key, holding its request
+  /// count, summed duration, and per-bucket histogram counts together — a
+  /// single map, not three parallel ones keyed the same way. [record] used
+  /// to do three map operations per call (each recomputing [_Key.hashCode]
+  /// and re-walking the bucket for that key); now it is one lookup followed
+  /// by plain field mutations on the resolved [_Series]. [prometheus] walks
+  /// this map once per metric family, in first-seen key order — the same
+  /// order the old `_count` map (updated first in [record]) used to
+  /// determine, so exposition ordering is unchanged.
+  final Map<_Key, _Series> _series = {};
 
   void record({
     required String method,
@@ -76,19 +72,12 @@ class MetricsRegistry {
     required double durationSeconds,
   }) {
     final key = _Key(method, route, status);
-    _count.update(key, (v) => v + 1, ifAbsent: () => 1);
-    _durationSecondsSum.update(
-      key,
-      (v) => v + durationSeconds,
-      ifAbsent: () => durationSeconds,
-    );
-    final counts = _bucketCounts.putIfAbsent(
-      key,
-      () => List.filled(_buckets.length, 0),
-    );
+    final series = _series.putIfAbsent(key, () => _Series(_buckets.length));
+    series.count++;
+    series.durationSecondsSum += durationSeconds;
     final index = _bucketIndexFor(durationSeconds);
     if (index != -1) {
-      counts[index]++;
+      series.bucketCounts[index]++;
     }
   }
 
@@ -114,19 +103,18 @@ class MetricsRegistry {
     final buffer = StringBuffer()
       ..writeln('# HELP keta_requests_total Total HTTP requests.')
       ..writeln('# TYPE keta_requests_total counter');
-    _count.forEach((key, count) {
-      buffer.writeln('keta_requests_total${key.labels()} $count');
+    _series.forEach((key, series) {
+      buffer.writeln('keta_requests_total${key.labels()} ${series.count}');
     });
     buffer
       ..writeln(
         '# HELP keta_request_duration_seconds Request duration in seconds.',
       )
       ..writeln('# TYPE keta_request_duration_seconds histogram');
-    _count.forEach((key, count) {
-      final counts = _bucketCounts[key]!;
+    _series.forEach((key, series) {
       var cumulative = 0;
       for (var i = 0; i < _buckets.length; i++) {
-        cumulative += counts[i];
+        cumulative += series.bucketCounts[i];
         buffer.writeln(
           'keta_request_duration_seconds_bucket'
           '${key.labels(le: _formatBucketEdge(_buckets[i]))} $cumulative',
@@ -134,15 +122,15 @@ class MetricsRegistry {
       }
       buffer.writeln(
         'keta_request_duration_seconds_bucket${key.labels(le: '+Inf')} '
-        '$count',
+        '${series.count}',
       );
       buffer.writeln(
         'keta_request_duration_seconds_sum${key.labels()} '
-        '${_durationSecondsSum[key]}',
+        '${series.durationSecondsSum}',
       );
       buffer.writeln(
         'keta_request_duration_seconds_count${key.labels()} '
-        '$count',
+        '${series.count}',
       );
     });
     return buffer.toString();
@@ -210,17 +198,51 @@ String _formatBucketEdge(double edge) {
   return truncated == edge ? truncated.toInt().toString() : edge.toString();
 }
 
+/// The mutable running state for one (method, route, status) key: request
+/// count, summed duration, and per-bucket histogram counts, held together so
+/// [MetricsRegistry.record] needs exactly one map lookup per call.
+///
+/// `durationSecondsSum` is `double`, not `int`: most in-process handlers
+/// finish in well under a millisecond, and truncating each sample to whole
+/// seconds before summing would collapse essentially every sample to 0
+/// rather than just losing sub-unit precision on the total.
+///
+/// `bucketCounts` holds one counter per entry in the registry's configured
+/// buckets, indexed to match it. Each slot holds only the observations that
+/// land in *that* bucket specifically (value <= this edge and, implicitly, >
+/// every earlier edge) — not yet the cumulative count the exposition format
+/// requires. `MetricsRegistry.prometheus` runs the cumulative sum across
+/// slots, in ascending `le` order, at render time. An observation greater
+/// than every configured edge increments no slot here: it is still captured
+/// by `count` (and so by the implicit `+Inf` bucket), just by no finite one.
+class _Series {
+  _Series(int bucketCount) : bucketCounts = List.filled(bucketCount, 0);
+  int count = 0;
+  double durationSecondsSum = 0;
+  final List<int> bucketCounts;
+}
+
 class _Key {
-  const _Key(this.method, this.route, this.status);
+  _Key(this.method, this.route, this.status);
   final String method;
   final String route;
   final int status;
+
+  /// Lazily-escaped, memoized `method="...",route="...",status="..."`
+  /// fragment (everything inside the braces except a trailing `le=`).
+  /// [labels] is called `buckets.length + 4` times per key on every
+  /// [MetricsRegistry.prometheus] scrape — once for the counter line, once
+  /// per bucket edge, once for the implicit `+Inf` bucket, and once each for
+  /// `_sum`/`_count` — and escaping `method`/`route` is 4 `replaceAll`
+  /// passes apiece. Computed once per key (the first time this instance
+  /// renders a label, not per call), not once per line.
+  String? _base;
 
   /// The label set for this key, `{method="...",route="...",status="..."}`.
   /// Pass [le] to append the histogram bucket-edge label used by
   /// `_bucket` lines (`+Inf` for the implicit trailing bucket).
   String labels({String? le}) {
-    final base =
+    final base = _base ??=
         'method="${_escape(method)}",route="${_escape(route)}",'
         'status="$status"';
     return le == null ? '{$base}' : '{$base,le="$le"}';
