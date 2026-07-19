@@ -16,10 +16,12 @@ dependencies:
   keta: ^0.1.0
   keta_oidc: ^0.1.0
   keta_openapi: ^0.1.0
+  # testing.dart: bin/demo.dart plays the IdP for a no-network run, minting a
+  # key + token via RsaKeyPair (see lib/demo.dart). A real resource server never
+  # signs, so this is a demo-only use of keta_native's key-generation support —
+  # but because bin/demo.dart is a runnable entrypoint, it is a real dependency,
+  # not a dev one.
+  keta_native: ^0.1.0
 
 dev_dependencies:
   test: ^1.25.0
-  # testing.dart: RsaKeyPair/EcKeyPair mint the real keys the test suite signs
-  # tokens with and builds StaticJwks fixtures from. Test-only — never a
-  # production dependency of this example.
-  keta_native: ^0.1.0

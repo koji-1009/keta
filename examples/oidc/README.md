@@ -82,6 +82,38 @@ here unchanged — this example adds no policy on top of the package:
 - **`HS*`, `alg: none`, and `PS*` tokens are rejected before a key is even
   consulted** — asymmetric-only by design (RS256/RS384/RS512/ES256/ES384).
 
+## Run it standalone (no identity provider)
+
+`bin/demo.dart` runs the exact same server with **no IdP and no network** — it
+plays the identity provider itself, so you can try every route in one command.
+It generates a key with `package:keta_native/testing.dart`, publishes it as a
+`StaticJwks`, mints one valid token, and serves; a real deployment never signs
+anything (that is the IdP's job — this server only verifies), so this is a
+demo-only shortcut, but the verification it exercises is the real
+`BoringSslVerifier` path, not a stub.
+
+```bash
+dart run bin/demo.dart               # serves on :8080, prints a DEMO_TOKEN=… line
+```
+
+The token it prints (valid an hour, scope `reports:read`) drives the protected
+routes directly:
+
+```bash
+curl -s localhost:8080/api/me      -H "authorization: Bearer $DEMO_TOKEN"   # 200
+curl -s localhost:8080/api/reports -H "authorization: Bearer $DEMO_TOKEN"   # 200
+```
+
+To build the shipping AOT binary, use `dart build cli` — **not**
+`dart compile exe`, which cannot build this: `keta_native` and `package:sqlite3`
+carry build hooks, and only `dart build` runs them. The bundle is a self-
+contained executable beside its native libraries:
+
+```bash
+dart build cli -t bin/demo.dart -o build   # build/bundle/bin/demo + build/bundle/lib/
+PORT=8080 ./build/bundle/bin/demo
+```
+
 ## Run it against a real identity provider
 
 Any OIDC provider works — Auth0, Okta, Keycloak, Azure AD, Google, your own.
