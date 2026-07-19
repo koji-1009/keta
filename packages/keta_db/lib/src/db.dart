@@ -84,6 +84,20 @@ abstract interface class Db {
   /// work (a slow HTTP call, an uncompleted future) inside [f]: it holds the
   /// lock and blocks every other database access for the process until it
   /// returns. Keep transactions short and DB-bound.
+  ///
+  /// **Inside [f], go through the [DbConn] you were handed** — the `conn`
+  /// argument (or, under the `tx()` middleware, the connection published as
+  /// `txConn`). Reaching back to [reader]/[writer] from inside a transaction is
+  /// NOT portable: its meaning is engine-specific and this contract does not
+  /// pin it. On the single-writer adapter (keta_sqlite) a [writer] call made
+  /// inside [f] joins the open transaction — the same connection, so the write
+  /// is part of the transaction and commits/rolls back with it. On the pooled
+  /// adapter (keta_rds) the same call acquires a SEPARATE pooled connection and
+  /// runs autocommit, OUTSIDE the transaction — its write commits immediately
+  /// and independently, and on a small writer pool it can even self-starve
+  /// against the connection [f] already holds, blocking until the acquire times
+  /// out into an `Unavailable`. Neither engine is wrong; the divergence is real,
+  /// so the only portable path is the transaction's own connection.
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f);
 
   Future<void> close();
