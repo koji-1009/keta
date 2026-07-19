@@ -9,13 +9,30 @@ import 'transport.dart';
 import 'upgrade.dart';
 
 /// The default HTTP/1.1 transport, built on `dart:io`. Uses only the SDK, so
-/// the core's zero-dependency rule holds even with a transport bundled.
+/// the core's zero-dependency rule holds even with a transport bundled — and
+/// that holds for the TLS and idle-timeout knobs below too: [SecurityContext]
+/// and `HttpServer.idleTimeout` are `dart:io`, not a new dependency.
 ///
 /// No path lets an error escape to the root zone: request handling, response
 /// writing, and connection acceptance all report failures through [onError]
 /// instead of terminating the isolate.
+///
+/// One defense this transport cannot offer, stated plainly as a boundary and
+/// not an omission: there is no accept-level cap on concurrent connections,
+/// because `dart:io`'s [HttpServer] exposes no accept hook to gate on — a
+/// connection is only visible to us once its request head has parsed, which is
+/// already past the point an accept cap would act. Connection-count defense
+/// therefore stays at the OS (fd limits), and post-parse admission stays with
+/// the `rateLimit()` / `concurrencyLimit()` middleware in `admission.dart`.
+/// [idleTimeout] bounds the pre-parse slow-header hold (below), but the raw
+/// count of open sockets is not this transport's to cap.
 class H1Transport implements Transport {
-  const H1Transport({this.address, this.onError});
+  const H1Transport({
+    this.address,
+    this.onError,
+    this.securityContext,
+    this.idleTimeout,
+  });
 
   /// The bind address; defaults to all IPv4 interfaces when null.
   final Object? address;
@@ -24,18 +41,53 @@ class H1Transport implements Transport {
   /// letting them reach the root zone. Falls back to stderr when null.
   final void Function(Object error, StackTrace stack)? onError;
 
+  /// A TLS context that switches [bind] from `HttpServer.bind` to
+  /// `HttpServer.bindSecure`, terminating TLS in-process. Null (the default)
+  /// binds plaintext, byte-for-byte the prior behavior.
+  ///
+  /// Proxy termination stays the expected default; this is the escape hatch,
+  /// not a recommendation. keta's AOT single-binary deployment story includes
+  /// boxes with no proxy in front, and TLS-direct is SDK-only (`dart:io`), so
+  /// offering it keeps the core's zero-dependency rule intact rather than
+  /// pulling in a TLS package. `bindSecure` takes the same `shared: true`, so a
+  /// TLS listener shares the accept queue across `serve(isolates: n)` exactly as
+  /// the plaintext one does — the isolate-sharing story is unchanged by TLS.
+  final SecurityContext? securityContext;
+
+  /// Bounds how long a connection may sit idle before the server reaps it,
+  /// assigned to `HttpServer.idleTimeout` on the bound server (both the plain
+  /// and TLS paths). Null (the default) leaves `dart:io`'s 120 s in place —
+  /// unchanged behavior.
+  ///
+  /// This is the knob that bounds a slow-header (slowloris-style) hold, and it
+  /// is the only one on this transport that can. A connection counts as active
+  /// only once its parser has delivered a *complete* request head — `_markActive`
+  /// fires inside the parser's `listen` callback (verified against SDK 3.12.2
+  /// `lib/_http/http_impl.dart`, the callback at line 3345) — so a peer that
+  /// trickles partial header bytes and never sends the terminating CRLFCRLF
+  /// stays in the idle set the whole time. `dart:io`'s idle purge is two-phase:
+  /// a periodic timer *marks* an idle connection on one tick and *destroys* it
+  /// only on the next (the `Timer.periodic` at http_impl.dart line 3537), so the
+  /// worst-case hold is ~2× idleTimeout. Under the 120 s default that is ~4
+  /// minutes of a socket held on nothing; an operator who wants a tighter bound
+  /// against slow-header holds sets this to something small.
+  final Duration? idleTimeout;
+
   @override
   Future<TransportServer> bind(
     int port,
     FutureOr<Response> Function(TransportRequest) onRequest,
   ) async {
     // shared: true lets every isolate bind the same port and share the accept
-    // queue, so serve(isolates: n) needs no extra coordination.
-    final server = await HttpServer.bind(
-      address ?? InternetAddress.anyIPv4,
-      port,
-      shared: true,
-    );
+    // queue, so serve(isolates: n) needs no extra coordination. bindSecure
+    // honors the same flag, so the TLS path keeps that isolate-sharing intact.
+    final at = address ?? InternetAddress.anyIPv4;
+    final ctx = securityContext;
+    final server = ctx == null
+        ? await HttpServer.bind(at, port, shared: true)
+        : await HttpServer.bindSecure(at, port, ctx, shared: true);
+    // Left untouched when null, so dart:io's 120 s default stands.
+    if (idleTimeout case final timeout?) server.idleTimeout = timeout;
     return _H1Server(server, onRequest, onError ?? _toStderr);
   }
 }

@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:keta/keta.dart';
@@ -277,5 +278,91 @@ void main() {
         socket.destroy();
       },
     );
+  });
+
+  group('idleTimeout (slow-header hold)', () {
+    test(
+      'reaps a connection stuck mid-header, still serves a good one',
+      () async {
+        // A peer that trickles a partial request head and never sends the
+        // terminating CRLFCRLF stays in dart:io's idle set: _markActive only
+        // fires once the head fully parses. idleTimeout is the only knob that
+        // reaps that hold, and the purge is two-phase (mark on one tick, destroy
+        // on the next), so a 300 ms timeout must be given up to ~2x plus slack.
+        final app = App<Env>();
+        app.get('/ok', (c) => c.text('ok'));
+        final server = await app.serve(
+          boot,
+          transport: const H1Transport(
+            idleTimeout: Duration(milliseconds: 300),
+          ),
+          port: 8120,
+        );
+
+        final socket = await Socket.connect(InternetAddress.loopbackIPv4, 8120);
+        // Request line + one header, no blank line: the head never completes.
+        socket.write('GET /ok HTTP/1.1\r\nHost: x\r\n');
+        await socket.flush();
+        final closed = Completer<void>();
+        socket.listen(
+          (_) {},
+          onError: (_) {
+            if (!closed.isCompleted) closed.complete();
+          },
+          onDone: () {
+            if (!closed.isCompleted) closed.complete();
+          },
+        );
+        await closed.future.timeout(
+          const Duration(seconds: 3),
+          onTimeout: () =>
+              fail('idleTimeout did not reap the slow-header connection'),
+        );
+        socket.destroy();
+
+        // The same server still answers a well-behaved request.
+        final client = HttpClient();
+        final req = await client.getUrl(Uri.parse('http://127.0.0.1:8120/ok'));
+        final resp = await req.close();
+        final body = await resp.transform(utf8.decoder).join();
+        client.close();
+        expect(resp.statusCode, 200);
+        expect(body, 'ok');
+
+        await server.shutdown(grace: const Duration(milliseconds: 200));
+      },
+    );
+  });
+
+  group('securityContext (in-process TLS)', () {
+    test('serves HTTPS when given a SecurityContext', () async {
+      // Fixture generated (RSA 2048, CN=localhost, long expiry) with:
+      //   openssl req -x509 -newkey rsa:2048 -keyout localhost.key \
+      //     -out localhost.crt -days 36500 -nodes -subj "/CN=localhost"
+      final context = SecurityContext()
+        ..useCertificateChain('test/fixtures/localhost.crt')
+        ..usePrivateKey('test/fixtures/localhost.key');
+      final app = App<Env>();
+      app.get('/secure', (c) => c.text('over-tls'));
+      final server = await app.serve(
+        boot,
+        transport: H1Transport(securityContext: context),
+        port: 8121,
+      );
+
+      final client = HttpClient()
+        // The fixture is self-signed; accept it for the test only.
+        ..badCertificateCallback = (_, _, _) => true;
+      final req = await client.getUrl(
+        Uri.parse('https://127.0.0.1:8121/secure'),
+      );
+      final resp = await req.close();
+      final body = await resp.transform(utf8.decoder).join();
+      client.close();
+      expect(resp.statusCode, 200);
+      expect(body, 'over-tls');
+
+      await server.shutdown(grace: const Duration(milliseconds: 200));
+    });
   });
 }
