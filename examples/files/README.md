@@ -2,8 +2,8 @@
 
 The same app as [`../register`](../register), registered by **file convention**
 (keta_files) instead of one central `register()`. Each file under `lib/routes/`
-exposes `register(app)`; `dart run keta_files:sync` materializes their imports
-and calls into the marked regions of `lib/routes.dart`. Everything else — the
+declares a single `exported` (`Exported<Env>`); `dart run keta_files:sync` materializes their imports
+and `bind` calls into the marked regions of `lib/routes.dart`. Everything else — the
 domain, the middleware stack, the routes, the security declarations — matches
 the register-based example.
 
@@ -39,7 +39,7 @@ dart run tool/openapi.dart          # the OpenAPI shadow (identical to ../regist
 
 ## Adding a route
 
-Drop a file under `lib/routes/` with a top-level `register(App<Env> app)`, then:
+Drop a file under `lib/routes/` with a top-level `exported` (`Exported<Env>`), then:
 
 ```bash
 dart run keta_files:sync            # wire it into lib/routes.dart
@@ -77,7 +77,7 @@ that embeds it is no longer `const` either.
 
 ## Layout
 
-- `lib/routes/` — one file per concern, each with its own `register`
+- `lib/routes/` — one file per concern, each with its own `exported`
 - `lib/routes.dart` — the manifest: the middleware stack plus the generated
   import/register regions (edit those only through `sync`)
 - `lib/env.dart`, `lib/user_dto.dart` — the domain (copied from `../register`)

@@ -55,7 +55,7 @@ between the two:
   input, so what's being proven is the actual crypto path, not a stub of it.
 
 Every route is driven through `TestClient` — no sockets — mirroring `../auth`'s
-test style: anonymous → `401` (bare challenge), a malformed or wrong-audience
+test style: anonymous → `401` (bare challenge), a malformed
 token → `401` (`invalid_token`), a token missing a required scope → `403`
 (`insufficient_scope`), a good token → `200` with the expected body. The SSE
 route's authenticated path is checked by dispatching a raw `TransportRequest`
@@ -129,7 +129,7 @@ dart run bin/main.dart              # serves on :8080
 Unset either variable and `main()` fails immediately, before binding a port,
 naming exactly what's missing — not a 500 on the first request that needed it.
 `bin/main.dart` also hardcodes the algorithm allowlist to `{RS256}`; widen it
-in `lib/env.dart`/`bin/main.dart` only to the algorithms your IdP actually
+in `bin/main.dart` only to the algorithms your IdP actually
 signs with (see `JwtValidator`'s doc on why the tightest correct set is
 per-deployment).
 

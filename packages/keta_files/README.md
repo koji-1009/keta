@@ -71,14 +71,15 @@ A `_middleware.dart` whose directory has no route beneath it is **dead weight**:
 `dart run keta_files:sync` materializes the tree into the marked regions of `lib/routes.dart`. What runs is ordinary keta code you can read:
 
 ```dart
+// keta_files:imports
+// dart format off
+import 'routes/admin/ping.dart' as $admin_ping;
+import 'routes/_middleware.dart' as $mw$root;
+import 'routes/admin/_middleware.dart' as $mw$admin;
+// dart format on
+// keta_files:end
+
 void register(App<Env> app) {
-  // keta_files:imports
-  // dart format off
-  import 'routes/admin/ping.dart' as $admin_ping;
-  import 'routes/_middleware.dart' as $mw$root;
-  import 'routes/admin/_middleware.dart' as $mw$admin;
-  // dart format on
-  // keta_files:end
   // keta_files:routes
   // dart format off
   $admin_ping.exported.bind(app, const ['admin', 'ping'], [$mw$root.scoped, $mw$admin.scoped]);
@@ -96,7 +97,7 @@ void register(App<Env> app) {
 
 `dart run keta_files:check` exits non-zero when the manifest and the tree disagree. This repo's own CI runs it for the `examples/files` tree (`.github/workflows/ci.yml`), so drift there fails CI; a consuming project must wire the same command into its own CI for the guarantee to hold on its tree:
 
-- **not served** — a route file the manifest does not bind. Its URL would 404 despite the file compiling and the tests passing. `run keta_files:sync` to bind it.
+- **not served** — a route file the manifest does not bind. Its URL would 404 despite the file compiling and the tests passing. `dart run keta_files:sync` to bind it.
 - **scopes no route** — a `_middleware.dart` guarding nothing beneath it.
 
 ## Commands

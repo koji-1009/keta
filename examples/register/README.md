@@ -20,7 +20,7 @@ Configuration is environment-only (§9): `KETA_DB_PATH` (default `app.db`),
 runs on a bus" below for what changes above 1), and `KETA_RDS_URL` (unset by
 default — see "Readiness" below).
 
-The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting concerns, in registration order: `accessLog`, `cors`, `recover`, `timeout`, request metrics (`otel`), `enforceSecurity`, and a `tx` per request. The order is load-bearing, not decoration — see the comment on `buildApp` for why (everything that can throw sits below `recover`; everything that decorates a response sits above it).
+The middleware stack (`lib/app.dart`, `buildApp`) shows the common cross-cutting concerns, in registration order: `accessLog`, `cors`, `recover`, `timeout`, request metrics (`otel`), and `enforceSecurity`. The order is load-bearing, not decoration — see the comment on `buildApp` for why (everything that can throw sits below `recover`; everything that decorates a response sits above it).
 
 ## Endpoints
 

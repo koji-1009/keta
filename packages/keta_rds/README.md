@@ -39,11 +39,14 @@ The adapter translates only the conditions a caller can act on into keta's vocab
 | Condition | SQLSTATE / source | keta exception |
 |---|---|---|
 | uniqueness violation | `23505` | `Conflict` (409) — the driver's constraint/detail carried in `detail`, withheld from the client |
+| foreign-key violation | `23503` | `Conflict` (409) |
+| NOT NULL or CHECK violation | `23502`, `23514` | `UnprocessableEntity` (422) |
+| serialization failure or deadlock | `40001`, `40P01` | `TransientFailure` (503) |
 | lock unobtainable in time | `55P03` | `Unavailable` (503) |
 | server refusing new work or tearing down the session | `53300`, `57P03`, `57P01`, `57P02` | `Unavailable` (503) |
 | server unreachable / connection lost mid-session / pool-acquire timeout | socket error, connection-fatal `PgException`, the socket dying mid-session, pool timeout | `Unavailable` (503) |
 
-Everything else passes through exactly as the driver threw it. A NOT NULL, CHECK, or FOREIGN KEY violation is the app's own bug: it earns the 500 it gets, and a 409 would only tell the client to retry the unretryable. This is a floor — an adapter may translate more, never less.
+Everything else passes through exactly as the driver threw it. A syntax error, a data-type mismatch, or an undefined column is the app's own bug: it earns the 500 it gets. This is a floor — an adapter may translate more, never less.
 
 ## Type contract
 

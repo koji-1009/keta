@@ -2,7 +2,7 @@
 
 An OIDC / OAuth2 **resource server** for keta: it verifies the Bearer JWTs an identity provider issues, injects the resulting principal, and authorizes on scope. It is a Ring 3 package — it builds on keta core and, for signature verification, on `keta_native` — and it does exactly one side of OIDC: the side that *consumes* tokens.
 
-> **Status.** This is the first wave. What ships today is the JWT decode-and-validate core and the `SignatureVerifier` seam (below). JWKS fetching, the `oidc()` middleware, and the BoringSSL-backed verifier land in later waves; the public surface documented here does not change when they do.
+> **Status.** All waves have landed: the JWT decode-and-validate core, the `SignatureVerifier` seam (below), JWKS fetching, the `oidc()` middleware, and the BoringSSL-backed verifier all ship today.
 
 ## Why a resource server, and only that
 
@@ -50,7 +50,7 @@ abstract interface class SignatureVerifier {
 
 ## Error posture
 
-Every reason a token is rejected is a `final` subtype of the sealed `JwtRejection` — malformed, algorithm-not-allowed, bad-signature, expired, not-yet-valid, issuer-mismatch, audience-mismatch, unknown-key. The set is closed and enumerable, so the `oidc()` middleware (a later wave) can map it to RFC 6750 `401` responses with an exhaustive `switch` the compiler checks. `JwtRejection` does **not** carry an HTTP status: turning a reason into a response is the middleware's job, and the JWT layer stays free of HTTP semantics. It `implements Exception` (a rejected token is an input-validation outcome to catch); author defects in this package surface as `Error` instead.
+Every reason a token is rejected is a `final` subtype of the sealed `JwtRejection` — malformed, algorithm-not-allowed, bad-signature, expiration-required, expired, not-yet-valid, issuer-mismatch, audience-mismatch, unknown-key. The set is closed and enumerable, so the `oidc()` middleware can map it to RFC 6750 `401` responses with an exhaustive `switch` the compiler checks. `JwtRejection` does **not** carry an HTTP status: turning a reason into a response is the middleware's job, and the JWT layer stays free of HTTP semantics. It `implements Exception` (a rejected token is an input-validation outcome to catch); author defects in this package surface as `Error` instead.
 
 ## Usage sketch
 
@@ -58,7 +58,7 @@ The pipeline is three separable steps — parse, resolve a key, validate — so 
 
 ```dart
 final jws = Jws.parse(compactToken);          // structural: throws JwtMalformed
-final key = jwks.resolve(jws.header.kid);      // JWKS wave; throws JwtUnknownKey
+final key = await jwks.resolve(jws.header);    // JWKS: throws JwtUnknownKey
 final claims = validator.validate(jws, key);   // policy + signature + claims
 ```
 
