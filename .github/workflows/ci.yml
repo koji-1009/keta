@@ -12,41 +12,18 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    services:
-      # Lets keta_rds run its real contract suite instead of skipping it.
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      # package:postgres defaults to attempting SSL; the stock postgres:16
-      # service container has it off, so connecting would fail without this.
-      KETA_TEST_PG: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
         with:
           # Stable is what users install; if a new stable's formatter reformats, the format gate fails loudly and a one-off reformat commit fixes it.
           sdk: stable
-      # package:sqlite3 loads the system libsqlite3; keta_native builds BoringSSL
-      # from source at hook time (triggered here by `dart test` in keta_native /
-      # keta_oidc), which needs a C/C++ compiler and libstdc++ — clang and
-      # build-essential are preinstalled on ubuntu-latest, installed explicitly
-      # here so a runner-image change can't silently break the native build.
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev clang
-      # build.yml's BoringSSL reuse under a separate key: the JIT test path
-      # builds different hook configs than the AOT path, and a saved key is
-      # immutable, so sharing build.yml's would never cache the test objects.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .dart_tool/hooks_runner
-          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}
+          path: ~/.pub-cache
+          # One pub workspace = one resolve, so every job shares this key.
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze --fatal-infos
@@ -55,19 +32,80 @@ jobs:
       # file added but never synced — see packages/keta_files/README.md.
       - name: keta_files:check (examples/files)
         run: (cd examples/files && dart run keta_files:check)
-      # Hook-free, so it cannot contend for .dart_tool/hooks_runner with the
-      # hook-running packages, which stay serial in the loop below.
-      - name: Test keta_lints (background)
-        id: test-lints
-        run: (cd packages/keta_lints && dart test)
-        background: true
-      - name: Test every package and example (keta_lints runs in the background)
+      # A new package or example with a test/ dir must join the test matrix
+      # below; this diff makes forgetting it a red run, not a silent skip.
+      - name: Test matrix covers every test/ dir
         run: |
-          for d in packages/*/ examples/*/; do
-            if [ "$d" = "packages/keta_lints/" ]; then continue; fi
-            if [ -d "$d/test" ]; then
-              echo "=== $d"
-              (cd "$d" && dart test)
-            fi
+          diff <(for d in packages/*/ examples/*/; do [ -d "${d}test" ] && echo "${d%/}"; done | sort) \
+               <(awk '$1 == "-" && $2 ~ /^(packages|examples)\//{ print $2 }' .github/workflows/ci.yml | sort)
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Coverage of this list is enforced by the checks job's diff gate.
+        dir:
+          - packages/keta
+          - packages/keta_bus
+          - packages/keta_db
+          - packages/keta_files
+          - packages/keta_lints
+          - packages/keta_multipart
+          - packages/keta_native
+          - packages/keta_oidc
+          - packages/keta_openapi
+          - packages/keta_otel
+          - packages/keta_rds
+          - packages/keta_shelf
+          - packages/keta_sqlite
+          - examples/auth
+          - examples/files
+          - examples/oidc
+          - examples/register
+          - examples/websocket
+    # keta_rds starts a Postgres container, which ubuntu-slim cannot host
+    # (unprivileged, no nested containers); keta_lints and the BoringSSL
+    # consumers are CPU-bound, and ubuntu-slim is 1 vCPU with a hard
+    # 15-minute job cap.
+    runs-on: ${{ contains('packages/keta_rds packages/keta_lints packages/keta_native packages/keta_oidc examples/oidc', matrix.dir) && 'ubuntu-latest' || 'ubuntu-slim' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: stable
+      # package:sqlite3 loads the system libsqlite3; the BoringSSL hook build
+      # additionally needs a C/C++ compiler — both installed explicitly so a
+      # runner-image change can't silently break either.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev ${{ contains('packages/keta_native packages/keta_oidc examples/oidc', matrix.dir) && 'clang' || '' }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+      # The hooks runner keys the expensive compile artifacts per consuming
+      # package, and a saved cache is immutable, so each BoringSSL consumer
+      # saves under its own key; the restore-keys prefix still shares the
+      # source checkout between them.
+      - if: contains('packages/keta_native packages/keta_oidc examples/oidc', matrix.dir)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .dart_tool/hooks_runner
+          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}-${{ matrix.dir }}
+          restore-keys: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}-
+      - run: dart pub get
+      # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
+      # visibly otherwise), so the container and the variable exist only on
+      # this entry. sslmode=disable: the stock postgres:16 image ships with
+      # SSL off, and package:postgres attempts SSL by default.
+      - name: Start Postgres
+        if: matrix.dir == 'packages/keta_rds'
+        run: |
+          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
+          for _ in $(seq 1 30); do
+            if docker exec pg pg_isready -h localhost -U postgres; then ready=1; break; fi
+            sleep 1
           done
-      - wait: [test-lints]
+          [ "${ready:-0}" = 1 ]
+          echo "KETA_TEST_PG=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" >> "$GITHUB_ENV"
+      - name: Test ${{ matrix.dir }}
+        run: cd '${{ matrix.dir }}' && dart test
