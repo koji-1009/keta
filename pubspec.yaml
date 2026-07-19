@@ -27,6 +27,8 @@ workspace:
   - packages/keta_multipart
   - packages/keta_rds
   - packages/keta_bus
+  - packages/keta_native
+  - packages/keta_oidc
   - examples/register
   - examples/files
   - examples/auth
