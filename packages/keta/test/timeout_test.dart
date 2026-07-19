@@ -46,6 +46,37 @@ void main() {
       },
     );
 
+    test('fires 504 and warns (not silently) on a late-thrown error', () async {
+      final env = newEnv();
+      final gate = Completer<void>();
+      final sawAbort = Completer<void>();
+      final app = App<Env>()..use(timeout(const Duration(milliseconds: 20)));
+      app.get('/slow', (c) async {
+        unawaited(c.aborted.then((_) => sawAbort.complete()));
+        await gate.future;
+        throw StateError('late boom');
+      });
+      final client = TestClient(app, env);
+
+      final r = await client.get('/slow');
+      expect(r.status, 504);
+      expect(r.json(), {'error': 'request timeout'});
+      await sawAbort.future.timeout(const Duration(seconds: 1));
+
+      gate.complete();
+      await pumpEventQueue();
+      final lines = (env.log as MemLog).lines;
+      expect(
+        lines.any(
+          (l) =>
+              l['level'] == 'warn' &&
+              l['msg'] == 'handler failed after timeout' &&
+              '${l['error']}'.contains('late boom'),
+        ),
+        isTrue,
+      );
+    });
+
     test('a synchronous handler result passes through untouched', () {
       final c = testContext(newEnv());
       final result = timeout<Env>(Duration.zero)(c, (c) => c.text('sync'));

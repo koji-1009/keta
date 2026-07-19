@@ -365,4 +365,50 @@ void main() {
       await server.shutdown(grace: const Duration(milliseconds: 200));
     });
   });
+
+  group('onError guard (a throwing reporter cannot escape)', () {
+    test(
+      'a throwing onError does not crash the server or block later requests',
+      () async {
+        // A stream body that emits data, then throws mid-write — hits
+        // _write's catch clause, the exact call site that used to invoke a
+        // caller-supplied onError unguarded.
+        Stream<List<int>> brokenStream() async* {
+          yield utf8.encode('partial');
+          throw StateError('boom mid-stream');
+        }
+
+        final app = App<Env>();
+        app.get('/broken', (c) => Response(200, body: brokenStream()));
+        app.get('/ok', (c) => c.text('ok'));
+        final server = await app.serve(
+          boot,
+          transport: H1Transport(
+            onError: (error, stack) => throw StateError('reporter defect'),
+          ),
+          port: 8122,
+        );
+
+        // Drives the mid-stream failure; the response is truncated but the
+        // exchange must not hang and must not take the isolate down.
+        await _rawExchange(
+          8122,
+          'GET /broken HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n',
+        );
+
+        // The isolate — and this server — must still be alive and able to
+        // answer a fresh request; a leaked exception from the throwing
+        // reporter would otherwise have reached the root zone.
+        final client = HttpClient();
+        final req = await client.getUrl(Uri.parse('http://127.0.0.1:8122/ok'));
+        final resp = await req.close();
+        final body = await resp.transform(utf8.decoder).join();
+        client.close();
+        expect(resp.statusCode, 200);
+        expect(body, 'ok');
+
+        await server.shutdown(grace: const Duration(milliseconds: 200));
+      },
+    );
+  });
 }

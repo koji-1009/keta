@@ -211,7 +211,15 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
     },
     onError: (Object e, StackTrace st) {
       timer.cancel();
-      if (!completer.isCompleted) completer.completeError(e, st);
+      if (completer.isCompleted) {
+        // Symmetric with the late-value branch above: the 504 is already
+        // sent, so this error has nowhere left to go — but silently
+        // swallowing it (rather than merely not forwarding it) would hide a
+        // handler defect. Log it instead of letting it vanish.
+        c.log.warn('handler failed after timeout', {'error': '$e'});
+      } else {
+        completer.completeError(e, st);
+      }
     },
   );
   return completer.future;

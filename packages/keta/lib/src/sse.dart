@@ -163,6 +163,20 @@ extension SseResponses<E> on Context<E> {
   /// killing a quiet-but-alive stream; `maxIdle` reaps a stream the app itself
   /// has abandoned.
   ///
+  /// A resume also re-arms a *fresh, full* `maxIdle` window (not the remainder
+  /// of the one a pause interrupted) — see `armIdle`'s call from `onResume`.
+  /// That is a deliberate choice, not an oversight: `maxIdle` is meant to
+  /// reap an abandoned *application*, and a consumer that is merely slow —
+  /// paused under backpressure, then resuming — is not that; punishing it
+  /// with a clock that kept running while paused would cut a live-but-slow
+  /// reader for a fault that is the network's, not the app's. The tradeoff
+  /// this accepts: a peer that paces its own pause/resume can keep
+  /// re-arming `maxIdle` indefinitely, even after the app has genuinely gone
+  /// silent, so `maxIdle` alone cannot be relied on to bound such a client.
+  /// [maxLifetime] is the bound that holds regardless — it is never re-armed
+  /// by activity, pause, or resume (see its own doc below), so it is the cap
+  /// to depend on against a pathological pause/resume client.
+  ///
   /// [maxLifetime] is an absolute cap measured from when the response starts
   /// streaming, regardless of activity — it fires even if events (or
   /// keep-alives) are still flowing right up to the deadline, and it fires even
@@ -307,8 +321,14 @@ Stream<List<int>> _sseBody(
     });
   }
 
-  // Re-armed only when a real event goes out (never by a keep-alive), so
-  // `maxIdle` measures true application silence.
+  // Re-armed on a real event going out (never by a keep-alive — see
+  // armKeepAlive) and, separately, on every resume (see onResume below) with a
+  // fresh full window rather than the pause-interrupted remainder. So this
+  // measures true application silence only while the consumer isn't pausing;
+  // a consumer that paces its own pause/resume can keep this from ever
+  // firing. That is a deliberate tradeoff, not a gap — see the doc on
+  // [SseResponses.sse]'s `maxIdle` parameter for why, and why `maxLifetime`
+  // is the bound to rely on against such a client.
   void armIdle() {
     if (maxIdle == null) return;
     idleTimer?.cancel();

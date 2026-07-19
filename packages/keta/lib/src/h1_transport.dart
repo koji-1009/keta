@@ -15,7 +15,10 @@ import 'upgrade.dart';
 ///
 /// No path lets an error escape to the root zone: request handling, response
 /// writing, and connection acceptance all report failures through [onError]
-/// instead of terminating the isolate.
+/// instead of terminating the isolate — and that holds even when the
+/// caller-supplied [onError] itself throws, since [bind] wraps it (see
+/// [_guardedOnError]) so a broken reporter falls back to stderr rather than
+/// escaping from one of its own call sites.
 ///
 /// One defense this transport cannot offer, stated plainly as a boundary and
 /// not an omission: there is no accept-level cap on concurrent connections,
@@ -39,6 +42,12 @@ class H1Transport implements Transport {
 
   /// Reports transport-level failures (write errors, accept errors) instead of
   /// letting them reach the root zone. Falls back to stderr when null.
+  ///
+  /// A reporter that itself throws is an authoring defect, not a case this
+  /// transport lets escalate: [bind] wraps it (see [_guardedOnError]) so the
+  /// throw is caught and reported to stderr alongside the original error,
+  /// instead of rejecting a future nothing awaits or reaching the root zone
+  /// from inside a catch clause.
   final void Function(Object error, StackTrace stack)? onError;
 
   /// A TLS context that switches [bind] from `HttpServer.bind` to
@@ -88,12 +97,38 @@ class H1Transport implements Transport {
         : await HttpServer.bindSecure(at, port, ctx, shared: true);
     // Left untouched when null, so dart:io's 120 s default stands.
     if (idleTimeout case final timeout?) server.idleTimeout = timeout;
-    return _H1Server(server, onRequest, onError ?? _toStderr);
+    return _H1Server(server, onRequest, _guardedOnError(onError));
   }
 }
 
 void _toStderr(Object error, StackTrace stack) {
   stderr.writeln('keta H1 transport error: $error');
+}
+
+/// Wraps a caller-supplied [onError] so every call site in this transport can
+/// invoke it unconditionally, without itself needing a try/catch. `_handle`'s
+/// `catchError(_onError)` and `_write`'s catch clause both call `_onError`
+/// already inside error-handling code; if the reporter itself threw there,
+/// the `catchError` case produces a rejected future nothing awaits (a root-zone
+/// escape) and the `_write` case throws out of a `catch` block. Since a
+/// throwing reporter is an authoring defect rather than something the
+/// transport can act on, it is contained the same way any other transport
+/// failure is: reported to stderr, alongside the error the broken reporter
+/// failed to report, and swallowed. `onError == null` returns [_toStderr]
+/// directly rather than wrapping it — it does not throw, so the extra
+/// try/catch would be pure overhead on the default path.
+void Function(Object, StackTrace) _guardedOnError(
+  void Function(Object, StackTrace)? onError,
+) {
+  if (onError == null) return _toStderr;
+  return (Object error, StackTrace stack) {
+    try {
+      onError(error, stack);
+    } catch (reportError, reportStack) {
+      _toStderr(error, stack);
+      _toStderr(reportError, reportStack);
+    }
+  };
 }
 
 class _H1Server implements TransportServer {
