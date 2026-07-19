@@ -355,5 +355,36 @@ void main() {
         await closed;
       },
     );
+
+    test(
+      'close is not subject to the lock acquisition timeout: it outlives a '
+      'holder that runs past lockTimeout instead of throwing Unavailable',
+      () async {
+        final db = SqliteDb.memory(
+          lockTimeout: const Duration(milliseconds: 50),
+        );
+        await db.writer.execute('create table t (n integer)');
+        final gate = Completer<void>();
+        // Holds the lock well past lockTimeout — long enough that, were close()
+        // routed through the same request-path bound as a query/transaction, it
+        // would time out and throw Unavailable before the tx ever released it.
+        final hung = db.transaction<int>((c) async {
+          await c.execute('insert into t values (1)');
+          await gate.future;
+          return 0;
+        });
+
+        final closed = db.close();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        gate.complete();
+        await hung;
+
+        await closed; // must resolve, not throw Unavailable
+
+        // And it actually closed the connection, rather than giving up and
+        // leaving it open — same post-close contract as the 'lifecycle' group.
+        await expectLater(db.reader.query('select 1'), throwsStateError);
+      },
+    );
   });
 }

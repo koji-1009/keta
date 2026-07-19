@@ -202,8 +202,31 @@ class SqliteDb implements Db {
     );
   }
 
+  /// Closes the underlying connection once the statement or transaction
+  /// currently holding the lock finishes — queued behind the same [_tail]
+  /// chain as any other call, so it does not preempt or kill in-flight work.
+  ///
+  /// Deliberately does **not** go through [_synchronized]/[run]: those apply
+  /// [_lockTimeout], the request-path bound that exists so a caller waiting on
+  /// a busy connection fails loud in bounded time rather than hanging forever
+  /// (see [_lockTimeout]'s doc). [close] is not a request — under a saturated
+  /// lock queue, applying that same bound here would make `close()` itself
+  /// throw [Unavailable] and return with the connection still open, which is
+  /// worse than waiting: a server that believes it shut down its database
+  /// cleanly, but did not. So [close] waits for the current holder (and
+  /// everything already queued ahead of it) for as long as that takes, with no
+  /// timeout of its own. In practice this wait is short: shutdown
+  /// (`Server.shutdown` in package:keta) already drains in-flight requests,
+  /// bounded by its own `grace` period, before calling [close] — [close]'s
+  /// unbounded wait is a backstop against the request-path bound firing here
+  /// by accident, not a substitute for that draining.
   @override
-  Future<void> close() => _synchronized(() => _db.close());
+  Future<void> close() {
+    final done = Completer<void>();
+    final previous = _tail;
+    _tail = done.future;
+    return _acquireThenRun(previous, done, _db.close, null);
+  }
 
   /// Whether the current zone belongs to the transaction that is executing right
   /// now (identity, not just "some transaction ran here once").
@@ -222,16 +245,28 @@ class SqliteDb implements Db {
     final done = Completer<void>();
     final previous = _tail;
     _tail = done.future;
-    return _acquireThenRun(previous, done, action);
+    return _acquireThenRun(previous, done, action, _lockTimeout);
   }
 
+  /// Waits for [previous] (the caller's predecessor in the [_tail] chain),
+  /// then runs [action] and signals [done] so the next-in-line can proceed.
+  ///
+  /// [timeout] bounds the wait on [previous]; `null` waits indefinitely. Every
+  /// caller except [close] passes [_lockTimeout] here — [close] passes `null`
+  /// because it must not fail loud just because the connection was busy, only
+  /// wait it out (see [close]'s doc).
   Future<T> _acquireThenRun<T>(
     Future<void> previous,
     Completer<void> done,
     FutureOr<T> Function() action,
+    Duration? timeout,
   ) async {
     try {
-      await previous.timeout(_lockTimeout);
+      if (timeout == null) {
+        await previous;
+      } else {
+        await previous.timeout(timeout);
+      }
     } on TimeoutException {
       // Give up our slot without jumping the queue: successors still wait for
       // the holder that is actually running, then run in order.
