@@ -167,9 +167,18 @@ Future<MigrationResult> applyMigrations(
 /// a pre-checksum ledger in place. The `select` naming `checksum` is what fails
 /// on a legacy ledger (the column does not exist yet); the table itself is
 /// present because the caller just ran `create table if not exists`, so the
-/// only reason to reach the catch is the missing column. Add it — nullable, so
-/// pre-existing rows keep NULL — and re-read.
+/// *expected* reason to reach the catch is the missing column. Add it —
+/// nullable, so pre-existing rows keep NULL — and re-read.
+///
+/// A broken connection (unreachable database, corrupt file, ...) would reach
+/// that same catch, though, and its `ALTER TABLE` fallback would then fail
+/// too — with its own error replacing the real one, hiding an availability
+/// problem behind what looks like a schema-upgrade failure. So, exactly as
+/// [VerifyMigrations.verifyMigrations] does, connectivity is probed first;
+/// only *that* query is allowed to surface as "the db is unreachable",
+/// leaving the catch below to mean what its comment says it means.
 Future<List<Map<String, Object?>>> _readLedgerForApply(Db db) async {
+  await db.writer.query('select 1');
   try {
     return await db.writer.query(
       'select version, checksum from _keta_migrations',

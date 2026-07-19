@@ -249,6 +249,29 @@ void main() {
       },
     );
 
+    test('a connectivity failure during the ledger read surfaces itself, not '
+        "the ALTER TABLE fallback's error", () async {
+      m('0001_one.sql', 'create table one (id integer);');
+      final db = FakeDb()
+        ..unreachable = StateError('connection reset by peer')
+        ..failOn = 'alter table';
+
+      // Before the connectivity probe, the initial select's failure was
+      // swallowed by the catch-all in _readLedgerForApply, and the fallback's
+      // own ALTER TABLE failure — a different, misleading error naming no
+      // connectivity problem at all — surfaced in its place.
+      await expectLater(
+        applyMigrations(db, directory: dir.path),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'connection reset by peer',
+          ),
+        ),
+      );
+    });
+
     test(
       'a raw SQL error (not a KetaException) names the failing migration',
       () async {
