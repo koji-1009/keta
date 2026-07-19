@@ -76,6 +76,7 @@ class OtlpExporter implements Disposable {
     Completer<void>? closing,
     Set<Timer>? activeSleeps,
     this._onWarn,
+    this._debugHttpClient,
   }) : _closing = closing ?? Completer<void>(),
        _activeSleeps = activeSleeps ?? <Timer>{} {
     if (exportInterval > Duration.zero) {
@@ -127,7 +128,21 @@ class OtlpExporter implements Disposable {
     Duration exportInterval = defaultExportInterval,
     OtlpWarn? onWarn,
   }) {
-    final client = HttpClient();
+    // `connectionTimeout` bounds the TCP connect phase specifically —
+    // without it, a SYN blackholed by an unreachable/firewalled peer leaves
+    // `client.postUrl` unresolved (OS-bound, minutes or unbounded) while
+    // `request` in `attempt` below is still null, so the outer
+    // `pending.timeout`'s `request?.abort()` has nothing to abort and the
+    // connect attempt keeps running underneath every subsequent export
+    // interval. Reusing [timeout] directly (rather than some fraction of
+    // it) is the simplest bound that is still correct: `timeout` is already
+    // the ceiling for the *entire* attempt (connect + request + response),
+    // so letting connect alone consume up to all of it changes nothing about
+    // the outer bound — it only closes the gap where connect could
+    // previously run unbounded beneath it. A smaller derived fraction would
+    // add a second tunable with no failure it prevents that `timeout` alone
+    // doesn't already prevent.
+    final client = HttpClient()..connectionTimeout = timeout;
     // Completed by `close()` the instant shutdown begins (before it awaits
     // in-flight work). Retry sleeps race this so a mid-retry batch bails
     // promptly rather than pinning `flush()` for its remaining delay. Shared
@@ -148,16 +163,25 @@ class OtlpExporter implements Disposable {
     // [retryBackoff]; returns null on a 2xx success; throws on a terminal
     // failure (any other non-2xx, or a transport/timeout error).
     //
-    // `Future.timeout` on its own only abandons the *Future*: the collector
-    // side's socket stays ESTABLISHED forever because nothing ever tells the
-    // underlying HttpClientRequest to stop waiting for a response. This keeps a
-    // handle to the in-flight request so a timeout can `abort()` it — which is
-    // what actually tears down the socket — in addition to surfacing the same
-    // TimeoutException a bare `.timeout()` would. The original `pending` future
-    // is `ignore()`d once aborted: `abort()` completes it with an error
-    // asynchronously, after the returned future has already completed via
-    // `onTimeout`, so nothing is left to observe it — without `ignore()` that
-    // would surface as an unhandled async error.
+    // `Future.timeout` on its own only abandons the *Future*: once a socket
+    // exists, the collector side's socket stays ESTABLISHED forever because
+    // nothing ever tells the underlying HttpClientRequest to stop waiting for
+    // a response. This keeps a handle to the in-flight request so a timeout
+    // can `abort()` it — which is what actually tears down the socket — in
+    // addition to surfacing the same TimeoutException a bare `.timeout()`
+    // would. The original `pending` future is `ignore()`d once aborted:
+    // `abort()` completes it with an error asynchronously, after the returned
+    // future has already completed via `onTimeout`, so nothing is left to
+    // observe it — without `ignore()` that would surface as an unhandled
+    // async error.
+    //
+    // `abort()` only reaches a socket that exists: while `postUrl` itself is
+    // still connecting, `request` here is null, so a `pending.timeout` firing
+    // during connect finds nothing to abort. That phase is bounded instead by
+    // the `HttpClient.connectionTimeout` set at construction (above) — it
+    // makes `postUrl` itself complete with an error once connect exceeds
+    // [timeout], which this same retry/terminal classification then handles
+    // like any other transport failure.
     Future<Duration?> attempt(String payload) {
       HttpClientRequest? request;
       final pending = () async {
@@ -236,6 +260,7 @@ class OtlpExporter implements Disposable {
       closing: closing,
       activeSleeps: activeSleeps,
       onWarn: onWarn,
+      debugHttpClient: client,
     );
   }
 
@@ -272,6 +297,11 @@ class OtlpExporter implements Disposable {
   final int maxBatchSize;
   final void Function()? _releaseResources;
   final OtlpWarn? _onWarn;
+
+  /// The `HttpClient` backing `OtlpExporter.http`, kept only for
+  /// [debugConnectionTimeout] — null for the plain [OtlpExporter] constructor,
+  /// which has no `HttpClient` of its own.
+  final HttpClient? _debugHttpClient;
   final Set<Future<void>> _inFlight = {};
 
   /// The bounded export queue [enqueue] appends to and [_drainNextBatch]
@@ -519,6 +549,19 @@ class _RetryTimer implements Timer {
 /// outside via timing.
 int debugActiveSleepCount(OtlpExporter exporter) =>
     exporter._activeSleeps.length;
+
+/// The `connectionTimeout` configured on `OtlpExporter.http`'s underlying
+/// `HttpClient` — a debug seam for tests (see [debugActiveSleepCount]).
+/// Fabricating a real connect-phase hang (a SYN blackholed by an
+/// unreachable/firewalled peer) is not something a unit test can do
+/// deterministically or portably: there is no standard, host-independent way
+/// to make a TCP SYN vanish rather than get answered or RST'd. This instead
+/// pins the mechanism the fix actually relies on — that the timeout is wired
+/// onto the client at all — without depending on network conditions outside
+/// the test's control. Returns null for the plain [OtlpExporter] constructor,
+/// which has no `HttpClient`.
+Duration? debugConnectionTimeout(OtlpExporter exporter) =>
+    exporter._debugHttpClient?.connectionTimeout;
 
 /// Encodes [spans] into an OTLP/JSON `ExportTraceServiceRequest` body.
 Map<String, Object?> encodeOtlp(List<OtelSpan> spans, String serviceName) => {

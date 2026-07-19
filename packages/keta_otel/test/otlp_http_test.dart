@@ -10,7 +10,8 @@ import 'dart:io';
 import 'package:keta_otel/keta_otel.dart';
 // A debug-only seam (mirrors keta's `debugWebSocketChannel`): not part of the
 // public API, so it is imported straight from `src/` rather than re-exported.
-import 'package:keta_otel/src/otlp.dart' show debugActiveSleepCount;
+import 'package:keta_otel/src/otlp.dart'
+    show debugActiveSleepCount, debugConnectionTimeout;
 import 'package:test/test.dart';
 
 void main() {
@@ -165,6 +166,40 @@ void main() {
       ),
     );
   });
+
+  test(
+    'OtlpExporter.http wires connectionTimeout to the per-attempt timeout',
+    () async {
+      // Guards the connect-phase hang this exporter is otherwise exposed to:
+      // `pending.timeout`'s `request?.abort()` can only reach a socket that
+      // already exists, so a SYN blackholed by an unreachable/firewalled peer
+      // — `request` still null — would run unbounded without a
+      // `connectionTimeout` on the client. There is no portable, deterministic
+      // way to fabricate that exact hang in a unit test (a closed port RSTs
+      // fast, which is a different, already-covered path — see "accepts the
+      // connection and never responds" above), so this pins the mechanism the
+      // fix relies on instead: the client is actually configured with a
+      // bound, and it is [timeout] itself, not some derived fraction of it.
+      final exporterDefault = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:1/v1/traces'), // never dialed.
+      );
+      addTearDown(exporterDefault.close);
+      expect(
+        debugConnectionTimeout(exporterDefault),
+        const Duration(seconds: 10), // OtlpExporter.http's default `timeout`.
+      );
+
+      final exporterCustom = OtlpExporter.http(
+        Uri.parse('http://127.0.0.1:1/v1/traces'),
+        timeout: const Duration(milliseconds: 250),
+      );
+      addTearDown(exporterCustom.close);
+      expect(
+        debugConnectionTimeout(exporterCustom),
+        const Duration(milliseconds: 250),
+      );
+    },
+  );
 
   // Still valid after the batching redesign, unchanged: `enqueue` no longer
   // sends synchronously, but the three sends below are never simultaneously
