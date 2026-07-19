@@ -1,0 +1,87 @@
+name: Build
+
+# The AOT / native-assets surface, which the test gate (ci.yml) does not cover:
+# it runs `dart test`, which loads native assets under the JIT, whereas a shipped
+# binary is `dart build cli` (AOT + bundled dynamic libraries). This job proves
+# that path on Linux — never exercised anywhere else — reports the bundle sizes,
+# and smoke-runs the AOT binary so the real BoringSSL verification path executes,
+# not just links.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  aot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          # Stable is what users build with; keep this in step with ci.yml.
+          sdk: stable
+      # package:sqlite3 loads the system libsqlite3; keta_native compiles
+      # BoringSSL from source at hook time, needing a C/C++ compiler + libstdc++.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev clang
+      # Best-effort reuse of the hook runner's BoringSSL checkout and compiled
+      # objects across runs, keyed on the build hook (which pins the BoringSSL
+      # commit): a hit skips the shallow clone and the ~240-TU recompile; a miss
+      # just rebuilds, so correctness never depends on the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .dart_tool/hooks_runner
+          key: boringssl-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}
+      - run: dart pub get
+      # dart compile exe cannot build these: it does not run build hooks, and
+      # both sqlite3 and keta_native have them, so `dart build cli` is the only
+      # AOT path. register carries the sqlite native asset; the oidc demo carries
+      # BoringSSL.
+      - name: Build examples/register (sqlite native asset)
+        working-directory: examples/register
+        run: dart build cli -o "$GITHUB_WORKSPACE/build/register"
+      - name: Build examples/oidc demo (BoringSSL native asset)
+        working-directory: examples/oidc
+        run: dart build cli -t bin/demo.dart -o "$GITHUB_WORKSPACE/build/oidc"
+      - name: Report bundle sizes
+        run: |
+          {
+            echo "## AOT bundle sizes (${{ runner.os }})"
+            echo ""
+            echo "| Bundle | Executable | Native lib(s) | Total |"
+            echo "|---|--:|--:|--:|"
+            for name in register oidc; do
+              b="build/$name/bundle"
+              exe=$(du -sk "$b/bin" | cut -f1)
+              lib=$(du -sk "$b/lib" | cut -f1)
+              tot=$(du -sk "$b"     | cut -f1)
+              printf '| `%s` | %s KB | %s KB | %s KB |\n' "$name" "$exe" "$lib" "$tot"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke-test the AOT demo (real BoringSSL verify path) and sample RSS
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/build/oidc/bundle/bin/demo" > demo_out.txt 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          # Wait for the server to announce its ready-to-use token.
+          for _ in $(seq 1 60); do
+            grep -q 'DEMO_TOKEN=' demo_out.txt && break
+            sleep 0.5
+          done
+          token=$(sed -n 's/^DEMO_TOKEN=//p' demo_out.txt | head -1)
+          if [ -z "$token" ]; then echo "demo never printed a token:"; cat demo_out.txt; exit 1; fi
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          pub=$(code localhost:8080/public)
+          noauth=$(code localhost:8080/api/me)
+          auth=$(code -H "Authorization: Bearer $token" localhost:8080/api/me)
+          rss=$(ps -o rss= -p "$pid" | awk '{printf "%.1f", $1/1024}')
+          {
+            echo "## AOT demo smoke (${{ runner.os }})"
+            echo ""
+            echo "- \`/public\` → $pub, \`/api/me\` without a token → $noauth, \`/api/me\` with the token → $auth (verified through real BoringSSL, in the AOT binary)"
+            echo "- idle RSS ≈ ${rss} MB — informational, not gated (RSS is noisy)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "public=$pub  api/me(no token)=$noauth  api/me(token)=$auth  rss=${rss}MB"
+          # The gate: the native verify path must actually work end to end.
+          [ "$pub" = 200 ] && [ "$noauth" = 401 ] && [ "$auth" = 200 ]

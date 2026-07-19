@@ -30,8 +30,12 @@ jobs:
         with:
           # Stable is what users install; if a new stable's formatter reformats, the format gate fails loudly and a one-off reformat commit fixes it.
           sdk: stable
-      # package:sqlite3 loads the system libsqlite3.
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      # package:sqlite3 loads the system libsqlite3; keta_native builds BoringSSL
+      # from source at hook time (triggered here by `dart test` in keta_native /
+      # keta_oidc), which needs a C/C++ compiler and libstdc++ — clang and
+      # build-essential are preinstalled on ubuntu-latest, installed explicitly
+      # here so a runner-image change can't silently break the native build.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev clang
       - run: dart pub get
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze --fatal-infos
