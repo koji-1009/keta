@@ -417,6 +417,86 @@ void main() {
     );
   });
 
+  group('timing validation at construction', () {
+    test('a non-positive acquireTimeout is rejected', () {
+      final f = Factory();
+      expect(
+        () => Pool<FakeConn>(f.open, f.close, acquireTimeout: Duration.zero),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', 'acquireTimeout'),
+        ),
+      );
+      expect(
+        () => Pool<FakeConn>(
+          f.open,
+          f.close,
+          acquireTimeout: const Duration(milliseconds: -1),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('a positive but sub-millisecond maxIdleTime is rejected (its '
+        'reap interval would floor to a zero-delay timer)', () {
+      final f = Factory();
+      // 1µs: maxIdleTime ~/ 2 == Duration.zero, the every-event-loop-turn spin.
+      expect(
+        () => Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxIdleTime: const Duration(microseconds: 1),
+        ),
+        throwsA(
+          isA<ArgumentError>()
+              .having((e) => e.name, 'name', 'maxIdleTime')
+              .having(
+                (e) => e.message.toString(),
+                'message',
+                contains('millisecond'),
+              ),
+        ),
+      );
+      // 500µs: still floors the tick under a millisecond, still rejected.
+      expect(
+        () => Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxIdleTime: const Duration(microseconds: 500),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('a non-positive maxIdleTime is accepted (it disables the reaper)', () {
+      final f = Factory();
+      // The documented "reaper off" switch — not a defect, so not rejected.
+      expect(
+        Pool<FakeConn>(f.open, f.close, maxIdleTime: Duration.zero),
+        isA<Pool<FakeConn>>(),
+      );
+      expect(
+        Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxIdleTime: const Duration(seconds: -1),
+        ),
+        isA<Pool<FakeConn>>(),
+      );
+    });
+
+    test('a millisecond-or-greater maxIdleTime is accepted', () {
+      final f = Factory();
+      expect(
+        Pool<FakeConn>(
+          f.open,
+          f.close,
+          maxIdleTime: const Duration(milliseconds: 1),
+        ),
+        isA<Pool<FakeConn>>(),
+      );
+    });
+  });
+
   group('stats', () {
     test('a fresh pool reports all zeros against the ceiling', () {
       final f = Factory();

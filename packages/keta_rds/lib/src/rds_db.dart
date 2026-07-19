@@ -198,6 +198,16 @@ class RdsDb implements Db {
   @override
   late final DbConn writer = _PoolConn(_writerPool);
 
+  /// Pins one connection from the writer pool for the whole
+  /// `BEGIN`..`COMMIT`/`ROLLBACK` span and runs [f] against it.
+  ///
+  /// Inside [f], use the `conn` handed in. A [writer]/[reader] call made from
+  /// within [f] acquires a SEPARATE pooled connection and runs autocommit
+  /// OUTSIDE this transaction — it does not join it (unlike keta_sqlite, which
+  /// runs it on the one serialized connection). On a small writer pool that
+  /// second acquire can even self-starve against the connection [f] already
+  /// holds, blocking until `acquireTimeout` into an [Unavailable]. See
+  /// [Db.transaction] for the cross-adapter rule.
   @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) {
     if (_activeTx.contains(Zone.current[_txZoneKey])) {

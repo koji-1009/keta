@@ -36,6 +36,36 @@ class Pool<C> {
         'must be at least 1',
       );
     }
+    if (acquireTimeout <= Duration.zero) {
+      // A non-positive acquire wait is not "fail fast", it is broken: a
+      // saturated pool would return [Unavailable] the instant it saturates,
+      // never handing off a slot a concurrent release frees microseconds later
+      // — the FIFO waiter path (the whole point of a bounded wait) can never
+      // run. An authoring defect, refused loudly here rather than degrading
+      // every saturation into an immediate 503.
+      throw ArgumentError.value(
+        acquireTimeout,
+        'acquireTimeout',
+        'must be a positive duration',
+      );
+    }
+    if (maxIdleTime > Duration.zero && maxIdleTime.inMilliseconds < 1) {
+      // A non-positive maxIdleTime is a documented, deliberate "reaper off"
+      // (see the field doc); but a positive value under 1ms is an authoring
+      // defect. The reaper ticks at `maxIdleTime ~/ 2`, and any positive
+      // maxIdleTime under 2µs floors that to Duration.zero — a Timer.periodic
+      // that fires on every event-loop turn, pinning the isolate at 100% for a
+      // reap interval no deployment could want. Rejected here for the same
+      // reason RdsDb rejects a sub-millisecond statementTimeout: a
+      // sub-millisecond reap interval means the value, not the pool.
+      throw ArgumentError.value(
+        maxIdleTime,
+        'maxIdleTime',
+        'must be at least 1 millisecond when positive (a sub-millisecond reap '
+            'interval floors to a zero-delay, every-event-loop-turn timer); '
+            'pass a non-positive duration to disable the reaper',
+      );
+    }
   }
 
   final Future<C> Function() _open;
