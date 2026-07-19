@@ -1,6 +1,7 @@
 library;
 
 import 'diagnostic.dart';
+import 'http_methods.dart';
 
 /// Compares the externally-supplied contract [oracle] with the OpenAPI document
 /// the code emits ([shadow]) and reports every divergence as a
@@ -181,7 +182,7 @@ Map<String, Set<String>> _paths(
     }
     result[path] = {
       for (final method in item.keys)
-        if (_httpMethods.contains(method.toString())) method.toString(),
+        if (httpMethods.contains(method.toString())) method.toString(),
     };
   }
   return result;
@@ -262,13 +263,3 @@ String _typeSignature(Map<String, Object?> prop) {
   }
   return type;
 }
-
-const _httpMethods = {
-  'get',
-  'post',
-  'put',
-  'delete',
-  'patch',
-  'head',
-  'options',
-};

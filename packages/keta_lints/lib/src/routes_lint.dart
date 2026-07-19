@@ -5,6 +5,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
 import 'diagnostic.dart';
+import 'http_methods.dart';
 
 /// Reports string-syntax route problems in [source]:
 ///
@@ -35,8 +36,6 @@ List<Diagnostic> routeDiagnosticsUnit(
   return diagnostics;
 }
 
-const _verbs = {'get', 'post', 'put', 'delete', 'patch', 'head', 'options'};
-
 class _RouteVisitor extends RecursiveAstVisitor<void> {
   _RouteVisitor(this.file, this.diagnostics);
   final String file;
@@ -45,7 +44,7 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     final args = node.argumentList.arguments;
-    if (_verbs.contains(node.methodName.name) &&
+    if (httpMethods.contains(node.methodName.name) &&
         node.target != null &&
         args.length >= 2 &&
         args[0] is SimpleStringLiteral &&

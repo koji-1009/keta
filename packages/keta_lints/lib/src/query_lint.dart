@@ -5,6 +5,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 
 import 'diagnostic.dart';
+import 'http_methods.dart';
 
 /// Reports query-parameter declaration/usage drift in [source]:
 ///
@@ -36,7 +37,6 @@ List<Diagnostic> queryDiagnosticsUnit(
   return diagnostics;
 }
 
-const _verbs = {'get', 'post', 'put', 'delete', 'patch', 'head', 'options'};
 const _accessors = {'query', 'tryQuery', 'queryAll'};
 
 class _QueryVisitor extends RecursiveAstVisitor<void> {
@@ -46,7 +46,7 @@ class _QueryVisitor extends RecursiveAstVisitor<void> {
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
-    if (_verbs.contains(node.methodName.name) && node.target != null) {
+    if (httpMethods.contains(node.methodName.name) && node.target != null) {
       FunctionExpression? handler;
       String? path;
       for (final arg in node.argumentList.arguments) {

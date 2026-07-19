@@ -1,6 +1,7 @@
 library;
 
 import 'dart_literal.dart';
+import 'http_methods.dart';
 
 /// The files a scaffold run produces, all user-owned Dart source.
 class Scaffold {
@@ -583,7 +584,7 @@ String _generateRoutes(
     final item = _pathItemOf(pathEntry.value, pathEntry.key);
     for (final opEntry in item.entries) {
       final method = opEntry.key;
-      if (!_httpMethods.contains(method)) continue;
+      if (!httpMethods.contains(method)) continue;
       final op = _operationOf(opEntry.value, method, pathEntry.key);
       // Always a doc: RouteDoc.success is required, so there is no scaffolded
       // route without a declared success.
@@ -796,7 +797,7 @@ List<_Endpoint> _securedEndpoints(Map<String, Object?> document) {
   return [
     for (final pathEntry in _pathsOf(document).entries)
       for (final opEntry in _pathItemOf(pathEntry.value, pathEntry.key).entries)
-        if (_httpMethods.contains(opEntry.key))
+        if (httpMethods.contains(opEntry.key))
           if (_operationOf(
                 opEntry.value,
                 opEntry.key,
@@ -811,7 +812,7 @@ List<_Endpoint> _requiredQueryEndpoints(Map<String, Object?> document) {
   return [
     for (final pathEntry in _pathsOf(document).entries)
       for (final opEntry in _pathItemOf(pathEntry.value, pathEntry.key).entries)
-        if (_httpMethods.contains(opEntry.key))
+        if (httpMethods.contains(opEntry.key))
           if (_hasRequiredQuery(
             _operationOf(opEntry.value, opEntry.key, pathEntry.key),
           ))
@@ -876,16 +877,6 @@ Object? _sampleValue(
 }
 
 // --- helpers --------------------------------------------------------------
-
-const _httpMethods = {
-  'get',
-  'post',
-  'put',
-  'delete',
-  'patch',
-  'head',
-  'options',
-};
 
 const _openapiTool = '''
 import 'dart:io';

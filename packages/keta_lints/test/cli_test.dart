@@ -92,6 +92,30 @@ class Dto {
       expect(r.exitCode, 64);
     });
 
+    test('tx: exits 0 when recover() is registered before tx()', () {
+      final r = _run(_script('check.dart'), [
+        'tx',
+        write(
+          'ok.dart',
+          'void register(app) { app..use(recover())..use(tx()); }',
+        ),
+      ]);
+      expect(r.exitCode, 0);
+      expect(r.stdout, contains('no tx-order issues'));
+    });
+
+    test('tx: exits 1 when tx() is registered outside recover()', () {
+      final r = _run(_script('check.dart'), [
+        'tx',
+        write(
+          'bad.dart',
+          'void register(app) { app..use(tx())..use(recover()); }',
+        ),
+      ]);
+      expect(r.exitCode, 1);
+      expect(r.stdout, contains('keta_tx_outside_recover'));
+    });
+
     test(
       'a finding carries the same stable id whether the file is addressed '
       'absolutely (as the analyzer plugin supplies it) or relatively (as a '
