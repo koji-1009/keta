@@ -75,8 +75,11 @@ the bus → the server closes the affected live connection itself.** `/logout`
 ordinary auth consequence — `/me` 401s afterward, same as always) and
 publishes `{"kind":"revoked"}` to that session's own bus topic
 (`sessionTopic(sid)`, one topic per session id). `/me/events` subscribes to
-exactly that topic and streams what arrives; the moment it sees `revoked`, its
-generator function `return`s — which ends the source stream `c.sse` is
+exactly that topic and streams what arrives; the moment it sees `revoked`,
+`sessionEvents` closes its `StreamController` in that same callback (built on
+an explicit `StreamController`, not an `async*` generator — see
+`lib/auth.dart`'s doc on `sessionEvents` for the cancellation-leak bug that
+ruled the generator shape out) — which ends the source stream `c.sse` is
 built on, and keta closes the HTTP response the instant its source ends (see
 `packages/keta/lib/src/sse.dart`). The client never has to notice anything or
 hang up: the server tears the connection down from its own side, in the same

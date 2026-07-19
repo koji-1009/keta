@@ -95,7 +95,7 @@ void main() {
 
     // The proof: the feed received the revocation event AND the underlying
     // response stream is done — not "the client happened to stop reading",
-    // the source genuinely ended (sessionEvents' generator returned).
+    // the source genuinely ended (sessionEvents closed its StreamController).
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(done, isTrue, reason: 'the stream must end itself on revocation');
     final wire = utf8.decode(chunks.expand((c) => c).toList());

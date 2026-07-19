@@ -43,11 +43,11 @@ A streaming response lives on the isolate that produced it. To reach subscribers
 
 ## Packages
 
-Dependencies flow inward only — Optional → Recommended → Core — and peeling off an outer ring never breaks an inner one. `keta` itself has no dependency beyond the SDK.
+Dependencies flow inward only — Optional → Recommended → Core — and peeling off an outer ring never breaks an inner one. `keta` itself has no production dependency beyond the SDK: `test` resolves only to back the shipped `test.dart` harness and is tree-shaken out of `dart compile exe` binaries.
 
 | Package | Ring / tier | What it is |
 |---|---|---|
-| `keta` | 0 · Core | Router, Context, middleware, server, Log, and the `TestClient` harness. Zero dependencies. |
+| `keta` | 0 · Core | Router, Context, middleware, server, Log, and the `TestClient` harness. Zero production dependencies (`test` resolves only for the shipped harness). |
 | `keta_db` | 1 · Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
 | `keta_sqlite` | 1 · Core | A thin adapter over the `package:sqlite3` family; `:memory:` supported. |
 | `keta_rds` | 3 · Optional | The PostgreSQL adapter — bounded pool, SQLSTATE → keta-exception translation, delegating the wire protocol to `package:postgres`. |
@@ -65,7 +65,7 @@ These absences were judged, not overlooked — do not read them as gaps to fill:
 
 ## Status
 
-v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are roughly 880 tests across the workspace; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
+v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are roughly 1,100 tests across the workspace; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
 
 ## Quick start
 
