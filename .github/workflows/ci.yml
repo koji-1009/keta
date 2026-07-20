@@ -74,10 +74,8 @@ jobs:
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
         with:
           sdk: stable
-      # package:sqlite3 loads the system libsqlite3; the BoringSSL hook build
-      # additionally needs a C/C++ compiler — both installed explicitly so a
-      # runner-image change can't silently break either.
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev ${{ contains('packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir) && 'clang' || '' }}
+      # package:sqlite3 loads the system libsqlite3.
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.pub-cache
@@ -91,8 +89,10 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .dart_tool/hooks_runner
-          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}-${{ matrix.dir }}
-          restore-keys: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/build.dart') }}-
+          # The whole hook dir is the cache identity: boringssl_commit.txt pins
+          # the source, build.dart/link.dart/symbols.dart shape the artifacts.
+          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-${{ matrix.dir }}
+          restore-keys: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-
       - run: dart pub get
       # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
       # visibly otherwise), so the container and the variable exist only on

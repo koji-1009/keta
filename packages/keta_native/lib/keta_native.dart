@@ -6,6 +6,7 @@
 /// - HMAC-SHA-2: [hmacSha256], [hmacSha384], [hmacSha512].
 /// - RSASSA-PKCS1-v1_5 verification via [RsaPublicKey] (JOSE `RS256/384/512`).
 /// - ECDSA verification via [EcPublicKey] on P-256 / P-384 (`ES256` / `ES384`).
+/// - [boringsslCommit] — the pinned google/boringssl commit the build is from.
 ///
 /// The first consumer is keta_oidc's JWT resource-server path, which needs to
 /// *verify* tokens, not issue them — so there is deliberately no signing here.
@@ -24,3 +25,4 @@ export 'src/digest.dart'
     show hmacSha256, hmacSha384, hmacSha512, sha256, sha384, sha512;
 export 'src/ec.dart' show EcPublicKey;
 export 'src/rsa.dart' show RsaPublicKey;
+export 'src/version.dart' show boringsslCommit;
