@@ -10,6 +10,9 @@ environment:
 
 dev_dependencies:
   lints: ^6.0.0
+  # CI runs keta_lints' CLI over examples/ from this root — the examples are
+  # the user-code surface its rules are written for.
+  keta_lints: ^0.1.0
 
 workspace:
   # Rule: workspace-internal dependencies are declared hosted-style —
