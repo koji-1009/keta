@@ -244,10 +244,6 @@ Future<void> _ensureCheckout(
     '--strip-components=1',
     '-C',
     checkout.path,
-    // Upstream's test corpora dwarf the sources this hook compiles
-    // (wycheproof_testvectors alone is ~137 MB against ~60 MB of everything
-    // the build reads). None of it is referenced by gen/sources.json, and
-    // _verifySources below fails the build if that ever stops holding.
     for (final excluded in _unusedTarballDirs) '--exclude=*/$excluded',
   ];
   final result = await Process.run('tar', tarArgs);

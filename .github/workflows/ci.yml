@@ -10,9 +10,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # Padded with spaces and matched via `format(' {0} ', dir)`: `contains` is a
-  # substring test, so an unpadded list also matches every prefix — plain
-  # `packages/keta` would count as a BoringSSL consumer.
+  # Space-padded: `contains` is a substring test, so an unpadded list matches
+  # every prefix too, `packages/keta` included.
   BORINGSSL_DIRS: " packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc "
 
 jobs:
@@ -74,7 +73,9 @@ jobs:
     # (unprivileged, no nested containers); keta_lints and the BoringSSL
     # consumers are CPU-bound, and ubuntu-slim is 1 vCPU with a hard
     # 15-minute job cap.
-    runs-on: ${{ contains('packages/keta_rds packages/keta_lints packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir) && 'ubuntu-latest' || 'ubuntu-slim' }}
+    # Padded like BORINGSSL_DIRS; the env context is unavailable here, so the
+    # list is inline.
+    runs-on: ${{ contains(' packages/keta_rds packages/keta_lints packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc ', format(' {0} ', matrix.dir)) && 'ubuntu-latest' || 'ubuntu-slim' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
@@ -87,10 +88,6 @@ jobs:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-${{ runner.os }}-
-      # Both entries are shared by every BoringSSL job: the source is keyed on
-      # the pin, and the artifacts land under one config directory because the
-      # hooks runner keys them on the build config (same OS, arch, and linking
-      # mode here), not on the consuming package.
       - if: ${{ contains(env.BORINGSSL_DIRS, format(' {0} ', matrix.dir)) }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -99,14 +96,10 @@ jobs:
       - if: ${{ contains(env.BORINGSSL_DIRS, format(' {0} ', matrix.dir)) }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # Scoped to keta_native's own hook artifacts: other packages' hooks
-          # are cheap to re-run and would make this entry job-dependent.
           path: |
             .dart_tool/hooks_runner/keta_native
             .dart_tool/hooks_runner/shared/keta_native/build
             !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
-          # Hook code shapes the artifacts; the pin reaches them through the
-          # source cache above.
           key: boringssl-obj-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
       - run: dart pub get
       # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
