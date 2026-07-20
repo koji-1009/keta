@@ -34,6 +34,12 @@ Future<void> main() async {
 
 The two routing syntaxes converge on one internal `Path` value; a documented route also emits OpenAPI 3.1 via `OpenApi.fromRoutes(app.routes, ...)`.
 
+## Middleware order is a value, not a convention
+
+A chain that runs in the wrong order fails quietly: an `ETag` computed over an already-gzipped body, a transaction that commits a request which threw, a scope check reading a principal that does not exist yet. So the position is carried by the middleware itself. `KetaOrder` holds the ranks keta's own ship with, co-authored and co-tested at one commit of this workspace, and `App.compile` refuses a chain whose ranks descend — reading app-wide middleware followed by the route's group middleware, the sequence they actually compose in.
+
+The vocabulary belongs to the application: declare it as a sealed class implementing `MiddlewareOrder`, and a stage can carry a value, so one stage recurs at two depths — a rate limiter keyed by IP belongs before authentication and one keyed by principal after it, and both are shedding. keta's ranks are spaced so an application interleaves rather than renumbers. Nothing is compulsory: a middleware with no position is unconstrained, an explicit `order:` overrides what keta shipped, and a stack that declares nothing is checked against nothing.
+
 ## Streaming and upgrades
 
 SSE is a first-class streaming response: `c.sse(events)` renders a `Stream<SseEvent>` onto `text/event-stream` with opt-in keep-alive, opt-in `maxIdle`/`maxLifetime` bounds, and abort-driven cleanup, composing with `gzip()`/`etag()` unchanged. A WebSocket handshake is an ordinary `GET` whose handler returns `Response.upgrade(...)` — upgrade as a value, so security middleware can refuse with a plain 401 before any switch happens, the OpenAPI shadow documents the 101, and `TestClient.connect()` exercises it without a socket; an upgrade carries the same opt-in `maxIdle`/`maxLifetime` self-defense.
@@ -46,10 +52,10 @@ Two axes, deliberately separate. **Ring** is measured: a package's ring is its p
 
 | Package | Ring | Tier | What it is |
 |---|---|---|---|
-| `keta` | 0 | Core | Router, Context, middleware, server, Log, the declaration contract — `Schema` validation, `RouteDoc`, and the `enforceSecurity` gate — and the in-package test-support library (`package:keta/test.dart`, the `TestClient` harness). The server itself depends on nothing beyond the SDK. |
+| `keta` | 0 | Core | Router, Context, middleware and their ordering ranks, server, Log, the declaration contract — `Schema` validation, `RouteDoc`, and the `enforceSecurity` gate — and the in-package test-support library (`package:keta/test.dart`, the `TestClient` harness). The server itself depends on nothing beyond the SDK. |
 | `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
 | `keta_openapi` | 1 | Recommended | The route-table walk that emits an OpenAPI 3.1 document from `RouteDoc`/`Schema` (owned by `keta`). Pure derivation — runtime assembly, no code generation — so removing it changes no runtime behavior. |
-| `keta_lints` | 1 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, and field types. |
+| `keta_lints` | 1 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, field types, and middleware ordering (reading `keta`'s own ranks, so the lint and the runtime cannot disagree). |
 | `keta_files` | 1 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
 | `keta_shelf` | 1 | Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
 | `keta_multipart` | 1 | Optional | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`. Boundary parsing via `package:mime`. |

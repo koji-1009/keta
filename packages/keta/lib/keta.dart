@@ -39,6 +39,8 @@ export 'src/middleware.dart'
         tracing,
         TraceContext,
         traceKey;
+export 'src/order.dart'
+    show KetaOrder, MiddlewareOrder, checkMiddlewareOrder, ordered, orderOf;
 export 'src/response.dart'
     show
         Response,

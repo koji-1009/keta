@@ -140,6 +140,77 @@ void register() {
     });
   });
 
+  group('middlewareOrderDiagnostics', () {
+    test('etag() registered outside gzip() is flagged, naming both', () {
+      const source = 'void register(app) { app..use(etag())..use(gzip()); }';
+      final d = middlewareOrderDiagnostics(source);
+      expect(d, hasLength(1));
+      expect(d.single.rule, 'keta_middleware_order');
+      expect(d.single.message, contains('gzip'));
+      expect(d.single.message, contains('etag'));
+    });
+
+    test('gzip() outside etag() is clean', () {
+      const source = 'void register(app) { app..use(gzip())..use(etag()); }';
+      expect(middlewareOrderDiagnostics(source), isEmpty);
+    });
+
+    test('cors() after recover() is flagged — an error response would lose its '
+        'headers', () {
+      const source = 'void register(app) { app..use(recover())..use(cors()); }';
+      expect(middlewareOrderDiagnostics(source), hasLength(1));
+    });
+
+    test('a run written as separate statements is read as one chain', () {
+      const source = '''
+void register() {
+  final app = App<Env>();
+  app.use(etag());
+  app.use(gzip());
+}
+''';
+      expect(middlewareOrderDiagnostics(source), hasLength(1));
+    });
+
+    test('a different receiver breaks the run', () {
+      const source = '''
+void register() {
+  a.use(etag());
+  b.use(gzip());
+}
+''';
+      expect(middlewareOrderDiagnostics(source), isEmpty);
+    });
+
+    test('an unrecognized middleware constrains nothing', () {
+      const source = '''
+void register(app) { app..use(gzip())..use(myOwn())..use(etag()); }
+''';
+      expect(middlewareOrderDiagnostics(source), isEmpty);
+    });
+
+    test('an explicit order: is deliberate placement, never flagged', () {
+      const source = '''
+void register(app) { app..use(etag(), order: Early())..use(gzip()); }
+''';
+      expect(middlewareOrderDiagnostics(source), isEmpty);
+    });
+
+    test('the tx/recover pair stays with keta_tx_outside_recover, so one '
+        'mistake is not reported twice', () {
+      const source = 'void register(app) { app..use(tx())..use(recover()); }';
+      expect(middlewareOrderDiagnostics(source), isEmpty);
+      expect(txOrderDiagnostics(source), hasLength(1));
+    });
+
+    test('one report per run, not one per inversion', () {
+      const source = '''
+void register(app) { app..use(etag())..use(gzip())..use(accessLog()); }
+''';
+      expect(middlewareOrderDiagnostics(source), hasLength(1));
+    });
+  });
+
   group('diagnosticId', () {
     test('is stable and 16 hex chars', () {
       final a = diagnosticId('lib/x.dart', 'GET /x', 'keta_route_conflict');

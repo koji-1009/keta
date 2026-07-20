@@ -25,6 +25,7 @@ import '../canonical.dart';
 import '../diagnostic.dart';
 import '../internal_await.dart';
 import '../key_lint.dart';
+import '../middleware_order_lint.dart';
 import '../package_path.dart';
 import '../query_lint.dart';
 import '../routes_lint.dart';
@@ -76,6 +77,11 @@ const _schemaDrift = LintCode(
 );
 const _txOutsideRecover = LintCode(
   'keta_tx_outside_recover',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
+const _middlewareOrder = LintCode(
+  'keta_middleware_order',
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
@@ -233,6 +239,29 @@ class KetaTxOrderRule extends _KetaRule {
   @override
   Map<String, LintCode> get _codes => const {
     'keta_tx_outside_recover': _txOutsideRecover,
+  };
+}
+
+/// `keta_middleware_order` — a `use()` run whose middleware positions descend.
+///
+/// Editor-speed feedback over what one run of `use()` calls shows; `App.compile`
+/// checks the chain a request actually gets and is what guarantees the order.
+class KetaMiddlewareOrderRule extends _KetaRule {
+  KetaMiddlewareOrderRule()
+    : super(
+        name: 'keta_middleware_order',
+        description:
+            'Middleware must be registered outermost-first: a position with a '
+            'lower rank belongs further out.',
+      );
+
+  @override
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      middlewareOrderDiagnosticsUnit(unit.unit, file: file);
+
+  @override
+  Map<String, LintCode> get _codes => const {
+    'keta_middleware_order': _middlewareOrder,
   };
 }
 

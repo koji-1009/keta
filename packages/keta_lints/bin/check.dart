@@ -19,11 +19,13 @@ import 'package:keta_lints/keta_lints.dart';
 /// whose mappers are missing or drifted. `routes` reports unknown params and
 /// unused captures. `internal-await` guards the framework's synchronous path.
 /// `key` reports a Context key constructed inline at a get/tryGet/set call.
-/// `tx` reports `use(tx())` registered outside `use(recover())`.
+/// `tx` reports `use(tx())` registered outside `use(recover())`. `order`
+/// reports any other `use()` run whose middleware positions descend.
 void main(List<String> args) {
   if (args.isEmpty) {
     stderr.writeln(
-      'usage: check <drift|canonical|routes|query|internal-await|key|tx> ...',
+      'usage: check '
+      '<drift|canonical|routes|query|internal-await|key|tx|order> ...',
     );
     exit(64);
   }
@@ -50,6 +52,12 @@ void main(List<String> args) {
       _sourceCheck(args.sublist(1), keyDiagnostics, 'no inline keys');
     case 'tx':
       _sourceCheck(args.sublist(1), txOrderDiagnostics, 'no tx-order issues');
+    case 'order':
+      _sourceCheck(
+        args.sublist(1),
+        middlewareOrderDiagnostics,
+        'no middleware-order issues',
+      );
     default:
       stderr.writeln('unknown check "${args.first}"');
       exit(64);

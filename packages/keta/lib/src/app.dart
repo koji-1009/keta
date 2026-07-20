@@ -9,6 +9,7 @@ import 'chain.dart';
 import 'context.dart';
 import 'h1_transport.dart';
 import 'log.dart';
+import 'order.dart';
 import 'response.dart';
 import 'route_doc.dart';
 import 'routing.dart';
@@ -25,6 +26,14 @@ typedef Middleware<E> =
 /// A typed-DSL handler, receiving the path's captured tuple as [params].
 typedef TypedHandler<E, T> =
     FutureOr<Response> Function(Context<E> c, T params);
+
+/// A registered middleware paired with the position it declared, so the chain
+/// can be checked before it is composed. Null [order] is unconstrained.
+class _Ordered<E> {
+  _Ordered(this.middleware, this.order);
+  final Middleware<E> middleware;
+  final MiddlewareOrder? order;
+}
 
 /// One registered route, before the trie is compiled.
 class _Reg<E> {
@@ -43,7 +52,7 @@ class _Reg<E> {
   final List<Capture<Object?>> captures;
   final List<String> captureNames;
   final Handler<E> handler;
-  final List<Middleware<E>> groupMiddleware;
+  final List<_Ordered<E>> groupMiddleware;
   final RouteDoc? doc;
   final String template;
 }
@@ -62,20 +71,26 @@ class RouteEntry {
 /// Registration collects routes; [serve] compiles them into a radix trie and
 /// fails fast on any conflict.
 class App<E> {
-  final List<Middleware<E>> _middleware = [];
+  final List<_Ordered<E>> _middleware = [];
   final List<_Reg<E>> _regs = [];
 
   /// Adds app-wide middleware. Runs before any group middleware, in the order
   /// added. Returns `this` for chaining with `..use(...)`.
-  App<E> use(Middleware<E> m) {
-    _middleware.add(m);
+  ///
+  /// [order] places [m] in the chain explicitly, overriding whatever position
+  /// the middleware was tagged with at its definition site (keta's own carry
+  /// one; see [KetaOrder]). Omit it and the tag stands — or, for a middleware
+  /// that has none, the registration is unconstrained. [compile] rejects a
+  /// chain whose positions do not ascend outward-to-inward.
+  App<E> use(Middleware<E> m, {MiddlewareOrder? order}) {
+    _middleware.add(_Ordered(m, order ?? orderOf(m)));
     return this;
   }
 
   /// A child router that prefixes [prefix] onto its routes and confines its own
   /// middleware to that subtree.
   RouteGroup<E> group(String prefix) =>
-      RouteGroup<E>._(this, _prefixSegments(prefix), <Middleware<E>>[]);
+      RouteGroup<E>._(this, _prefixSegments(prefix), <_Ordered<E>>[]);
 
   void get(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('GET', path, handler, doc, const [], const []);
@@ -109,7 +124,7 @@ class App<E> {
     Handler<E> handler,
     RouteDoc? doc,
     List<Segment> prefixSegments,
-    List<Middleware<E>> groupMiddleware,
+    List<_Ordered<E>> groupMiddleware,
   ) {
     final base = _basePath(path);
     final segments = [...prefixSegments, ...base.parts];
@@ -131,7 +146,7 @@ class App<E> {
     TypedHandler<E, T> handler,
     RouteDoc? doc,
     List<Segment> prefixSegments,
-    List<Middleware<E>> groupMiddleware,
+    List<_Ordered<E>> groupMiddleware,
   ) {
     final segments = [...prefixSegments, ...path.parts];
     // The tuple carries only the base path's captures; any group-prefix
@@ -160,7 +175,7 @@ class App<E> {
     List<Capture<Object?>> captures,
     Handler<E> handler,
     RouteDoc? doc,
-    List<Middleware<E>> groupMiddleware,
+    List<_Ordered<E>> groupMiddleware,
   ) {
     final names = [
       for (var i = 0; i < captures.length; i++) captures[i].name ?? 'p$i',
@@ -234,6 +249,10 @@ class App<E> {
   Router<E> compile(E env, {int maxBodyBytes = 1 << 20, Log? log}) {
     final root = _TrieNode<E>();
     final seen = <String>{};
+    // The chain a request actually runs, checked before it is composed. An
+    // app with no routes still has an app-wide chain worth checking.
+    final appOrders = [for (final m in _middleware) m.order];
+    checkMiddlewareOrder(appOrders, 'app-wide middleware');
     for (final reg in _regs) {
       final key = conflictKey(reg.method, reg.segments);
       if (!seen.add(key)) {
@@ -241,6 +260,13 @@ class App<E> {
           'route conflict: ${reg.method} ${reg.template} registered twice',
         );
       }
+      // App-wide middleware always wraps a group's, so a route's chain is the
+      // two sequences end to end — a group middleware placed further out than
+      // an app-wide one is a violation the group's own list cannot show.
+      checkMiddlewareOrder([
+        ...appOrders,
+        for (final m in reg.groupMiddleware) m.order,
+      ], '${reg.method} ${reg.template}');
       // Only group middleware wraps the leaf; app-level middleware wraps the
       // whole dispatch (below) so it also covers 404/405 — e.g. CORS preflight.
       _insert(root, reg, _compose(reg.groupMiddleware, reg.handler));
@@ -250,7 +276,9 @@ class App<E> {
         (env is HasLog
             ? (env as HasLog).log
             : StdoutLog(flushInterval: Duration.zero));
-    return Router<E>._(root, env, baseLog, maxBodyBytes, [..._middleware]);
+    return Router<E>._(root, env, baseLog, maxBodyBytes, [
+      for (final m in _middleware) m.middleware,
+    ]);
   }
 
   /// Starts the server, booting one env per isolate, and returns a [Server]
@@ -338,10 +366,11 @@ class App<E> {
     );
   }
 
-  Handler<E> _compose(List<Middleware<E>> middleware, Handler<E> base) {
+  Handler<E> _compose(List<_Ordered<E>> middleware, Handler<E> base) {
     var handler = base;
-    for (final m in middleware.reversed) {
+    for (final entry in middleware.reversed) {
       final next = handler;
+      final m = entry.middleware;
       handler = (c) => m(c, next);
     }
     return handler;
@@ -355,12 +384,16 @@ class RouteGroup<E> {
   RouteGroup._(this._app, this._prefix, this._middleware);
   final App<E> _app;
   final List<Segment> _prefix;
-  final List<Middleware<E>> _middleware;
+  final List<_Ordered<E>> _middleware;
 
   /// Adds middleware confined to this group's routes. Runs after app-wide
   /// middleware, in the order added.
-  RouteGroup<E> use(Middleware<E> m) {
-    _middleware.add(m);
+  ///
+  /// [order] behaves exactly as on [App.use]. A route's chain is checked as one
+  /// sequence — app-wide first, then this group's — because app-wide middleware
+  /// always wraps a group's.
+  RouteGroup<E> use(Middleware<E> m, {MiddlewareOrder? order}) {
+    _middleware.add(_Ordered(m, order ?? orderOf(m)));
     return this;
   }
 
@@ -392,7 +425,7 @@ class Route<E, T> {
   final App<E> _app;
   final Path<T> _path;
   final List<Segment> _prefix;
-  final List<Middleware<E>> _middleware;
+  final List<_Ordered<E>> _middleware;
 
   void get(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('GET', _path, handler, doc, _prefix, _middleware);

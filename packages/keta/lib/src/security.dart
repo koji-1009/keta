@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'app.dart';
 import 'context.dart';
+import 'order.dart';
 import 'response.dart';
 import 'route_doc.dart';
 
@@ -35,11 +36,12 @@ class SecurityPolicy<E> {
 ///
 /// It stays on the synchronous path (no [Future] allocated) when the route is
 /// public or a verifier answers synchronously, so a public request pays nothing.
-Middleware<E> enforceSecurity<E>(SecurityPolicy<E> policy) => (c, next) {
-  final required = c.routeDoc?.security ?? policy.defaults;
-  if (required.isEmpty) return next(c);
-  return _admit(c, next, required, policy, 0);
-};
+Middleware<E> enforceSecurity<E>(SecurityPolicy<E> policy) =>
+    ordered((Context<E> c, Handler<E> next) {
+      final required = c.routeDoc?.security ?? policy.defaults;
+      if (required.isEmpty) return next(c);
+      return _admit(c, next, required, policy, 0);
+    }, KetaOrder.authenticate);
 
 /// Tries each declared scheme's verifier in order (OR): the first to admit runs
 /// [next]; if none does, the request is unauthenticated. Recurses synchronously

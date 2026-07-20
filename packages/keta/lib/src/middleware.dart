@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'app.dart';
 import 'chain.dart';
 import 'context.dart';
+import 'order.dart';
 import 'response.dart';
 
 /// Logs one line per request on completion: method, status, and elapsed
@@ -28,7 +29,7 @@ import 'response.dart';
 /// Full end-of-connection accounting (final status, bytes, duration) would need
 /// transport-level completion hooks that do not exist here; these markers keep
 /// the existing line truthful about what it does and does not measure.
-Middleware<E> accessLog<E>() => (Context<E> c, Handler<E> next) {
+Middleware<E> accessLog<E>() => ordered((Context<E> c, Handler<E> next) {
   final watch = Stopwatch()..start();
   void emit(int status, {Response? response}) {
     watch.stop();
@@ -54,13 +55,13 @@ Middleware<E> accessLog<E>() => (Context<E> c, Handler<E> next) {
       Error.throwWithStackTrace(error, st);
     },
   );
-};
+}, KetaOrder.observe);
 
 /// Converts a thrown [KetaException] into its status with a `{"error": ...}`
 /// body, and any other exception into 500 with the error (and stack) logged and
 /// no detail leaked. A customization point, not a precondition for safety — the
 /// core applies the same conversion as a last resort regardless.
-Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
+Middleware<E> recover<E>() => ordered((Context<E> c, Handler<E> next) {
   return guard<Response>(() => next(c), (error, st) {
     if (error is KetaException) {
       // A declared status is an expected outcome, not an incident, so it is not
@@ -81,7 +82,7 @@ Middleware<E> recover<E>() => (Context<E> c, Handler<E> next) {
     c.log.error('unhandled exception', error, st);
     return Response(500, body: '');
   });
-};
+}, KetaOrder.recover);
 
 /// Attaches CORS headers and answers preflight requests. Stateless and pure: an
 /// origin is allowed when it is listed or [allowOrigins] contains `'*'`.
@@ -136,7 +137,7 @@ Middleware<E> cors<E>({
           'spec forbids it; list specific origins to use credentials)',
     );
   }
-  return (Context<E> c, Handler<E> next) {
+  return ordered((Context<E> c, Handler<E> next) {
     final origin = c.header('origin');
     final allowed = wildcard || (origin != null && origins.contains(origin));
 
@@ -191,7 +192,7 @@ Middleware<E> cors<E>({
       // without ever switching. See [Response.copyWith].
       return r.copyWith(addHeaders: additions);
     });
-  };
+  }, KetaOrder.crossOrigin);
 }
 
 /// Fails a request that outlives [d] with a [GatewayTimeout] (504) and completes
@@ -209,7 +210,10 @@ Middleware<E> cors<E>({
 /// long-lived stream must bound itself (e.g. its own idle timer, or observing
 /// `c.aborted`, which a client disconnect or a graceful shutdown still completes
 /// independently of this middleware).
-Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
+Middleware<E> timeout<E>(Duration d) => ordered((
+  Context<E> c,
+  Handler<E> next,
+) {
   final result = next(c);
   // A synchronously-produced response (SSE, upgrade, any plain sync handler)
   // returns here before the timer is armed — see the doc: this bounds
@@ -248,7 +252,7 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
     },
   );
   return completer.future;
-};
+}, KetaOrder.deadline);
 
 /// Adds a strong `ETag` over a buffered response body and answers a matching
 /// conditional `GET`/`HEAD` with `304 Not Modified`.
@@ -274,7 +278,7 @@ Middleware<E> timeout<E>(Duration d) => (Context<E> c, Handler<E> next) {
 /// handler's own bytes — deterministic regardless of the compressor — which RFC
 /// 9110 §8.8.3 permits ("computed pre-encoding"). Putting gzip inside etag
 /// instead would make the tag depend on byte-exact compressor reproducibility.
-Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
+Middleware<E> etag<E>() => ordered((Context<E> c, Handler<E> next) {
   return chain(next(c), (Response r) {
     // An upgrade response switches protocols with an empty body and status 101;
     // there is nothing to tag or conditionally 304, and its `upgrade` field must
@@ -330,7 +334,7 @@ Middleware<E> etag<E>() => (Context<E> c, Handler<E> next) {
       },
     );
   });
-};
+}, KetaOrder.validate);
 
 /// True when [ifNoneMatch] (a request header value) matches [tag] under RFC 9110
 /// §8.8.3.2 weak comparison: `*` matches any current representation, otherwise
@@ -386,9 +390,10 @@ String _fnv1a64Hex(Uint8List bytes) {
 /// correct post-compression `Content-Length` — gzip runs before framing.
 ///
 /// Ordering with [etag]: register `gzip()` **before** `etag()` (see [etag]).
-Middleware<E> gzip<E>({
-  int threshold = 1024,
-}) => (Context<E> c, Handler<E> next) {
+Middleware<E> gzip<E>({int threshold = 1024}) => ordered((
+  Context<E> c,
+  Handler<E> next,
+) {
   return chain(next(c), (Response r) {
     // An upgrade response has an empty body and switches protocols; there is
     // nothing to compress and no representation to negotiate, so it must not
@@ -423,7 +428,7 @@ Middleware<E> gzip<E>({
     headers['content-encoding'] = const ['gzip'];
     return r.copyWith(addHeaders: headers, body: io.gzip.encode(bytes));
   });
-};
+}, KetaOrder.negotiate);
 
 /// True when [acceptEncoding] advertises gzip with a non-zero q-value.
 ///
