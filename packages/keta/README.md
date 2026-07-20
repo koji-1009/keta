@@ -1,6 +1,6 @@
 # keta
 
-The Ring 0 core of [keta](../../README.md): router, `Context`, middleware, the `serve` lifecycle, `Log`, the HTTP/1.1 transport, the `TestClient` harness, and the declaration contract — `Schema` validation, `RouteDoc`, and the `SecurityPolicy`/`enforceSecurity` runtime gate. It depends on nothing but the Dart SDK — the only entry in `pubspec.yaml` is `test`, which resolves solely to back the shipped `package:keta/test.dart` harness and is tree-shaken out of `dart compile exe` binaries. Everything above it (database, OpenAPI emission, OIDC, ...) is an outer ring that can be peeled off without touching this package; see the root README's [package table](../../README.md#packages).
+The Ring 0 core of [keta](../../README.md): router, `Context`, middleware, the `serve` lifecycle, `Log`, the HTTP/1.1 transport, the `TestClient` harness, and the declaration contract — `Schema` validation, `RouteDoc`, and the `SecurityPolicy`/`enforceSecurity` runtime gate. The server depends on nothing but the Dart SDK; the package also ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) — a separate import for test code, which is why `test` appears in the pubspec. Everything above it (database, OpenAPI emission, OIDC, ...) is an outer ring that can be peeled off without touching this package; see the root README's [package table](../../README.md#packages).
 
 ## Routing: two syntaxes, one `Path`
 

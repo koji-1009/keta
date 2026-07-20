@@ -6,7 +6,7 @@ carried by a constructor graph and routes-as-values. User code reads as plain
 Dart. This file is enough to write handlers, DTOs, mappers, schema constants,
 and tests by hand.
 
-Packages: `keta` (core — routing, Context, middleware, plus the `Schema`/`RouteDoc`/`SecurityPolicy` declaration contract), `keta_db` + `keta_sqlite` + `keta_rds` (database), `keta_openapi` (OpenAPI 3.1 emission from the route table — a pure derivation, no contract types of its own), `keta_oidc` (Bearer-JWT resource server behind a `SignatureVerifier` seam; `keta_oidc_boringssl` supplies the default BoringSSL-backed implementation, over `keta_native`). Dependencies flow inward; `keta` has zero production dependencies beyond the SDK — `test` resolves only for the shipped test harness and is absent from compiled binaries.
+Packages: `keta` (core — routing, Context, middleware, plus the `Schema`/`RouteDoc`/`SecurityPolicy` declaration contract), `keta_db` + `keta_sqlite` + `keta_rds` (database), `keta_openapi` (OpenAPI 3.1 emission from the route table — a pure derivation, no contract types of its own), `keta_oidc` (Bearer-JWT resource server behind a `SignatureVerifier` seam; `keta_oidc_boringssl` supplies the default BoringSSL-backed implementation, over `keta_native`). Dependencies flow inward; `keta`'s server depends on nothing beyond the SDK, and the package ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
 
 ## Routing
 
