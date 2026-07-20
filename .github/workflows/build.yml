@@ -27,11 +27,7 @@ jobs:
           sdk: stable
       # package:sqlite3 loads the system libsqlite3.
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-      # Best-effort reuse across runs; a miss just rebuilds, so correctness
-      # never depends on either cache. The source is keyed on the pin alone
-      # and shared with ci.yml's test jobs (same key), so only one copy of it
-      # exists repo-wide; the compile artifacts are keyed on the hook code
-      # that shapes them.
+      # Key shared with ci.yml's source cache; changing one must change both.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
