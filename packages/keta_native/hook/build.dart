@@ -1,12 +1,22 @@
 /// Build hook for keta_native: compiles BoringSSL's `libcrypto` from a pinned
-/// commit into a per-asset dynamic library, exposed to Dart FFI as the code
-/// asset `src/ffi/libcrypto.dart`.
+/// commit, exposed to Dart FFI as the code asset `src/ffi/libcrypto.dart`.
 ///
-/// The source is shallow-fetched (git) into the hook's shared output directory
-/// on the first build and reused afterwards, keyed by a marker file carrying
-/// the pinned commit — so subsequent builds are offline and the fetch is
-/// idempotent. Compilation is a single [CBuilder.library] call over BoringSSL's
-/// checked-in `gen/sources.json` recipe.
+/// Two output modes. With linking enabled (AOT `dart build`), the compile
+/// emits a static archive routed to `hook/link.dart`, which tree-shakes it to
+/// the symbols the `@Native` bindings use before producing the final dynamic
+/// library. Without link hooks (JIT: `dart test` / `dart run`), the full
+/// `libcrypto` is emitted as a dynamic library and bundled directly.
+///
+/// The pinned commit lives in `hook/boringssl_commit.txt` — a data file, so a
+/// BoringSSL bump is a one-line change that never touches hook code. The file
+/// is registered as a hook dependency, so the hook re-runs exactly when the
+/// pin changes; `lib/src/version.dart` mirrors it, held in sync by
+/// `test/version_test.dart`. The source is shallow-fetched (git) into the
+/// hook's shared output directory on the first build and reused afterwards,
+/// keyed by a marker file carrying the pinned commit — so subsequent builds
+/// are offline and the fetch is idempotent. Compilation is a single
+/// [CBuilder.library] call over BoringSSL's checked-in `gen/sources.json`
+/// recipe.
 library;
 
 import 'dart:convert';
@@ -17,13 +27,12 @@ import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:native_toolchain_c/native_toolchain_c.dart';
 
-/// google/boringssl `main` at 2026-07-17. `gen/sources.json` is checked in at
-/// this commit, so no perl/go/cmake generation step is required.
-const _boringSslCommit = '922c15f36cc75db5af33c46f9ea8934553fb808e';
 const _boringSslRepoUrl = 'https://github.com/google/boringssl.git';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
+    if (!input.config.buildCodeAssets) return;
+
     final logger = Logger('keta_native.build')
       ..onRecord.listen((record) => stderr.writeln(record.message));
 
@@ -37,13 +46,20 @@ void main(List<String> args) async {
       );
     }
 
+    final commit = _readPinnedCommit(input.packageRoot);
+    // Registered as a hook dependency: the hooks runner re-runs this hook
+    // (and thus the fetch) exactly when the pin file changes.
+    output.dependencies.add(
+      input.packageRoot.resolve('hook/boringssl_commit.txt'),
+    );
+
     // The shared output directory persists across per-config builds and is
     // owned solely by this hook; the hook runner serializes concurrent
     // invocations, so the checkout is written once and reused.
     final checkout = Directory.fromUri(
       input.outputDirectoryShared.resolve('boringssl-checkout/'),
     );
-    await _ensureCheckout(checkout, logger);
+    await _ensureCheckout(checkout, commit, logger);
 
     // gen/sources.json is checked in at the pinned commit. It groups the
     // libcrypto build into two targets: `bcm` (the FIPS module translation
@@ -94,7 +110,15 @@ void main(List<String> args) async {
       // Upstream compiles libcrypto's C++ with -fno-exceptions -fno-rtti
       // (CMakeLists.txt NO_CXX_RUNTIME_FLAGS) to keep its C++ runtime footprint
       // tiny; the .S inputs ignore these with a harmless unused-arg warning.
-      flags: const ['-fno-exceptions', '-fno-rtti'],
+      // -ffunction-sections/-fdata-sections give the link hook's --gc-sections
+      // per-symbol granularity on Linux (macOS ld64 already strips per atom);
+      // without them a kept symbol drags in its whole translation unit.
+      flags: const [
+        '-fno-exceptions',
+        '-fno-rtti',
+        '-ffunction-sections',
+        '-fdata-sections',
+      ],
       // A `.cc` source list still needs the C++ runtime linked: BoringSSL's
       // C++ destructors reference `operator delete`. We omit `language: cpp`
       // (its global `-x c++` would break the `.S` inputs), so the C driver
@@ -103,24 +127,62 @@ void main(List<String> args) async {
       libraries: [targetOS == OS.macOS ? 'c++' : 'stdc++'],
     );
 
-    await builder.run(input: input, output: output, logger: logger);
+    final linkingEnabled = input.config.linkingEnabled;
+    await builder.run(
+      input: input,
+      output: output,
+      logger: logger,
+      routing: linkingEnabled
+          ? [ToLinkHook(input.packageName)]
+          : const [ToAppBundle()],
+      linkModePreference: linkingEnabled
+          ? LinkModePreference.static
+          : LinkModePreference.dynamic,
+    );
   });
 }
 
-/// Ensures [checkout] holds the pinned BoringSSL commit.
+/// Reads the pinned google/boringssl commit from `hook/boringssl_commit.txt`.
+///
+/// The pin must be a full 40-hex-char hash: abbreviations or refs would make
+/// the fetch ambiguous and the marker comparison meaningless.
+String _readPinnedCommit(Uri packageRoot) {
+  final pinFile = File.fromUri(
+    packageRoot.resolve('hook/boringssl_commit.txt'),
+  );
+  if (!pinFile.existsSync()) {
+    throw StateError(
+      'Missing ${pinFile.path}: it pins the google/boringssl commit this '
+      'hook builds.',
+    );
+  }
+  final commit = pinFile.readAsStringSync().trim();
+  if (!RegExp(r'^[0-9a-f]{40}$').hasMatch(commit)) {
+    throw StateError(
+      '${pinFile.path} must contain a full 40-character lowercase hex git '
+      'commit hash, got: "$commit"',
+    );
+  }
+  return commit;
+}
+
+/// Ensures [checkout] holds the pinned BoringSSL [commit].
 ///
 /// Idempotent: a marker file records the checked-out commit; when it already
 /// matches, the (network) fetch is skipped, so builds after the first are
 /// offline. Any partial/mismatched state is wiped and re-fetched.
-Future<void> _ensureCheckout(Directory checkout, Logger logger) async {
+Future<void> _ensureCheckout(
+  Directory checkout,
+  String commit,
+  Logger logger,
+) async {
   final marker = File.fromUri(checkout.uri.resolve('.keta_commit'));
-  if (marker.existsSync() &&
-      (await marker.readAsString()).trim() == _boringSslCommit) {
-    logger.info('BoringSSL $_boringSslCommit already present; skipping fetch.');
+  if (marker.existsSync() && (await marker.readAsString()).trim() == commit) {
+    logger.info('BoringSSL $commit already present; skipping fetch.');
     return;
   }
 
-  logger.info('Fetching BoringSSL $_boringSslCommit into ${checkout.path}');
+  logger.info('Fetching BoringSSL $commit into ${checkout.path}');
   if (checkout.existsSync()) {
     checkout.deleteSync(recursive: true);
   }
@@ -144,16 +206,9 @@ Future<void> _ensureCheckout(Directory checkout, Logger logger) async {
 
   // Shallow-fetch exactly the pinned commit — no history, no other refs.
   await git(['init', '--quiet']);
-  await git([
-    'fetch',
-    '--depth',
-    '1',
-    '--quiet',
-    _boringSslRepoUrl,
-    _boringSslCommit,
-  ]);
+  await git(['fetch', '--depth', '1', '--quiet', _boringSslRepoUrl, commit]);
   await git(['checkout', '--quiet', 'FETCH_HEAD']);
 
-  marker.writeAsStringSync('$_boringSslCommit\n');
-  logger.info('BoringSSL $_boringSslCommit checked out.');
+  marker.writeAsStringSync('$commit\n');
+  logger.info('BoringSSL $commit checked out.');
 }
