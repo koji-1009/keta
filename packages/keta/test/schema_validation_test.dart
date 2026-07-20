@@ -4,7 +4,8 @@
 /// supports, plus the sealed (oneOf+discriminator) shape end to end.
 library;
 
-import 'package:keta/keta.dart';import 'package:test/test.dart';
+import 'package:keta/keta.dart';
+import 'package:test/test.dart';
 
 // The §4 canonical shape, mirroring openapi_test.dart's UserDto/Role/
 // userDtoSchema (that file keeps its own copy — it is also OpenApi.fromRoutes'

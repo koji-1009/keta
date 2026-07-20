@@ -855,10 +855,12 @@ class Dto {
   });
 
   group('one-way projections are legitimate (no missing finding)', () {
-    test('a toJson-only output projection draws no missing finding, and the fix '
-        'does NOT materialize a fromJson (its directionality is declared by the '
-        'present mapper)', () {
-      const source = '''
+    test(
+      'a toJson-only output projection draws no missing finding, and the fix '
+      'does NOT materialize a fromJson (its directionality is declared by the '
+      'present mapper)',
+      () {
+        const source = '''
 class Out {
   final String id;
   final int? age;
@@ -866,13 +868,14 @@ class Out {
   Map<String, Object?> toJson() => {'id': id, if (age != null) 'age': age};
 }
 ''';
-      // toJson present, fromJson absent — a legitimate output-only shape.
-      expect(canonicalDiagnostics(source), isEmpty);
-      // The fixer must not forge the absent mirror: byte-identical output.
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, source);
-      expect(fixed, isNot(contains('fromJson')));
-    });
+        // toJson present, fromJson absent — a legitimate output-only shape.
+        expect(canonicalDiagnostics(source), isEmpty);
+        // The fixer must not forge the absent mirror: byte-identical output.
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('fromJson')));
+      },
+    );
 
     test('a toJson-only projection whose keys drift still draws toJson-drift '
         '(no missing), and the fix reconciles the present toJson without adding '
@@ -896,42 +899,48 @@ class Out {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('a fromJson-only input projection is symmetric: a clean fromJson draws '
-        'nothing (no missing), and the fix does NOT materialize a toJson', () {
-      const source = '''
+    test(
+      'a fromJson-only input projection is symmetric: a clean fromJson draws '
+      'nothing (no missing), and the fix does NOT materialize a toJson',
+      () {
+        const source = '''
 class In {
   final String id;
   In({required this.id});
   factory In.fromJson(Map<String, Object?> json) => In(id: json['id'] as String);
 }
 ''';
-      expect(canonicalDiagnostics(source), isEmpty);
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, source);
-      expect(fixed, isNot(contains('toJson')));
-    });
+        expect(canonicalDiagnostics(source), isEmpty);
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('toJson')));
+      },
+    );
 
-    test('a fromJson-only projection whose cast drifts still draws type drift '
-        '(no missing), and the fix repairs the cast without adding a toJson', () {
-      const source = '''
+    test(
+      'a fromJson-only projection whose cast drifts still draws type drift '
+      '(no missing), and the fix repairs the cast without adding a toJson',
+      () {
+        const source = '''
 class In {
   final String id;
   In({required this.id});
   factory In.fromJson(Map<String, Object?> json) => In(id: json['id'] as int);
 }
 ''';
-      final d = canonicalDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_type_drift');
-      expect(
-        d.single.message,
-        contains('fromJson casts as int but the field is String'),
-      );
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, contains("id: json['id'] as String,"));
-      expect(fixed, isNot(contains('toJson'))); // no mirror forged
-      expect(canonicalDiagnostics(fixed), isEmpty);
-      expect(applyCanonicalFix(fixed), fixed); // idempotent
-    });
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_type_drift');
+        expect(
+          d.single.message,
+          contains('fromJson casts as int but the field is String'),
+        );
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, contains("id: json['id'] as String,"));
+        expect(fixed, isNot(contains('toJson'))); // no mirror forged
+        expect(canonicalDiagnostics(fixed), isEmpty);
+        expect(applyCanonicalFix(fixed), fixed); // idempotent
+      },
+    );
   });
 }

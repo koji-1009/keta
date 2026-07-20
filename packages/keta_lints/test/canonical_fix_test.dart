@@ -129,23 +129,26 @@ const oneSchema = Schema('One', {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('does NOT forge the absent mirror of a one-way (fromJson-only) class '
-        'the present mapper declares the direction; the fixer leaves it alone', () {
-      const source = '''
+    test(
+      'does NOT forge the absent mirror of a one-way (fromJson-only) class '
+      'the present mapper declares the direction; the fixer leaves it alone',
+      () {
+        const source = '''
 class Dto {
   final String id;
   Dto({required this.id});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
 }
 ''';
-      // fromJson present, toJson absent, no Schema — a legitimate input-only
-      // projection. The fixer must not materialize a toJson (that would forge a
-      // direction the class never declared), so the output is byte-identical.
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, source);
-      expect(fixed, isNot(contains('toJson')));
-      expect(canonicalDiagnostics(fixed), isEmpty);
-    });
+        // fromJson present, toJson absent, no Schema — a legitimate input-only
+        // projection. The fixer must not materialize a toJson (that would forge a
+        // direction the class never declared), so the output is byte-identical.
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('toJson')));
+        expect(canonicalDiagnostics(fixed), isEmpty);
+      },
+    );
 
     test('a class with final fields but no canonical signal is ignored', () {
       const source = '''

@@ -9,7 +9,8 @@
 /// damage too — it would be a promise the boundary silently breaks.
 library;
 
-import 'package:keta/keta.dart';import 'package:test/test.dart';
+import 'package:keta/keta.dart';
+import 'package:test/test.dart';
 
 /// A schema whose sole `message` StateError contains every fragment listed.
 Matcher throwsAuthoringDefect(List<String> fragments) => throwsA(

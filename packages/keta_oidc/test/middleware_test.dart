@@ -474,5 +474,4 @@ void main() {
       expect(await result.socket!.messages.first, 'hello');
     });
   });
-
 }
