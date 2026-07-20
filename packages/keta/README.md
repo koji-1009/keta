@@ -82,3 +82,4 @@ The project gate is that each documented invariant has a test. The map:
 | single-process serve end-to-end and env disposal; multi-isolate serve and no-leak spawn failure | `test/serve_test.dart`, `test/serve_isolates_test.dart` |
 | bounded log backlog, oldest-first eviction, honest dropped-count reporting | `test/log_test.dart` |
 | data-shaped path form (`List<Segment>`) binds, reads via `c.param`, unbounded arity | `test/data_path_test.dart` |
+| `conflictKey`: capture names/types irrelevant to the key, literals must match verbatim, method distinguishes otherwise-identical shapes | `test/routing_test.dart` |

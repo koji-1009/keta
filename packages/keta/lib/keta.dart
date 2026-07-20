@@ -79,7 +79,8 @@ export 'src/routing.dart'
         string,
         integer,
         number,
-        boolean;
+        boolean,
+        conflictKey;
 export 'src/schema.dart' show Schema, listSchema;
 export 'src/security.dart' show SecurityPolicy, enforceSecurity;
 export 'src/sse.dart' show SseEvent, SseResponses;
