@@ -3,7 +3,7 @@ version: 0.1.0
 description: >-
   multipart/form-data reception for keta. Consumes c.bodyStream() and yields a
   Stream<Part>, delegating boundary parsing to package:mime. The core learns no
-  multipart vocabulary; this is an Optional Ring 3 adapter.
+  multipart vocabulary; this is an Optional Ring 1 adapter.
 publish_to: none
 
 environment:

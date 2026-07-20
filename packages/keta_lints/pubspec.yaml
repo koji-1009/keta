@@ -1,6 +1,6 @@
 name: keta_lints
 description: >-
-  Ring 3 for keta: analyzer-plugin diagnostics with stable IDs, materializing
+  Ring 1 for keta: analyzer-plugin diagnostics with stable IDs, materializing
   fixes, and the check/fix/scaffold CLI shims.
 version: 0.1.0
 publish_to: none

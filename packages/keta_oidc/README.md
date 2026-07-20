@@ -1,6 +1,6 @@
 # keta_oidc
 
-An OIDC / OAuth2 **resource server** for keta: it verifies the Bearer JWTs an identity provider issues, injects the resulting principal, and authorizes on scope. It is a Ring 3 package — it builds on keta core alone — and it does exactly one side of OIDC: the side that *consumes* tokens.
+An OIDC / OAuth2 **resource server** for keta: it verifies the Bearer JWTs an identity provider issues, injects the resulting principal, and authorizes on scope. It is a Ring 1 package — it builds on keta core alone — and it does exactly one side of OIDC: the side that *consumes* tokens.
 
 keta_oidc ships no `SignatureVerifier` implementation of its own, so depending on it never pulls in a build. The production implementation, `BoringSslVerifier` (BoringSSL via `keta_native`), lives in the separate [`keta_oidc_boringssl`](../keta_oidc_boringssl) package — depending on *that* package (rather than on keta_oidc alone) is what triggers the from-source BoringSSL build.
 

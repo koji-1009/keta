@@ -1,6 +1,6 @@
 # keta_multipart
 
-`multipart/form-data` reception for keta, as an Optional Ring 3 adapter: it consumes `c.bodyStream()` and yields a `Stream<Part>`, delegating boundary parsing to `package:mime`. keta core learns no multipart vocabulary — peel this package off and nothing inward notices. The package itself never touches the filesystem; persisting an upload is the caller's job, done off `Part.stream` without ever holding the file in memory.
+`multipart/form-data` reception for keta, as an Optional Ring 1 adapter: it consumes `c.bodyStream()` and yields a `Stream<Part>`, delegating boundary parsing to `package:mime`. keta core learns no multipart vocabulary — peel this package off and nothing inward notices. The package itself never touches the filesystem; persisting an upload is the caller's job, done off `Part.stream` without ever holding the file in memory.
 
 ## The entry point
 

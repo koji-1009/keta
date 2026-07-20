@@ -1,6 +1,6 @@
 name: keta_native
 description: >-
-  Ring 3 native layer for keta over BoringSSL via dart hooks (native assets).
+  Standalone (no ring) native layer over BoringSSL via dart hooks (native assets).
   Exposes verify-oriented crypto primitives (SHA-2 digests, HMAC, RSA/ECDSA
   signature verification); builds BoringSSL from a pinned commit at hook time.
 version: 0.1.0

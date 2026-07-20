@@ -1,6 +1,6 @@
 # keta_openapi
 
-Ring 2 of keta: the route-table walk that emits an OpenAPI 3.1 document from a running app's `RouteDoc`/`Schema` declarations. Everything here is **runtime assembly** — plain values read back at emit time. There is no code generation, no `build_runner`, no annotations, and no reflection anywhere in the package.
+Ring 1 of keta: the route-table walk that emits an OpenAPI 3.1 document from a running app's `RouteDoc`/`Schema` declarations. Everything here is **runtime assembly** — plain values read back at emit time. There is no code generation, no `build_runner`, no annotations, and no reflection anywhere in the package.
 
 `Schema`, `RouteDoc`, and the `SecurityPolicy`/`enforceSecurity` runtime gate live in `keta` core, not here — they are the declaration contract, and both boundary validation and the security gate run off them at request time, independent of this package. keta_openapi only *reads* those declarations and projects them one way into a document: `import 'package:keta/keta.dart'` for `Schema`/`RouteDoc`/`listSchema`/`bearer`/`apiKey`/`SecurityPolicy`/`enforceSecurity`; `import 'package:keta_openapi/keta_openapi.dart'` for `OpenApi` alone. Because the contract types don't live here, this package is removable without changing any runtime behavior — no request-handling code depends on it.
 
