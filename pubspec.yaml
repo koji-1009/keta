@@ -23,6 +23,7 @@ workspace:
   - packages/keta_lints
   - packages/keta_shelf
   - packages/keta_files
+  - packages/keta_static
   - packages/keta_otel
   - packages/keta_multipart
   - packages/keta_rds

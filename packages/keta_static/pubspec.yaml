@@ -1,0 +1,18 @@
+name: keta_static
+description: >-
+  Ring 1 for keta: static asset serving as a prefix-scoped middleware, with the
+  asset source behind a seam so the bytes may come from disk, from memory, or
+  from whatever a build step produced.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta: ^0.1.0
+
+dev_dependencies:
+  test: ^1.25.0

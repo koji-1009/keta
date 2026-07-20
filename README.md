@@ -63,6 +63,7 @@ Two axes, deliberately separate. **Ring** is measured: a package's ring is its p
 | `keta_openapi` | 1 | Recommended | The route-table walk that emits an OpenAPI 3.1 document from `RouteDoc`/`Schema` (owned by `keta`). Pure derivation — runtime assembly, no code generation — so removing it changes no runtime behavior. |
 | `keta_lints` | 1 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, field types, and middleware ordering (reading `keta`'s own ranks, so the lint and the runtime cannot disagree). |
 | `keta_files` | 1 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
+| `keta_static` | 1 | Optional | Static asset serving, mounted as a prefix-scoped middleware rather than a wildcard route, with `AssetSource` as the seam the bytes arrive through. `ETag`/`304`, byte `Range`, `Cache-Control` and media types, all over core's typed headers. |
 | `keta_shelf` | 1 | Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
 | `keta_multipart` | 1 | Optional | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`. Boundary parsing via `package:mime`. |
 | `keta_otel` | 1 | Optional | `traceparent` → OTLP and a `/metrics` endpoint, with every label axis bounded (no attacker-controlled cardinality). |
@@ -75,7 +76,7 @@ Two axes, deliberately separate. **Ring** is measured: a package's ring is its p
 
 ## Deliberately out of scope for v0.1
 
-These absences were judged, not overlooked — do not read them as gaps to fill: static file **serving** (reception via keta_multipart is separate), HTTP/2 and HTTP/3 transports (only the transport seam exists), session stores, template engines, content negotiation (keta is JSON-first), and runtime configuration reload (configuration changes by redeploy). The request-cookie primitive and typed `Set-Cookie` are in Core; session **stores** on top of them are not.
+These absences were judged, not overlooked — do not read them as gaps to fill: HTTP/2 and HTTP/3 transports (only the transport seam exists), session stores, template engines, content negotiation (keta is JSON-first), and runtime configuration reload (configuration changes by redeploy). The request-cookie primitive and typed `Set-Cookie` are in Core; session **stores** on top of them are not.
 
 ## Status
 
