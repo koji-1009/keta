@@ -63,9 +63,9 @@ final class Success {
 }
 
 /// What an upgrade route answers with: 101 Switching Protocols, then another
-/// protocol entirely. It sits parallel to [Success] — the note's "Success と
-/// 同列の宣言(値)" — precisely because it cannot BE a [Success]: a [Success]
-/// asserts a 2xx/3xx, and a 101 is neither. A 101 does not mean "the request
+/// protocol entirely. It is a declaration of its own, standing beside
+/// [Success] rather than under it, precisely because it cannot BE a [Success]:
+/// a [Success] asserts a 2xx/3xx, and a 101 is neither. A 101 does not mean "the request
 /// succeeded, here is the body"; it means "this connection is leaving HTTP." The
 /// two are different kinds of answer, so they are different types, and a route
 /// declares exactly one of them.
