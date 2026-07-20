@@ -9,6 +9,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # Padded with spaces and matched via `format(' {0} ', dir)`: `contains` is a
+  # substring test, so an unpadded list also matches every prefix — plain
+  # `packages/keta` would count as a BoringSSL consumer.
+  BORINGSSL_DIRS: " packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc "
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -81,23 +87,27 @@ jobs:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-${{ runner.os }}-
-      # The BoringSSL source is identical for every consumer, so it is cached
-      # once against the pin alone; only the compile artifacts, which the
-      # hooks runner keys per consuming package, need a per-job entry.
-      - if: contains('packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir)
+      # Both entries are shared by every BoringSSL job: the source is keyed on
+      # the pin, and the artifacts land under one config directory because the
+      # hooks runner keys them on the build config (same OS, arch, and linking
+      # mode here), not on the consuming package.
+      - if: ${{ contains(env.BORINGSSL_DIRS, format(' {0} ', matrix.dir)) }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
           key: boringssl-src-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/boringssl_commit.txt') }}
-      - if: contains('packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir)
+      - if: ${{ contains(env.BORINGSSL_DIRS, format(' {0} ', matrix.dir)) }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
+          # Scoped to keta_native's own hook artifacts: other packages' hooks
+          # are cheap to re-run and would make this entry job-dependent.
           path: |
-            .dart_tool/hooks_runner
+            .dart_tool/hooks_runner/keta_native
+            .dart_tool/hooks_runner/shared/keta_native/build
             !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
           # Hook code shapes the artifacts; the pin reaches them through the
           # source cache above.
-          key: boringssl-obj-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-${{ matrix.dir }}
+          key: boringssl-obj-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
       - run: dart pub get
       # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
       # visibly otherwise), so the container and the variable exist only on
