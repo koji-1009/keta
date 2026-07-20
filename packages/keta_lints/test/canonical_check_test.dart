@@ -30,7 +30,7 @@ class UserDto {
       'a DTO (by Schema signal) without mappers is keta_canonical_missing',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Point {
   final int x;
   final int y;
@@ -136,7 +136,7 @@ class Weird {
     test('check flags an EXTRA schema property fix would remove (schema drift '
         'in the other direction)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   Dto({required this.id});
@@ -158,7 +158,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properti
     test('a Schema whose properties match the fields is clean (negative: no '
         'false schema drift)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -222,7 +222,7 @@ class D {
     test('a fixable DTO missing a mapper still recommends keta_lints:fix '
         '(negative: the gate did not over-suppress the recommendation)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Ok {
   final String id;
   Ok({required this.id});
@@ -572,7 +572,6 @@ class P {
     // A hand-written enhanced enum plus a DTO that uses it, both canonical.
     const source = '''
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 enum Role {
   admin('admin'),
   superUser('super-user');
@@ -720,7 +719,7 @@ class Dto {
         'finding: check reports keta_schema_drift and fix reconciles the '
         'Schema while leaving the refused mapper untouched', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -753,7 +752,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], '
         'for the Schema (fix #3 made Schema repair ctor-independent), NOT to '
         'reconcile by hand naming the ctor blocker', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class P {
   final String a;
   final String b;
@@ -785,7 +784,7 @@ const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properti
       'isSchemaFixable is not a blanket yes) — the advice names the blocker',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class D {
   final DateTime when;
   final String id;

@@ -5,7 +5,7 @@
 /// composition with a realistic (multi-property) item schema.
 library;
 
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 
 const _itemSchema = Schema('Item', {

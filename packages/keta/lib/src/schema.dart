@@ -2,7 +2,7 @@ library;
 
 import 'dart:collection';
 
-import 'package:keta/keta.dart';
+import 'response.dart';
 
 /// A named JSON Schema fragment that is the single source of truth for a type:
 /// it drives OpenAPI output, runtime boundary validation, and (via keta_lints)

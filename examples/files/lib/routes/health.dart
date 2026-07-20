@@ -1,6 +1,6 @@
+import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 
 /// `/health` — because the file is `routes/health.dart`. Nothing here says so;
 /// that is what makes the tree the route table.

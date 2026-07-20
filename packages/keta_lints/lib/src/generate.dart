@@ -95,16 +95,8 @@ bool _isEnum(Map<String, Object?> schema) =>
 // --- DTOs -----------------------------------------------------------------
 
 String _generateDtos(Map<String, Map<String, Object?>> schemas) {
-  final hasSealed = schemas.values.any(_isSealed);
-  final hasEnhancedEnum = schemas.values.any(_isEnhancedEnum);
-  final buffer = StringBuffer();
-  // A sealed variant's fromJson switch and an enhanced enum's fromWire both
-  // throw BadRequest on an unknown wire tag, so either pulls in keta.
-  if (hasSealed || hasEnhancedEnum) {
-    buffer.writeln("import 'package:keta/keta.dart';");
-  }
-  buffer
-    ..writeln("import 'package:keta_openapi/keta_openapi.dart';")
+  final buffer = StringBuffer()
+    ..writeln("import 'package:keta/keta.dart';")
     ..writeln();
   // Each sealed type's variants carry `implements <Sealed>`, so the
   // switch-delegation is well-typed.
@@ -571,7 +563,6 @@ String _generateRoutes(
 ) {
   final buffer = StringBuffer()
     ..writeln("import 'package:keta/keta.dart';")
-    ..writeln("import 'package:keta_openapi/keta_openapi.dart';")
     ..writeln()
     ..writeln("import 'dtos.dart';")
     ..writeln()

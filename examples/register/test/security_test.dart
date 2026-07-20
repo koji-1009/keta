@@ -5,8 +5,8 @@
 /// endpoint that ride on the same stack.
 library;
 
+import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 import 'package:keta_register_example/app.dart';
 import 'package:test/test.dart';
 

@@ -2,8 +2,6 @@ library;
 
 import 'package:keta/keta.dart';
 
-import 'route_doc.dart';
-import 'schema.dart';
 import 'yaml.dart';
 
 /// An OpenAPI 3.1 document assembled from a route table. Truth flows one way:
@@ -39,7 +37,7 @@ class OpenApi {
     final allTags = <String>{};
 
     for (final route in routes) {
-      final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
+      final doc = route.doc;
       // null follows the global default; an empty list is explicitly public.
       final effective = doc?.security ?? security;
       final path = _openApiPath(route.segments);

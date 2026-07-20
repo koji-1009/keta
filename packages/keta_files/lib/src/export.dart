@@ -44,7 +44,7 @@ final class ScopedMiddleware<E> {
 
 /// One of [App]'s verb methods, torn off to be paired with the slot it serves.
 typedef _Bind<E> =
-    void Function(Object path, Handler<E> handler, {Object? doc});
+    void Function(Object path, Handler<E> handler, {RouteDoc? doc});
 
 /// What one method of a URL does: the handler, and the document describing it.
 ///
@@ -62,10 +62,8 @@ final class Serve<E> {
   /// What answers the request.
   final Handler<E> handler;
 
-  /// What the contract says about it — a `RouteDoc`, when keta_openapi is in
-  /// play. Typed as [Object] because Ring 3 does not depend on Ring 2; keta
-  /// carries a route's doc opaquely for exactly this reason.
-  final Object? doc;
+  /// What the contract says about it — the route's [RouteDoc], or null.
+  final RouteDoc? doc;
 }
 
 /// Everything a route file contributes, under the one name the tree looks for.

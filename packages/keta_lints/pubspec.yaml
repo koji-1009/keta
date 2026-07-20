@@ -12,7 +12,6 @@ resolution: workspace
 
 dependencies:
   keta: ^0.1.0
-  keta_openapi: ^0.1.0
   analysis_server_plugin: ^0.3.0
   analyzer: ^14.0.0
   yaml: ^3.1.0

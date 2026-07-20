@@ -1,7 +1,6 @@
 library;
 
-import 'package:keta/keta.dart';
-
+import 'routing.dart';
 import 'schema.dart';
 
 /// A named OpenAPI security scheme, carried as data (the same shape as

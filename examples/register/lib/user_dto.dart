@@ -1,6 +1,4 @@
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
-
 enum Role { admin, member }
 
 /// Rejects a tag containing a comma, at the parse boundary where client input

@@ -18,7 +18,7 @@ void main() {
   group('applyCanonicalFix', () {
     test('materializes missing mappers', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class UserDto {
   final String id;
   final int? age;
@@ -42,7 +42,7 @@ const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], '
       'reconciles drift across fromJson, toJson, and the schema (M4 gate)',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class UserDto {
   final String id;
@@ -72,7 +72,7 @@ const userDtoSchema = Schema('UserDto', {
 
     test('removing two adjacent fields does not corrupt source', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class Dto {
   final String a;
@@ -104,7 +104,7 @@ const dtoSchema = Schema('Dto', {
 
     test('renaming the sole field yields valid source', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class One {
   final String uuid;
@@ -176,7 +176,7 @@ class Dto {
 
     test('preserves an enum property refinement and adds nested-DTO deps', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class Address {
   final String city;
@@ -338,7 +338,7 @@ class Dto {
         'rewrite the Schema — CI shipped a stale OpenAPI document; check now '
         'reports keta_schema_drift for exactly what fix reconciles)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String? email;
@@ -370,7 +370,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properti
       // guard exists to catch. (The schema must actually drift for both to touch
       // it: under D-2's per-member granularity a matching schema is left alone.)
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dup { final String id; Dup({required this.id}); }
 class Dup { final String id; Dup({required this.id}); }
 const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'stale': {'type': 'string'}}});
@@ -467,7 +467,7 @@ class Dto {
 
     test('fix preserves top-level schema keys (no data loss)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -504,7 +504,7 @@ class Dto {
     test('a schema-only drift leaves an inline comment inside toJson '
         'byte-for-byte (the mappers are not touched)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String email;
@@ -631,7 +631,6 @@ class Dto {
     // A hand-written enhanced enum plus a DTO that uses it, both canonical.
     const source = '''
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 enum Role {
   admin('admin'),
   superUser('super-user');

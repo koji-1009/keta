@@ -2,6 +2,11 @@
 ///
 /// Ring 0 Foundation: routing, [Context], middleware, [App]/[Server], [Log],
 /// and the default HTTP/1.1 transport. Depends on nothing but the SDK.
+///
+/// It also owns the declaration contract — [Schema], [RouteDoc], and the
+/// [SecurityPolicy]/[enforceSecurity] runtime gate — because the declarations
+/// are the source: boundary validation and the security gate run here, and the
+/// OpenAPI document keta_openapi emits is a one-way shadow derived from them.
 library;
 
 export 'src/admission.dart' show concurrencyLimit, rateLimit;
@@ -49,6 +54,16 @@ export 'src/response.dart'
         Unavailable,
         TransientFailure,
         GatewayTimeout;
+export 'src/route_doc.dart'
+    show
+        RouteDoc,
+        Success,
+        Failure,
+        SwitchingProtocols,
+        SecurityScheme,
+        QueryParam,
+        bearer,
+        apiKey;
 export 'src/routing.dart'
     show
         Capture,
@@ -65,6 +80,8 @@ export 'src/routing.dart'
         integer,
         number,
         boolean;
+export 'src/schema.dart' show Schema, listSchema;
+export 'src/security.dart' show SecurityPolicy, enforceSecurity;
 export 'src/sse.dart' show SseEvent, SseResponses;
 export 'src/transport.dart' show Transport, TransportRequest, TransportServer;
 export 'src/upgrade.dart' show Upgrade, UpgradedChannel;

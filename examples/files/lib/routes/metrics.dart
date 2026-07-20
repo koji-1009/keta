@@ -1,7 +1,7 @@
+import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/observability.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 import 'package:keta_otel/keta_otel.dart';
 
 /// Metrics are not public: apiKey rather than the bearer everything else uses,
