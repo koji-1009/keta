@@ -56,8 +56,8 @@ abstract interface class UpgradedChannel {
 /// and the [Upgrade] is never even constructed. The connection callback is inert
 /// data — [onConnected] is not invoked by anything until a [Transport] that can
 /// actually switch protocols decides to act on it. A transport that cannot
-/// (`TestClient`, the shelf bridge) sees an ordinary value and fails, or adapts,
-/// loudly and predictably.
+/// (`TestClient`) sees an ordinary value and fails, or adapts, loudly and
+/// predictably.
 final class Upgrade {
   /// Constructs and validates the declaration. Throws [ArgumentError] when
   /// [maxIdle] or [maxLifetime] is given and is not positive — a non-positive
