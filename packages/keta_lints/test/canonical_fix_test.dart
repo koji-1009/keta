@@ -129,7 +129,8 @@ const oneSchema = Schema('One', {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('materializes a half-missing mapper pair', () {
+    test('does NOT forge the absent mirror of a one-way (fromJson-only) class '
+        'the present mapper declares the direction; the fixer leaves it alone', () {
       const source = '''
 class Dto {
   final String id;
@@ -137,10 +138,13 @@ class Dto {
   factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
 }
 ''';
+      // fromJson present, toJson absent, no Schema — a legitimate input-only
+      // projection. The fixer must not materialize a toJson (that would forge a
+      // direction the class never declared), so the output is byte-identical.
       final fixed = applyCanonicalFix(source);
-      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(fixed, source);
+      expect(fixed, isNot(contains('toJson')));
       expect(canonicalDiagnostics(fixed), isEmpty);
-      expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
     test('a class with final fields but no canonical signal is ignored', () {
@@ -250,6 +254,10 @@ class Dto {
   final Map<String, Item>? maybeMap;
   Dto({required this.roles, required this.items, required this.roleMap, required this.itemMap, this.maybeRole, this.maybeItem, this.maybeList, this.maybeMap});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(roles: const [], items: const [], roleMap: const {}, itemMap: const {});
+  // Both mappers are present but drift (fromJson reads no keys, toJson is empty),
+  // so BOTH regenerate — exercising fromJson AND toJson generation across the
+  // full type matrix. (A one-way class would leave its absent side alone.)
+  Map<String, Object?> toJson() => {};
 }
 ''';
       final fixed = applyCanonicalFix(source);
@@ -486,12 +494,17 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], '
     });
 
     test('fix escapes \$ in a field name and converges', () {
+      // A Schema-declared DTO with neither mapper (the materialize-from-scratch
+      // case), so the fixer generates BOTH mappers AND the Schema properties
+      // from the field model — exercising the `\$` escaping on every generated
+      // key (a one-way class would leave one side ungenerated).
       const source = '''
+import 'package:keta/keta.dart';
 class Dto {
   final String a\$b;
   Dto({required this.a\$b});
-  factory Dto.fromJson(Map<String, Object?> json) => Dto(a\$b: json['a\$b'] as String);
 }
+const dtoSchema = Schema('Dto', {'type': 'object'});
 ''';
       final fixed = applyCanonicalFix(source);
       parseString(content: fixed, throwIfDiagnostics: true); // compiles

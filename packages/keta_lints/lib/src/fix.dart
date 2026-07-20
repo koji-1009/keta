@@ -13,7 +13,7 @@ import 'dart_literal.dart';
 /// state (the field set), and atomically replaces each member's source range.
 /// Whole-member regeneration (rather than per-field surgery) makes the edits
 /// non-overlapping by construction, so removing several fields, renaming the
-/// sole field, or repairing a half-missing pair can't corrupt the source.
+/// sole field, or materializing an absent mapper pair can't corrupt the source.
 ///
 /// Only the member(s) that actually drifted are regenerated (D-2): a schema-only
 /// drift never touches the mappers, a fromJson cast drift never rewrites toJson,
@@ -117,14 +117,19 @@ void _fixClass(
   // both mappers, a fromJson cast drift rewrote toJson, and so on. Each axis is
   // now independent:
   //
-  //  * fromJson drifts when it is missing, reads a key set other than the
-  //    fields, carries a stale `as T` cast (type drift — invisible to a key-set
-  //    diff), OR routes an enum through the wrong accessor (`values.byName` on
-  //    an enhanced enum) — the last invisible to BOTH the key-set and cast
-  //    diffs because an enum mapper is a wrapped call, yet still wire-breaking.
-  //  * toJson drifts when it is missing, writes a key set other than the
-  //    fields, OR routes an enum through the wrong accessor (`.name` on an
-  //    enhanced enum).
+  //  * a PRESENT fromJson drifts when it reads a key set other than the fields,
+  //    carries a stale `as T` cast (type drift — invisible to a key-set diff),
+  //    OR routes an enum through the wrong accessor (`values.byName` on an
+  //    enhanced enum) — the last invisible to BOTH the key-set and cast diffs
+  //    because an enum mapper is a wrapped call, yet still wire-breaking.
+  //  * a PRESENT toJson drifts when it writes a key set other than the fields,
+  //    OR routes an enum through the wrong accessor (`.name` on an enhanced
+  //    enum).
+  //  * an ABSENT mapper is materialized ONLY when its sibling is absent too — a
+  //    Schema-declared DTO with no runtime mapping (both mappers absent). A
+  //    one-way projection (exactly one mapper present) declares its
+  //    directionality by that present mapper, so the fixer must NOT forge its
+  //    absent mirror; it materializes the pair only in the both-absent case.
   //  * the Schema is handled above, independently of the mappers.
   //
   // Folding each enum-accessor side into its OWN member's flag is what keeps the
@@ -142,15 +147,20 @@ void _fixClass(
   // overlapping); only the comments INSIDE that one member are lost, which is
   // accepted since its body is exactly what changed. Leading doc comments and
   // metadata are preserved for every regenerated member (see [member]).
-  final fromJsonDrifted =
-      fromJson == null ||
-      !setEquals(fromJsonKeys(fromJson), fieldNames) ||
-      dto.typeDrifts.isNotEmpty ||
-      enumDrift.fromJson.isNotEmpty;
-  final toJsonDrifted =
-      toJson == null ||
-      !setEquals(toJsonKeys(toJson, dto.allFinalFieldNames)!, fieldNames) ||
-      enumDrift.toJson.isNotEmpty;
+  // An absent mapper counts as "drifted" (to be materialized) ONLY when its
+  // sibling is absent too: a one-way projection's present mapper declares the
+  // direction, so the fixer leaves the absent mirror alone rather than forging
+  // it. A present mapper still drifts on its own key set / cast / enum accessor.
+  final bothAbsent = fromJson == null && toJson == null;
+  final fromJsonDrifted = fromJson == null
+      ? bothAbsent
+      : !setEquals(fromJsonKeys(fromJson), fieldNames) ||
+            dto.typeDrifts.isNotEmpty ||
+            enumDrift.fromJson.isNotEmpty;
+  final toJsonDrifted = toJson == null
+      ? bothAbsent
+      : !setEquals(toJsonKeys(toJson, dto.allFinalFieldNames)!, fieldNames) ||
+            enumDrift.toJson.isNotEmpty;
   if (!fromJsonDrifted && !toJsonDrifted) {
     return; // mappers already canonical (the Schema was handled above).
   }

@@ -96,10 +96,11 @@ const userDtoSchema = Schema('UserDto', {
 /// across all pages, so a client can compute how many pages remain without
 /// walking them.
 ///
-/// `fromJson` is kept even though the server only emits this shape: a
-/// Schema-backed DTO is round-trippable by this repo's canonical convention
-/// (keta_lints' `keta_canonical_missing` flags a class that has a Schema and
-/// `toJson` but no `fromJson`), and the drift-demo test exercises exactly that.
+/// `fromJson` is kept even though the server only emits this shape: the list
+/// envelope mirrors [UserDto] and round-trips by this repo's canonical
+/// convention. keta_lints does not force it — a one-way projection (only a
+/// `toJson`) is a legitimate output shape it leaves unflagged — so the mirror
+/// here is a deliberate convention, not a tooling demand.
 class UserList {
   const UserList({required this.items, required this.total});
 

@@ -128,7 +128,10 @@ class Dto {
         write(rel, '''
 class Point {
   final int x;
-  Point(this.x);
+  final int y;
+  Point({required this.x, required this.y});
+  factory Point.fromJson(Map<String, Object?> json) =>
+      Point(x: json['x'] as int, y: json['y'] as int);
   Map<String, Object?> toJson() => {'x': x};
 }
 ''');
@@ -157,16 +160,19 @@ class Point {
   });
 
   group('fix', () {
-    const missingToJson = '''
+    // A Schema-declared DTO with NEITHER mapper (the materialize-from-scratch
+    // case): fix generates both fromJson and toJson. A one-way projection would
+    // be left alone, so it could not exercise the in-place rewrite here.
+    const schemaNoMappers = '''
 class Dto {
   final String id;
   Dto({required this.id});
-  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
 }
+const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
 ''';
 
     test('rewrites a file in place, then is a no-op on a second run', () {
-      final path = write('dto.dart', missingToJson);
+      final path = write('dto.dart', schemaNoMappers);
       final first = _run(_script('fix.dart'), ['canonical', path]);
       expect(first.exitCode, 0);
       expect(first.stdout, contains('fixed'));

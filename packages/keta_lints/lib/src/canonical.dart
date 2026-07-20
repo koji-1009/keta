@@ -8,10 +8,16 @@ import 'diagnostic.dart';
 
 /// Reports canonical-form problems on DTO-shaped classes in [source]:
 ///
-/// - `keta_canonical_missing`: a DTO that lacks a `fromJson` factory or a
-///   `toJson` method.
+/// - `keta_canonical_missing`: a Schema-declared DTO carrying NEITHER mapper —
+///   a class that promises a JSON contract with no runtime way to produce or
+///   parse it. A one-way projection (exactly one mapper present) is legitimate,
+///   NOT missing: the single present mapper declares the class's directionality
+///   — an output-only body (`toJson`, no `fromJson`) or an input-only one
+///   (`fromJson`, no `toJson`) — so its absent mirror is deliberate, never
+///   flagged, and never materialized by the fixer.
 /// - `keta_canonical_drift`: a DTO whose `toJson`/`fromJson` keys do not match
-///   its final field names.
+///   its final field names. Each present mapper is checked on its own; an
+///   absent one contributes nothing (a one-way shape is not a round-trip).
 /// - `keta_schema_drift`: a DTO whose `Schema` constant's `properties` do not
 ///   match its final field names, so the emitted OpenAPI would be wrong.
 ///
@@ -135,55 +141,75 @@ void _checkClass(
     }
   }
 
-  // --- missing mapper ------------------------------------------------------
-  if (dto.fromJson == null || dto.toJson == null) {
-    final side = dto.fromJson == null ? 'fromJson factory' : 'toJson method';
-    // When one mapper is missing but the OTHER (present) one has itself
-    // drifted, a single fix run rewrites BOTH — so name both axes rather than
-    // only the missing side, which would under-report what fix touches.
-    final sibling = _presentMapperDrifted(dto, className)
-        ? ' (its ${dto.fromJson == null ? 'toJson' : 'fromJson'} has also '
-              'drifted, so the fix rewrites both)'
-        : '';
+  // --- missing mapper (a Schema promising a contract with no mapping) -------
+  // A one-way projection is legitimate: the single present mapper DECLARES the
+  // class's directionality, so its absent mirror is deliberate, not missing.
+  // `missing` fires ONLY when BOTH mappers are absent — a case reachable only
+  // through a Schema constant (a class with neither mapper carries no other DTO
+  // signal, so it would not be a DTO at all), i.e. a Schema promising a JSON
+  // contract with no runtime way to produce or parse it. There is no present
+  // sibling to name, so the message speaks only of the two absent sides, and
+  // the fixer materializes BOTH.
+  if (dto.fromJson == null && dto.toJson == null) {
     diagnostics.add(
       make(
         'keta_canonical_missing',
-        'class $className has final fields but no $side$sibling; '
-            '${advise('materialize the canonical mapper', 'materialize it')}',
+        'class $className has a Schema constant but neither a fromJson factory '
+            'nor a toJson method; '
+            '${advise('materialize the canonical mappers', 'materialize them')}',
       ),
     );
     return;
   }
 
-  // --- both mappers present ------------------------------------------------
+  // --- mapper drift (checked on whichever mapper(s) the class declares) -----
   // A mapper the fixer can't recognize is hand-modified: its key set can't be
   // trusted, so it is neither verified nor reported — the same silence the
   // fixer honors by leaving it untouched. This is also where a spread /
   // collection-for / computed-key toJson lands (toJsonKeys returns null), so a
-  // hand-authored literal is never misread as an incomplete key set.
-  final jsonKeys = toJsonKeys(dto.toJson!, dto.allFinalFieldNames);
-  if (jsonKeys == null) return;
-  if (!isCanonicalFromJson(dto.fromJson!, className)) return;
+  // hand-authored literal is never misread as an incomplete key set. A single
+  // unrecognized present mapper takes the whole class out of scope, exactly as
+  // when both were present: the fixer refuses it, so the check stays silent.
+  final fields = dto.allFinalFieldNames;
+  Set<String>? jsonKeys;
+  if (dto.toJson != null) {
+    jsonKeys = toJsonKeys(dto.toJson!, fields);
+    if (jsonKeys == null) return;
+  }
+  if (dto.fromJson != null && !isCanonicalFromJson(dto.fromJson!, className)) {
+    return;
+  }
 
   // Drift is reported against the FULL final-field set (not the fixer's
   // resolvable subset): a broken round-trip is a real bug the user must see
   // even when a positional ctor or an exotic field type means the auto-fixer
   // will decline it — the same posture the mapper-drift check has always had.
-  final fields = dto.allFinalFieldNames;
-  final fromKeys = fromJsonKeys(dto.fromJson!);
-  // Verify BOTH directions of the round-trip: toJson writes exactly the fields,
-  // and fromJson reads exactly the fields. A half-done rename (fromJson still
-  // reading the old key) round-trips broken but a toJson-only check misses it.
-  final parts = [
-    if (fields.difference(jsonKeys).isNotEmpty)
-      'fields not in toJson: ${fields.difference(jsonKeys).join(', ')}',
-    if (jsonKeys.difference(fields).isNotEmpty)
-      'toJson keys not fields: ${jsonKeys.difference(fields).join(', ')}',
-    if (fields.difference(fromKeys).isNotEmpty)
-      'fields not read by fromJson: ${fields.difference(fromKeys).join(', ')}',
-    if (fromKeys.difference(fields).isNotEmpty)
-      'fromJson reads unknown keys: ${fromKeys.difference(fields).join(', ')}',
-  ];
+  // Each present mapper is verified against the fields (toJson writes exactly
+  // them; fromJson reads exactly them, catching a half-done rename that toJson
+  // alone would miss); an absent mapper adds nothing, since a one-way shape is
+  // not a round-trip whose other direction could disagree.
+  final parts = <String>[];
+  if (jsonKeys != null) {
+    final notWritten = fields.difference(jsonKeys);
+    final notFields = jsonKeys.difference(fields);
+    if (notWritten.isNotEmpty) {
+      parts.add('fields not in toJson: ${notWritten.join(', ')}');
+    }
+    if (notFields.isNotEmpty) {
+      parts.add('toJson keys not fields: ${notFields.join(', ')}');
+    }
+  }
+  if (dto.fromJson != null) {
+    final fromKeys = fromJsonKeys(dto.fromJson!);
+    final notRead = fields.difference(fromKeys);
+    final unknown = fromKeys.difference(fields);
+    if (notRead.isNotEmpty) {
+      parts.add('fields not read by fromJson: ${notRead.join(', ')}');
+    }
+    if (unknown.isNotEmpty) {
+      parts.add('fromJson reads unknown keys: ${unknown.join(', ')}');
+    }
+  }
   if (parts.isNotEmpty) {
     diagnostics.add(
       make(
@@ -234,27 +260,4 @@ void _checkClass(
       );
     }
   }
-}
-
-/// When exactly one mapper is present, whether that present mapper has itself
-/// drifted (a key-set, cast, or enum-accessor mismatch the fixer would repair
-/// in the same run that materializes the missing one). Mirrors the fixer's
-/// per-member drift predicates so the missing-mapper message names every axis
-/// the fix touches. A hand-modified present mapper (unrecognizable key set /
-/// non-canonical fromJson) is left untouched by the fixer, so it does not count.
-bool _presentMapperDrifted(CanonicalClass dto, String className) {
-  final fields = dto.allFinalFieldNames;
-  final enumDrift = dto.enumAccessorDrifts;
-  if (dto.fromJson == null && dto.toJson != null) {
-    final keys = toJsonKeys(dto.toJson!, fields);
-    if (keys == null) return false; // hand-modified — fixer leaves it
-    return !setEquals(keys, fields) || enumDrift.toJson.isNotEmpty;
-  }
-  if (dto.toJson == null && dto.fromJson != null) {
-    if (!isCanonicalFromJson(dto.fromJson!, className)) return false;
-    return !setEquals(fromJsonKeys(dto.fromJson!), fields) ||
-        dto.typeDrifts.isNotEmpty ||
-        enumDrift.fromJson.isNotEmpty;
-  }
-  return false; // both missing: nothing else to rewrite
 }
