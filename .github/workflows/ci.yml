@@ -65,6 +65,7 @@ jobs:
           - packages/keta_rds
           - packages/keta_shelf
           - packages/keta_sqlite
+          - packages/keta_static
           - examples/auth
           - examples/files
           - examples/oidc

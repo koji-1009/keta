@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'header.dart';
 import 'log.dart';
 import 'response.dart';
 import 'route_doc.dart';
@@ -316,6 +317,36 @@ extension type Context<E>(RequestCtx<E> _raw) {
 
   /// All request headers: lower-cased names to their ordered values. Read-only.
   Map<String, List<String>> get headers => Map.unmodifiable(_raw.headers);
+
+  /// The header [accessor] names, decoded — a [BadRequest] when it is absent
+  /// or malformed.
+  ///
+  /// Required-ness is which accessor you call, not a flag, exactly as it is for
+  /// query parameters: this is the required form, [tryHeaderAs] the optional
+  /// one. A malformed value is the client's defect either way, so it is a 400
+  /// from both.
+  T headerAs<T extends Object>(HeaderAccessor<T> accessor) {
+    final value = tryHeaderAs(accessor);
+    if (value == null) throw BadRequest('missing header "${accessor.name}"');
+    return value;
+  }
+
+  /// The header [accessor] names, decoded, or null when it is absent.
+  ///
+  /// Null also means "present but to be ignored" for the headers whose RFC says
+  /// so — `Range` is the one keta models: a server that cannot parse a Range
+  /// must serve the whole representation rather than refuse the request, so an
+  /// unreadable one reads as absent here instead of raising.
+  T? tryHeaderAs<T extends Object>(HeaderAccessor<T> accessor) {
+    final values = _raw.headers[accessor.name] ?? const <String>[];
+    if (values.isEmpty) return null;
+    try {
+      return accessor.codec.decode(values);
+    } on Object catch (error) {
+      if (isIgnorableHeader(error)) return null;
+      rethrow;
+    }
+  }
 
   /// The request cookie named [name], or null. Parsed from the `Cookie` header
   /// (RFC 6265 pair syntax); a malformed pair is skipped, never a 500.
