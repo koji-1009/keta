@@ -23,6 +23,7 @@ void main() {
     defineReflectiveTests(KetaQueryRuleTest);
     defineReflectiveTests(KetaCanonicalRuleTest);
     defineReflectiveTests(KetaTxOrderRuleTest);
+    defineReflectiveTests(KetaMiddlewareOrderRuleTest);
     defineReflectiveTests(KetaKeyRuleTest);
     defineReflectiveTests(KetaInternalAwaitRuleTest);
   });
@@ -359,6 +360,48 @@ dynamic tx() => null;
 dynamic recover() => null;
 void f(dynamic app) {
   app..use(recover())..use(tx());
+}
+''');
+  }
+}
+
+@reflectiveTest
+class KetaMiddlewareOrderRuleTest extends AnalysisRuleTest {
+  @override
+  void setUp() {
+    rule = KetaMiddlewareOrderRule();
+    super.setUp();
+  }
+
+  Future<void> test_descendingPair_fires() async {
+    await assertDiagnostics(
+      r'''
+dynamic etag() => null;
+dynamic gzip() => null;
+void f(dynamic app) {
+  app..use(etag())..use(gzip());
+}
+''',
+      [
+        lint(
+          94,
+          6,
+          name: 'keta_middleware_order',
+          messageContainsAll: [
+            _idPrefix,
+            'use(gzip()) is registered inside use(etag())',
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> test_clean() async {
+    await assertNoDiagnostics(r'''
+dynamic etag() => null;
+dynamic gzip() => null;
+void f(dynamic app) {
+  app..use(gzip())..use(etag());
 }
 ''');
   }
