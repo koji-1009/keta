@@ -1,98 +1,98 @@
-# Dart のビルド成果物と CI キャッシュ設計
+# Dart build artifacts and what CI should cache
 
-keta の CI で「何を短縮すべきか」を決めるための一次調査。測定はすべて実機(GitHub Actions の run 29728112735 / 29728112698、および macOS arm64 のローカル)で取得したもので、推定値は含まない。
+The survey behind keta's CI cache design. Every number here was measured — on GitHub Actions (runs 29728112735 and 29728112698) or locally on macOS arm64 — and nothing is estimated.
 
-## 1. Dart パッケージのビルドが生む成果物
+## 1. What a Dart build produces
 
-Dart のビルドは独立した 5 層の成果物を生む。層ごとに置き場所・再生成のトリガ・コストが違い、キャッシュの単位もそこで決まる。
+A Dart build writes five independent kinds of artifact. Each has its own location, its own invalidation trigger, and its own regeneration cost, and those boundaries are what a cache entry should follow.
 
-### 1.1 パッケージ解決 — `~/.pub-cache` と `.dart_tool/package_config.json`
+### 1.1 Package resolution — `~/.pub-cache` and `.dart_tool/package_config.json`
 
-`dart pub get` は依存を `PUB_CACHE`(既定 `~/.pub-cache`)へダウンロードし、ワークスペース直下に `package_config.json` / `package_graph.json` / `native_assets.yaml` を書く。前者はマシン単位で共有され、後者はワークスペース単位で毎回書き直される。
+`dart pub get` downloads dependencies into `PUB_CACHE` (`~/.pub-cache` by default) and writes `package_config.json`, `package_graph.json`, and `native_assets.yaml` at the workspace root. The former is shared machine-wide; the latter are rewritten on every resolve.
 
-- 無効化: `pubspec.lock` の変更(= 解決結果の変更)。
-- コスト: `~/.pub-cache` が温まっていれば **0.2 秒**(19 ジョブ合計 7 秒)。ダウンロードは発生しない。
+- Invalidated by: a change to `pubspec.lock`.
+- Cost: **0.2 s** with a warm `~/.pub-cache` (7 s across all 19 jobs), with no downloads.
 
-### 1.2 ビルドフック — `.dart_tool/hooks_runner/`
+### 1.2 Build hooks — `.dart_tool/hooks_runner/`
 
-ネイティブアセットを持つパッケージ(keta_native、sqlite3)は `hook/build.dart` を持ち、hooks runner がこれを実行する。ディレクトリは 2 系統に分かれる。
+Packages carrying native assets (keta_native, sqlite3) ship a `hook/build.dart` that the hooks runner executes. Its output splits across two trees:
 
-| パス | 内容 |
+| Path | Contents |
 |---|---|
-| `hooks_runner/<pkg>/<config>/` | `hook.dill`(フックのコンパイル済みカーネル、約 12 MB)、`input.json`、`output.json`、依存ハッシュ 2 種 |
-| `hooks_runner/shared/<pkg>/build/<config>/` | フックが生成した成果物(keta_native なら `libcrypto` の動的ライブラリまたは静的アーカイブ) |
-| `hooks_runner/shared/<pkg>/link/<hash>/` | リンクフックの出力(AOT のみ) |
+| `hooks_runner/<pkg>/<config>/` | `hook.dill` (the compiled hook, ~12 MB), `input.json`, `output.json`, two dependency-hash files |
+| `hooks_runner/shared/<pkg>/build/<config>/` | What the hook produced — for keta_native, `libcrypto` as a dynamic library or a static archive |
+| `hooks_runner/shared/<pkg>/link/<hash>/` | Link-hook output (AOT only) |
 
-`<config>` は**ビルド設定のハッシュ**で、消費パッケージ名は入らない。`input.json` を比較すると差は `linking_enabled` のみで `package_root` は同一であり、CI でも 4 つの消費ジョブ全てが同じ `shared/keta_native/build/6b4ebf10e7` を使った。したがって設定が同じジョブ間で成果物は共有できる。
+`<config>` hashes the **build configuration**, not the consuming package. Comparing `input.json` between two of them, the only difference is `linking_enabled`, with an identical `package_root`; on CI all four consumer jobs compiled into the same `shared/keta_native/build/6b4ebf10e7`. Artifacts are therefore shareable between jobs that agree on the configuration.
 
-再実行の判定は 2 つのハッシュファイルによる。
+Two hash files decide whether the hook re-runs:
 
-- `hook.dependencies_hash_file.json` — `hook/build.dart`、`package_config.json`、SDK の `version` ファイル。フック自体を作り直すかを決める。
-- `dependencies.dependencies_hash_file.json` — フックが `output.dependencies` に登録した入力。keta_native では **471 件中 470 件が BoringSSL チェックアウト内のファイル**、残り 1 件が `boringssl_commit.txt`。`~/.pub-cache` のパスは 1 件も含まれない。
+- `hook.dependencies_hash_file.json` — `hook/build.dart`, `package_config.json`, and the SDK's `version` file: whether to rebuild the hook itself.
+- `dependencies.dependencies_hash_file.json` — whatever the hook registered in `output.dependencies`. For keta_native that is **470 files inside the BoringSSL checkout** plus `boringssl_commit.txt`, 471 in all. No `~/.pub-cache` path appears.
 
-**依存ファイルが欠けるとフックは再実行される。** 成果物を残したままチェックアウトだけ削除して AOT ビルドすると、再取得と 368 TU の再コンパイルが走った(`Fetching` + clang 起動が 375 行)。チェックアウトを戻すと同じビルドが 0 行、すなわち完全スキップになる。つまり **成果物キャッシュはソースキャッシュ無しでは機能しない**。
+**A missing dependency re-runs the hook.** Deleting only the checkout while keeping the compiled artifacts, then rebuilding, refetched the tarball and recompiled all 368 translation units (375 `Fetching`/clang lines); restoring the checkout made the same build a no-op (0 lines). The artifact cache is therefore useless without the source cache.
 
-- コスト: BoringSSL の全コンパイルが CI で **175〜192 秒**(動的、テストジョブ)/ **2 分 43 秒**(静的 + リンク、AOT ジョブ)。tarball の取得と展開が **10〜35 秒**。
+- Cost: the full BoringSSL compile takes **175–192 s** on CI (dynamic, test jobs) or **2 m 43 s** (static plus link, AOT job). Fetching and extracting the tarball takes **10–35 s**.
 
-### 1.3 テストランナー — `.dart_tool/test/incremental_kernel.*`
+### 1.3 Test runner — `.dart_tool/test/incremental_kernel.*`
 
-`dart test` はテスト用カーネルを差分コンパイルして保持する。ワークスペース直下と各パッケージ配下に約 4 MB ずつ。
+`dart test` keeps an incrementally compiled kernel, ~4 MB at the workspace root and again under each package.
 
-- コスト: keta(最大のパッケージ)で cold **1.72 秒** → warm **1.48 秒**。差は 0.24 秒。
+- Cost: on keta, the largest package, cold **1.72 s** against warm **1.48 s** — a difference of 0.24 s.
 
-### 1.4 実行可能ファイルのスナップショット — `.dart_tool/pub/bin/`
+### 1.4 Executable snapshots — `.dart_tool/pub/bin/`
 
-`dart run <pkg>:<bin>` は初回にスナップショットを作る。ローカルでは keta_lints 44 MB、test 25 MB、keta_files 1.1 MB の計 70 MB。テストマトリクスのジョブはこれを作らない(`dart test` は自前の経路を使う)。checks ジョブの `dart run keta_files:check` だけが該当する。
+`dart run <pkg>:<bin>` snapshots the executable on first use: locally 44 MB for keta_lints, 25 MB for test, 1.1 MB for keta_files. The test matrix never creates these — only the checks job's `dart run keta_files:check` does.
 
-### 1.5 AOT バンドル — `build/cli/<target>/bundle/`
+### 1.5 AOT bundle — `build/cli/<target>/bundle/`
 
-`dart build cli` はビルドフックに加えリンクフックを走らせ、実行ファイルとネイティブライブラリを配置する。上流の成果物(1.2)が有効ならフックはスキップされ、バンドルの組み立てだけが走る。
+`dart build cli` runs the build hooks, then the link hooks, then assembles the executable and its native libraries. When the artifacts from 1.2 are valid the hooks are skipped and only the assembly runs.
 
-## 2. CI の時間はどこに消えているか
+## 2. Where CI time actually goes
 
-run 29728112735(テストマトリクス 19 ジョブ)のステップ実測。合計 2058 ランナー秒。
+Step timings for the 19-job test matrix (run 29728112735), totalling 2058 runner-seconds:
 
-| ステップ | 合計 | 中央値 | 最大 |
+| Step | Total | Median | Max |
 |---|--:|--:|--:|
 | `dart test` | 1059s | 17s | 192s |
 | setup-dart | 509s | 23s | 72s |
 | apt-get install | 300s | 11s | 47s |
-| キャッシュ(復元 + 保存、86 ステップ) | 77s | 0s | 13s |
+| caches (restore + save, 86 steps) | 77s | 0s | 13s |
 | checkout | 63s | 1s | 13s |
 | `dart pub get` | 7s | 0s | 2s |
 
-ランナー種別で性格が変わる。
+The two runner tiers behave differently:
 
-- ubuntu-latest(BoringSSL 系 4 + lints + rds): setup-dart 8 秒、apt 6〜7 秒。時間は `dart test` に集中し、その中身は BoringSSL のコンパイル(117〜192 秒)。
-- ubuntu-slim(残り 13): setup-dart 33〜53 秒、apt 16〜47 秒に対し `dart test` は 29〜41 秒。**準備がテスト本体より長い。**
+- ubuntu-latest (the four BoringSSL jobs, lints, rds): setup-dart 8 s, apt 6–7 s. Time concentrates in `dart test`, which is the BoringSSL compile (117–192 s).
+- ubuntu-slim (the other 13): setup-dart 33–53 s and apt 16–47 s against a `dart test` of 29–41 s. **Preparation outlasts the tests.**
 
-体感時間(= 最長ジョブ)は keta_oidc の 215 秒で、その 192 秒が BoringSSL のコンパイル。
+Wall-clock is set by the slowest job, `packages/keta_oidc` at 215 s, of which 192 s is the BoringSSL compile.
 
-## 3. 何を短縮すべきか
+## 3. What CI should shorten
 
-上の測定から、対象は 3 つに絞られる。
+The measurements leave three targets.
 
-**D1. BoringSSL のコンパイル(175〜192 秒 × 4 ジョブ、体感時間の支配要因)— キャッシュする。**
-分単位の成果物はこれだけで、キャッシュの主目的はここに尽きる。1.2 の依存関係から、成果物とソースの**両方**が必要。エントリを 2 本に分けるのは無効化条件が違うため: ソースは pin(`boringssl_commit.txt`)だけで変わり、成果物はフックコード全体で変わる。フックを編集して pin を据え置いた場合、ソース側はヒットのまま再取得 10〜35 秒を節約する。設定違い(`linking_enabled`)の AOT ジョブは別エントリになる — 保存済みキャッシュは不変なので、1 キーに 2 設定は同居できない。
+**D1. The BoringSSL compile (175–192 s across four jobs, and the wall-clock driver) — cache it.**
+It is the only artifact measured in minutes, and it is what the cache exists for. Section 1.2 makes both halves mandatory: the artifacts *and* the source they depend on. They are separate entries because their invalidation differs — the source turns over only with the pin (`boringssl_commit.txt`), the artifacts with any hook change — so editing hook code while leaving the pin alone still hits the source cache and saves the 10–35 s fetch. The AOT job's differing `linking_enabled` needs its own entry: a saved cache is immutable, so one key cannot hold two configurations.
 
-**D2. パッケージのダウンロード — キャッシュする(現状維持)。**
-`~/.pub-cache` のキャッシュが効いて `dart pub get` は 0.2 秒。外すとネットワーク待ちが 19 ジョブ分乗る。
+**D2. Package downloads — keep caching them.**
+The `~/.pub-cache` entry is what keeps `dart pub get` at 0.2 s. Dropping it puts a network wait on all 19 jobs.
 
-**D3. apt-get(300 秒)— キャッシュではなく、不要なジョブから外す。**
-`libsqlite3-dev` を全 19 ジョブで入れているが、`sqlite3` に依存するのは keta_sqlite と、それを使う examples/register・examples/files の 3 つだけ。残り 16 ジョブの apt は無駄。
+**D3. apt-get (300 s) — not a caching problem; scope it instead.**
+`libsqlite3-dev` was installed on all 19 jobs, while `package:sqlite3` is reached by three: keta_sqlite and the two examples that use it. The other 16 installs are waste.
 
-**D4. setup-dart(509 秒)— 手を出さない。**
-SDK の取得はアクションの内部処理で、キャッシュ入力を持たない(README に該当記述なし)。slim で遅いのはランナーの性能差。自前で SDK をキャッシュする案はあるが、SDK 実体は数百 MB でキャッシュ復元がダウンロードより速い保証がなく、根拠なしに触らない。
+**D4. setup-dart (509 s) — leave it alone.**
+The SDK download happens inside the action, which exposes no cache input (its README documents none). Slim being slower is the runner tier. Caching a several-hundred-megabyte SDK ourselves is not obviously faster than downloading it, and is not worth doing on a guess.
 
-**キャッシュしないと決めたもの。**
+**Deliberately not cached:**
 
-- `.dart_tool/test`(差分カーネル): 効果 0.24 秒。エントリを増やす価値がない。
-- `.dart_tool/pub/bin`(スナップショット 70 MB): テストマトリクスのジョブが作らない。checks ジョブのみが使い、そこは現状 12 秒で完走している。
-- `.dart_tool` 全体: 上の 2 つと `package_config.json`(毎回再生成)を巻き込むだけで、実質は hooks_runner のキャッシュと同じ。ジョブごとに中身が割れる分、キーの共有が難しくなる。
+- `.dart_tool/test` (incremental kernel): worth 0.24 s — not worth an entry.
+- `.dart_tool/pub/bin` (70 MB of snapshots): the matrix jobs never create them; the checks job that does finishes in 12 s.
+- `.dart_tool` as a whole: it adds the two above plus `package_config.json`, which is rewritten every run, and otherwise duplicates the hooks-runner entry — while diverging per job, which makes a shared key harder.
 
-## 4. 実装
+## 4. Implementation
 
-- D1: `boringssl-src`(pin キー、全ジョブ共有)、`boringssl-obj`(フックキー、テストジョブ共有)、`boringssl-aot`(フックキー、AOT ジョブ)。実装済み。
-- D2: `pub-<os>-<pubspec.lock>`。実装済み。
-- D3: apt を sqlite 利用ジョブに限定する。本調査で追加。
-- D4: 変更なし。
+- D1: `boringssl-src` (keyed on the pin, shared by every job), `boringssl-obj` (keyed on hook code, shared by the test jobs), `boringssl-aot` (keyed on hook code, AOT job).
+- D2: `pub-<os>-<pubspec.lock>`.
+- D3: install `libsqlite3-dev` only in the jobs that reach sqlite3.
+- D4: unchanged.
