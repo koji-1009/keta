@@ -1,47 +1,34 @@
-/// The C symbols the link hook keeps when tree-shaking `libcrypto`.
+/// Derives the C symbols the link hook keeps when tree-shaking `libcrypto`
+/// from the `@Native` bindings themselves — there is no hand-maintained
+/// keep-list; `lib/src/ffi/libcrypto.dart` is the single source.
 ///
-/// Must list exactly the `symbol:` names of the `@Native` bindings in
-/// `lib/src/ffi/libcrypto.dart`: a binding missing here still resolves in JIT
-/// runs (which bundle the full library) but fails at load time in linked AOT
-/// builds. `test/symbols_test.dart` forces the two into agreement.
+/// Every binding must carry an explicit `symbol:`. One relying on `@Native`'s
+/// implicit Dart-name-as-symbol default would be invisible to this parse and
+/// ship an AOT library missing its symbol, so that case fails the build here
+/// instead of failing at load time in a deployed binary.
 library;
 
-const List<String> symbols = [
-  'BN_bin2bn',
-  'BN_bn2bin',
-  'BN_free',
-  'BN_new',
-  'BN_num_bytes',
-  'BN_set_word',
-  'EC_KEY_free',
-  'EC_KEY_generate_key',
-  'EC_KEY_get0_group',
-  'EC_KEY_get0_public_key',
-  'EC_KEY_new_by_curve_name',
-  'EC_KEY_set_public_key_affine_coordinates',
-  'EC_POINT_get_affine_coordinates_GFp',
-  'ERR_clear_error',
-  'ERR_error_string_n',
-  'ERR_get_error',
-  'EVP_Digest',
-  'EVP_DigestSign',
-  'EVP_DigestSignInit',
-  'EVP_DigestVerify',
-  'EVP_DigestVerifyInit',
-  'EVP_MD_CTX_free',
-  'EVP_MD_CTX_new',
-  'EVP_PKEY_assign_EC_KEY',
-  'EVP_PKEY_assign_RSA',
-  'EVP_PKEY_free',
-  'EVP_PKEY_new',
-  'EVP_sha256',
-  'EVP_sha384',
-  'EVP_sha512',
-  'HMAC',
-  'RSA_free',
-  'RSA_generate_key_ex',
-  'RSA_get0_e',
-  'RSA_get0_n',
-  'RSA_new',
-  'RSA_new_public_key',
-];
+import 'dart:io';
+
+/// The bindings file the keep-list is derived from, relative to the package
+/// root.
+const bindingsPath = 'lib/src/ffi/libcrypto.dart';
+
+/// Parses the `@Native` bindings under [packageRoot] into the tree-shake
+/// keep-list.
+List<String> readBoundSymbols(Uri packageRoot) {
+  final bindings = File.fromUri(packageRoot.resolve(bindingsPath));
+  final source = bindings.readAsStringSync();
+  final symbols = RegExp(
+    r"symbol: '([A-Za-z0-9_]+)'",
+  ).allMatches(source).map((match) => match.group(1)!).toList();
+  final annotations = '@Native<'.allMatches(source).length;
+  if (symbols.length != annotations || symbols.isEmpty) {
+    throw StateError(
+      '${bindings.path}: $annotations @Native bindings but ${symbols.length} '
+      'explicit symbol: entries — every binding must name its C symbol '
+      'explicitly so the keep-list derived here is exhaustive.',
+    );
+  }
+  return symbols;
+}

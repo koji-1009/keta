@@ -5,23 +5,29 @@ import 'package:test/test.dart';
 import '../hook/symbols.dart';
 
 void main() {
-  group('hook/symbols.dart', () {
-    // The keep-list drives the link hook's tree-shaking. A binding whose
-    // symbol is missing from it still resolves in JIT runs (full library
-    // bundled) but fails at load time in linked AOT builds — a gap this
-    // suite cannot see at runtime, so it enforces the list statically.
-    test(r'matches the @Native bindings in lib/src/ffi/libcrypto.dart', () {
-      final source = File('lib/src/ffi/libcrypto.dart').readAsStringSync();
-      final bound = RegExp(
-        r"symbol: '([A-Za-z0-9_]+)'",
-      ).allMatches(source).map((match) => match.group(1)!).toList();
-      // A binding relying on @Native's implicit Dart-name-as-symbol default
-      // would be invisible to the parse above, so every annotation must carry
-      // an explicit `symbol:` for the comparison to be exhaustive.
-      expect(bound, hasLength('@Native<'.allMatches(source).length));
-      expect(bound, isNotEmpty);
-      expect(symbols.toSet(), equals(bound.toSet()));
-      expect(symbols, hasLength(bound.toSet().length));
+  group('readBoundSymbols', () {
+    test('derives a non-empty, duplicate-free keep-list from the bindings', () {
+      final symbols = readBoundSymbols(Directory.current.uri);
+      expect(symbols, isNotEmpty);
+      expect(symbols.toSet(), hasLength(symbols.length));
+    });
+
+    // The failure mode the parser guards: a binding relying on @Native's
+    // implicit Dart-name-as-symbol default resolves in JIT runs (full
+    // library bundled) but ships an AOT library missing its symbol. The
+    // parser must reject it at build time, not silently under-count.
+    test('rejects a binding without an explicit symbol:', () {
+      final root = Directory.systemTemp.createTempSync('keta_native_symbols');
+      addTearDown(() => root.deleteSync(recursive: true));
+      File.fromUri(root.uri.resolve(bindingsPath))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('''
+@Native<Int Function()>(symbol: 'BN_new')
+external int BN_new();
+@Native<Int Function()>()
+external int BN_cmp();
+''');
+      expect(() => readBoundSymbols(root.uri), throwsStateError);
     });
   });
 }
