@@ -27,15 +27,21 @@ jobs:
           sdk: stable
       # package:sqlite3 loads the system libsqlite3.
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-      # Best-effort reuse of the hook runner's BoringSSL checkout and compiled
-      # objects across runs, keyed on the whole hook dir (boringssl_commit.txt
-      # pins the source; build.dart/link.dart/symbols.dart shape the
-      # artifacts): a hit skips the shallow clone and the recompile; a miss
-      # just rebuilds, so correctness never depends on the cache.
+      # Best-effort reuse across runs; a miss just rebuilds, so correctness
+      # never depends on either cache. The source is keyed on the pin alone
+      # and shared with ci.yml's test jobs (same key), so only one copy of it
+      # exists repo-wide; the compile artifacts are keyed on the hook code
+      # that shapes them.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .dart_tool/hooks_runner
-          key: boringssl-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
+          path: .dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
+          key: boringssl-src-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/boringssl_commit.txt') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .dart_tool/hooks_runner
+            !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
+          key: boringssl-aot-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
       - run: dart pub get
       # dart compile exe cannot build these: it does not run build hooks, and
       # both sqlite3 and keta_native have them, so `dart build cli` is the only
