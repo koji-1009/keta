@@ -474,6 +474,142 @@ void main() {
     });
   });
 
+  group('Schema.sealed', () {
+    Schema build() => Schema.sealed(
+      'Event',
+      discriminator: 'type',
+      variants: {'created': createdSchema, 'deleted': deletedSchema},
+    );
+
+    test('composes exactly the hand-written eventSchema fragment', () {
+      expect(build().json, eventSchema.json);
+      expect(
+        build().deps.map((s) => s.name),
+        eventSchema.deps.map((s) => s.name),
+      );
+    });
+
+    test('validates and rejects identically to the hand-written form', () {
+      final built = build();
+      expect(built.validate({'type': 'created', 'at': 'now'}), isEmpty);
+      expect(built.validate({'type': 'deleted', 'reason': 'gone'}), isEmpty);
+      expect(
+        built.validate({'type': 'created'}),
+        contains(matches(r'at: required')),
+      );
+      expect(
+        built.validate({'type': 'unknown'}),
+        contains(matches(r'has no variant')),
+      );
+    });
+
+    test('always emits an explicit mapping, so the lowerCamel tag the canonical '
+        'switch reads is the tag the validator accepts', () {
+      // Hand-written without a mapping, the same variants would be selected by
+      // SCHEMA NAME (OpenAPI 3.1's implicit mapping, pinned under "oneOf
+      // implicit mapping" below) — a wire convention the canonical Dart switch
+      // does not read. Naming every tag is what keeps the two in step.
+      final built = build();
+      expect(built.validate({'type': 'created', 'at': 'now'}), isEmpty);
+      expect(
+        built.validate({'type': 'Created', 'at': 'now'}),
+        contains(matches(r'"Created" has no variant')),
+      );
+    });
+
+    test('a variant that does not declare the discriminator property is an '
+        'ArgumentError at construction', () {
+      const untagged = Schema('Untagged', {
+        'type': 'object',
+        'required': ['at'],
+        'properties': {
+          'at': {'type': 'string'},
+        },
+      });
+      expect(
+        () => Schema.sealed(
+          'Event',
+          discriminator: 'type',
+          variants: {'untagged': untagged},
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('"Untagged"'), contains('"type"')),
+          ),
+        ),
+      );
+    });
+
+    test('a variant that declares the discriminator but does not require it is '
+        'an ArgumentError at construction', () {
+      const optionalTag = Schema('OptionalTag', {
+        'type': 'object',
+        'required': ['at'],
+        'properties': {
+          'type': {'type': 'string'},
+          'at': {'type': 'string'},
+        },
+      });
+      expect(
+        () => Schema.sealed(
+          'Event',
+          discriminator: 'type',
+          variants: {'optional': optionalTag},
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('"OptionalTag"'), contains('required')),
+          ),
+        ),
+      );
+    });
+
+    test('an empty variant set, an empty tag, and an empty discriminator are '
+        'each an ArgumentError', () {
+      expect(
+        () => Schema.sealed('Event', discriminator: 'type', variants: const {}),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => Schema.sealed(
+          'Event',
+          discriminator: 'type',
+          variants: {'': createdSchema},
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => Schema.sealed(
+          'Event',
+          discriminator: '',
+          variants: {'created': createdSchema},
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('two tags naming one variant is an ArgumentError', () {
+      expect(
+        () => Schema.sealed(
+          'Event',
+          discriminator: 'type',
+          variants: {'created': createdSchema, 'made': createdSchema},
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('"created"'), contains('"made"')),
+          ),
+        ),
+      );
+    });
+  });
+
   test(
     'type names in messages cover double/List/Map/null and the fallback',
     () {
