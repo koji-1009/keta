@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'app.dart';
 import 'chain.dart';
 import 'context.dart';
+import 'header.dart';
 import 'order.dart';
 import 'response.dart';
 
@@ -308,8 +309,12 @@ Middleware<E> etag<E>() => ordered((Context<E> c, Handler<E> next) {
     final tag = existing ?? '"${_fnv1a64Hex(bytes)}"';
 
     final method = c.method;
+    // The condition's parse lives in the `ifNoneMatch` codec, not here: `*`,
+    // comma lists and the weak-comparison rule are one value's business.
+    final condition = c.tryHeaderAs(ifNoneMatch);
     if ((method == 'GET' || method == 'HEAD') &&
-        _ifNoneMatch(c.header('if-none-match'), tag)) {
+        condition != null &&
+        condition.matches(_unquote(tag))) {
       final headers = <String, List<String>>{};
       r.headers.forEach((name, values) {
         // A 304 carries validators and metadata but not content headers
@@ -336,22 +341,18 @@ Middleware<E> etag<E>() => ordered((Context<E> c, Handler<E> next) {
   });
 }, KetaOrder.validate);
 
-/// True when [ifNoneMatch] (a request header value) matches [tag] under RFC 9110
-/// §8.8.3.2 weak comparison: `*` matches any current representation, otherwise
-/// any comma-separated entity-tag whose opaque form equals [tag]'s, ignoring a
-/// `W/` weakness prefix on either side.
-bool _ifNoneMatch(String? ifNoneMatch, String tag) {
-  if (ifNoneMatch == null) return false;
-  final want = _weakStrip(tag);
-  for (final raw in ifNoneMatch.split(',')) {
-    final candidate = raw.trim();
-    if (candidate == '*') return true;
-    if (_weakStrip(candidate) == want) return true;
+/// The opaque form of an entity tag as it is compared: the `W/` weakness
+/// prefix and the surrounding quotes stripped, matching what the `ifNoneMatch`
+/// codec produces for the values on the request side (RFC 9110 §8.8.3.2 weak
+/// comparison).
+String _unquote(String tag) {
+  var value = tag;
+  if (value.startsWith('W/')) value = value.substring(2);
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    value = value.substring(1, value.length - 1);
   }
-  return false;
+  return value;
 }
-
-String _weakStrip(String tag) => tag.startsWith('W/') ? tag.substring(2) : tag;
 
 String _fnv1a64Hex(Uint8List bytes) {
   // Dart's int is 64-bit two's complement on the native VM (keta's only target;
@@ -413,7 +414,11 @@ Middleware<E> gzip<E>({int threshold = 1024}) => ordered((
         r.status != 204 &&
         r.status != 304 &&
         _isCompressible(r.headers['content-type']?.first) &&
-        _acceptsGzip(c.header('accept-encoding'));
+        // `q=0` is a refusal, not a low preference, and an explicitly named
+        // coding beats `*` — both distinctions the `acceptEncoding` codec owns.
+        // The alias set is gzip's own knowledge, not the codec's.
+        (c.tryHeaderAs(acceptEncoding)?.acceptsAny(const ['gzip', 'x-gzip']) ??
+            false);
     if (!compressible) {
       return r.copyWith(addHeaders: headers);
     }
@@ -429,44 +434,6 @@ Middleware<E> gzip<E>({int threshold = 1024}) => ordered((
     return r.copyWith(addHeaders: headers, body: io.gzip.encode(bytes));
   });
 }, KetaOrder.negotiate);
-
-/// True when [acceptEncoding] advertises gzip with a non-zero q-value.
-///
-/// Precedence follows RFC 9110 §12.5.3: an *explicitly named* coding's q-value
-/// governs even when `*` is also present, so `gzip;q=0, *` refuses gzip (the
-/// named `gzip;q=0` wins) rather than falling back to the wildcard. `*` decides
-/// only when neither `gzip` nor its `x-gzip` alias is named. A missing q-value
-/// defaults to 1 (acceptable); a `q=0` — named or wildcard — is a refusal.
-///
-/// `identity` and any other coding are ignored here: they name a different
-/// content-coding, so an `identity;q=0` neither advertises nor refuses gzip and
-/// simply does not participate in this decision.
-bool _acceptsGzip(String? acceptEncoding) {
-  if (acceptEncoding == null) return false;
-  double? gzipQ; // q for an explicit gzip / x-gzip token, if named at all
-  double? starQ; // q for a `*` token, if present
-  for (final raw in acceptEncoding.split(',')) {
-    final parts = raw.split(';');
-    final coding = parts.first.trim().toLowerCase();
-    final isGzip = coding == 'gzip' || coding == 'x-gzip';
-    if (!isGzip && coding != '*') continue;
-    var q = 1.0;
-    for (final param in parts.skip(1)) {
-      final p = param.trim();
-      if (p.startsWith('q=')) {
-        q = double.tryParse(p.substring(2)) ?? 1.0;
-      }
-    }
-    if (isGzip) {
-      gzipQ = q;
-    } else {
-      starQ = q;
-    }
-  }
-  // An explicit gzip entry decides; `*` applies only when gzip is not named.
-  final q = gzipQ ?? starQ;
-  return q != null && q > 0;
-}
 
 /// Whether a response body of [contentType] is worth gzipping. keta is
 /// JSON-first, so the compressible set is an explicit allowlist of text-shaped

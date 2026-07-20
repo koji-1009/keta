@@ -27,6 +27,22 @@ export 'src/chain.dart' show chain, guard;
 export 'src/context.dart' show Context, Key, unmatchedRoute;
 export 'src/cookie.dart' show SameSite, SetCookie;
 export 'src/h1_transport.dart' show H1Transport;
+export 'src/header.dart'
+    show
+        AcceptEncoding,
+        Authorization,
+        ByteRange,
+        CacheControl,
+        EntityTag,
+        EntityTagCondition,
+        HeaderAccessor,
+        HeaderCodec,
+        acceptEncoding,
+        authorization,
+        cacheControl,
+        ifNoneMatch,
+        range,
+        setCookies;
 export 'src/log.dart' show Log, StdoutLog;
 export 'src/middleware.dart'
     show
