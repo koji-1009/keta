@@ -96,9 +96,9 @@ class Response {
   /// expiry). Both null by default: no bound, current behavior unchanged.
   /// Non-positive values throw [ArgumentError] (an authoring defect).
   ///
-  /// A transport that cannot switch protocols must reject this loudly (the shelf
-  /// bridge raises a `StateError`; `TestClient` routes it to an in-process
-  /// channel or a rejection). Handshake response headers belong to the
+  /// A transport that cannot switch protocols must reject this loudly
+  /// (`TestClient` routes it to an in-process channel or a rejection).
+  /// Handshake response headers belong to the
   /// realizing transport, not to this value, so none are accepted here.
   factory Response.upgrade(
     FutureOr<void> Function(UpgradedChannel channel) onConnected, {
