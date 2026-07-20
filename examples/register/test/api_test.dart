@@ -30,11 +30,21 @@ void main() {
     expect(created.status, 201);
 
     final got = await client.get('/users/1', headers: admin);
+    // `active` and `createdAt` are server-side: the column default and the
+    // insert's clock. They are read back through keta_db's row accessors, so
+    // asserting on them here is what proves an integer 0/1 in SQLite becomes a
+    // JSON boolean, and that the stored timestamp survives as ISO 8601.
     expect(got.json(), {
       'id': '1',
       'name': 'Ada',
       'role': 'admin',
       'tags': ['x', 'y'],
+      'active': true,
+      'createdAt': isA<String>().having(
+        DateTime.parse,
+        'parsed as ISO 8601',
+        isA<DateTime>(),
+      ),
     });
 
     final tag = await client.get('/users/1/tags/1', headers: admin);

@@ -1,4 +1,5 @@
 import 'package:keta/keta.dart';
+import 'package:keta_db/keta_db.dart';
 
 enum Role { admin, member }
 
@@ -29,6 +30,9 @@ class UserDto {
     this.age,
     required this.role,
     required this.tags,
+    this.active,
+    this.balance,
+    this.createdAt,
   });
 
   // Kept as the canonical `=> UserDto(field: json['key'] as T, ...)` shape so
@@ -42,10 +46,25 @@ class UserDto {
     age: json['age'] as int?,
     role: Role.values.byName(json['role'] as String),
     tags: _checkedTags((json['tags'] as List).cast<String>()),
+    active: json['active'] as bool?,
+    balance: json['balance'] as String?,
+    createdAt: json['createdAt'] as String?,
   );
 
   /// Constructs from a database row, where `tags` is a comma-joined column and
-  /// `age` may be absent. Numeric-origin values are converted explicitly.
+  /// `age` may be absent.
+  ///
+  /// The last three columns are the ones whose Dart shape depends on the
+  /// engine, so they are read through keta_db's accessors rather than cast:
+  /// `active` arrives as an `int` `0`/`1` on SQLite and a `bool` on PostgreSQL
+  /// and `tryBoolAt` reads both; `balance` is declared TEXT precisely because
+  /// SQLite would otherwise hand back `12.1` for `12.10`, and `tryDecimalAt`
+  /// refuses a value that already lost its digits instead of passing it off as
+  /// exact; `tryTimestampAt` returns the stored ISO 8601 string unchanged —
+  /// inventing no offset the column never carried — and rejects anything that
+  /// is not one, since SQLite validates nothing here. A plain `as String?` on
+  /// each would pass every SQLite test in this example and go wrong against
+  /// PostgreSQL.
   factory UserDto.fromRow(Map<String, Object?> row) {
     final tags = row['tags'] as String? ?? '';
     return UserDto(
@@ -54,6 +73,9 @@ class UserDto {
       age: row['age'] as int?,
       role: Role.values.byName(row['role'] as String),
       tags: tags.isEmpty ? const [] : tags.split(','),
+      active: row.tryBoolAt('active'),
+      balance: row.tryDecimalAt('balance'),
+      createdAt: row.tryTimestampAt('created_at'),
     );
   }
   final String id;
@@ -62,12 +84,25 @@ class UserDto {
   final Role role;
   final List<String> tags;
 
+  /// Whether the account is enabled. Nullable in the DTO because a client may
+  /// omit it on create; the column carries the default.
+  final bool? active;
+
+  /// An exact decimal, as its digits. Never a `double`: see [UserDto.fromRow].
+  final String? balance;
+
+  /// ISO 8601, server-set at creation.
+  final String? createdAt;
+
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,
     if (age != null) 'age': age,
     'role': role.name,
     'tags': tags,
+    if (active != null) 'active': active,
+    if (balance != null) 'balance': balance,
+    if (createdAt != null) 'createdAt': createdAt,
   };
 }
 
@@ -86,6 +121,12 @@ const userDtoSchema = Schema('UserDto', {
       'type': 'array',
       'items': {'type': 'string'},
     },
+    'active': {'type': 'boolean'},
+    // A decimal travels as a string, not a number: JSON numbers are IEEE 754
+    // doubles in most clients, which is the same digit loss the TEXT column
+    // exists to avoid.
+    'balance': {'type': 'string'},
+    'createdAt': {'type': 'string', 'format': 'date-time'},
   },
 });
 
