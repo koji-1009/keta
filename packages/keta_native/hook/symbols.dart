@@ -1,11 +1,13 @@
-/// Derives the C symbols the link hook keeps when tree-shaking `libcrypto`
-/// from the `@Native` bindings themselves — there is no hand-maintained
-/// keep-list; `lib/src/ffi/libcrypto.dart` is the single source.
+/// Derives the link hook's tree-shake keep-list from the `@Native` bindings
+/// themselves — there is no hand-maintained list; `lib/src/ffi/libcrypto.dart`
+/// is the single source.
 ///
-/// Every binding must carry an explicit `symbol:`. One relying on `@Native`'s
-/// implicit Dart-name-as-symbol default would be invisible to this parse and
-/// ship an AOT library missing its symbol, so that case fails the build here
-/// instead of failing at load time in a deployed binary.
+/// Each binding must carry `@RecordUse()`, `@Native` with an explicit
+/// `symbol:`, and its `external` declaration. A binding missing any of the
+/// three would either ship an AOT library without its symbol (implicit
+/// Dart-name default, invisible to this parse) or be silently dropped by a
+/// record-use build (never recorded, so treated as unused), so both cases
+/// fail the build here instead of failing at load time in a deployed binary.
 library;
 
 import 'dart:io';
@@ -14,21 +16,45 @@ import 'dart:io';
 /// root.
 const bindingsPath = 'lib/src/ffi/libcrypto.dart';
 
-/// Parses the `@Native` bindings under [packageRoot] into the tree-shake
-/// keep-list.
-List<String> readBoundSymbols(Uri packageRoot) {
+/// A parsed `@Native` binding: the Dart declaration name (what record-use
+/// identifies) and the C symbol (what the linker keeps).
+typedef Binding = ({String dartName, String symbol});
+
+/// Parses the `@Native` bindings under [packageRoot].
+List<Binding> readBindings(Uri packageRoot) {
   final bindings = File.fromUri(packageRoot.resolve(bindingsPath));
   final source = bindings.readAsStringSync();
   final symbols = RegExp(
     r"symbol: '([A-Za-z0-9_]+)'",
   ).allMatches(source).map((match) => match.group(1)!).toList();
-  final annotations = '@Native<'.allMatches(source).length;
-  if (symbols.length != annotations || symbols.isEmpty) {
+  final dartNames = RegExp(
+    r'^external\s[^(]*?(\w+)\(',
+    multiLine: true,
+  ).allMatches(source).map((match) => match.group(1)!).toList();
+  // Anchored to line starts: both annotation names also occur in prose
+  // inside doc comments, which must not count.
+  final natives = RegExp(
+    r'^@Native<',
+    multiLine: true,
+  ).allMatches(source).length;
+  final recordUses = RegExp(
+    r'^@RecordUse\(\)$',
+    multiLine: true,
+  ).allMatches(source).length;
+  if (symbols.isEmpty ||
+      symbols.length != natives ||
+      dartNames.length != natives ||
+      recordUses != natives) {
     throw StateError(
-      '${bindings.path}: $annotations @Native bindings but ${symbols.length} '
-      'explicit symbol: entries — every binding must name its C symbol '
-      'explicitly so the keep-list derived here is exhaustive.',
+      '${bindings.path}: $natives @Native bindings, $recordUses @RecordUse() '
+      'annotations, ${symbols.length} explicit symbol: entries, '
+      '${dartNames.length} external declarations — every binding must carry '
+      'all three so the keep-list derived here is exhaustive and record-use '
+      'builds see every call.',
     );
   }
-  return symbols;
+  return [
+    for (var i = 0; i < natives; i++)
+      (dartName: dartNames[i], symbol: symbols[i]),
+  ];
 }

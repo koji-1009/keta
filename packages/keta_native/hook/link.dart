@@ -4,6 +4,11 @@
 /// derived at link time from `lib/src/ffi/libcrypto.dart` by
 /// `hook/symbols.dart`, never hand-listed — before emitting the final
 /// per-asset dynamic library.
+///
+/// When the app was compiled with the `record-use` experiment, the keep-list
+/// narrows further to the bindings the AOT compiler recorded as reachable:
+/// an app that only verifies carries no key-generation or signing code.
+/// Without recordings the full binding surface is kept.
 library;
 
 import 'dart:io';
@@ -12,8 +17,11 @@ import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:native_toolchain_c/native_toolchain_c.dart';
+import 'package:record_use/record_use.dart' show Library, Method;
 
 import 'symbols.dart';
+
+const _bindingsLibrary = Library('package:keta_native/src/ffi/libcrypto.dart');
 
 void main(List<String> args) async {
   await link(args, (input, output) async {
@@ -28,14 +36,29 @@ void main(List<String> args) async {
     // keep-list must re-derive when the bindings change.
     output.dependencies.add(input.packageRoot.resolve(bindingsPath));
 
+    final bindings = readBindings(input.packageRoot);
+    final uses = input.recordedUses;
+    final symbolsToKeep = [
+      for (final binding in bindings)
+        if (uses == null ||
+            (uses.calls[Method(binding.dartName, _bindingsLibrary)] ?? const [])
+                .isNotEmpty)
+          binding.symbol,
+    ];
+    logger.info(
+      uses == null
+          ? 'No recorded usages; keeping all ${symbolsToKeep.length} bound '
+                'symbols.'
+          : 'Recorded usages: keeping ${symbolsToKeep.length} of '
+                '${bindings.length} bound symbols.',
+    );
+
     final targetOS = input.config.code.targetOS;
     final linker = CLinker.library(
       name: 'keta_native_crypto',
       assetName: 'src/ffi/libcrypto.dart',
       sources: [for (final asset in assets) asset.file!.toFilePath()],
-      linkerOptions: LinkerOptions.treeshake(
-        symbolsToKeep: readBoundSymbols(input.packageRoot),
-      ),
+      linkerOptions: LinkerOptions.treeshake(symbolsToKeep: symbolsToKeep),
       // The emitted asset must be a bundled dynamic library regardless of the
       // invoker's link-mode preference: `@Native` resolves it by asset id at
       // runtime.
