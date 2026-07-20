@@ -179,7 +179,7 @@ void main() {
     });
 
     test('security middleware gates the upgrade: 401 vs switch', () async {
-      // A stand-in for keta_openapi's `enforceSecurity` — the same shape: a
+      // A stand-in for `enforceSecurity` — the same shape: a
       // Middleware that raises Unauthorized (→ 401) before `next`, so the
       // upgrade Response is never even built. This is the whole point of
       // modelling upgrade as a returned value: the security gate composes in

@@ -113,8 +113,9 @@ final class Failure {
   final String contentType;
 }
 
-/// Per-route documentation, passed to a route as its opaque `doc` and read back
-/// here when emitting OpenAPI.
+/// Per-route documentation, passed to a route as its typed `doc`: the single
+/// declaration `enforceSecurity` reads at runtime and keta_openapi walks when
+/// emitting the OpenAPI shadow.
 class RouteDoc {
   const RouteDoc({
     required Success this.success,
