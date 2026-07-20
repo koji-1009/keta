@@ -72,7 +72,7 @@ plugins:
   keta_lints: ^0.1.0
 ```
 
-The five route/query/canonical/tx/key rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; standard `// ignore:` comments suppress them. `keta_internal_await` is an opt-in lint (`diagnostics: keta_internal_await: true`), meaningful only over keta's own source. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
+The five route/query/canonical/tx/key rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; `// ignore:` / `// ignore_for_file:` comments suppress them, written in the plugin-qualified form the analyzer requires for a plugin diagnostic — `// ignore_for_file: keta_lints/keta_capture_unused`, not the bare code. `keta_internal_await` is an opt-in lint (`diagnostics: keta_internal_await: true`), meaningful only over keta's own source. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
 
 ## Deliberately not attempted
 

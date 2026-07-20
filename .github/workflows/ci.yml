@@ -38,6 +38,15 @@ jobs:
       # file added but never synced — see packages/keta_files/README.md.
       - name: keta_files:check (examples/files)
         run: (cd examples/files && dart run keta_files:check)
+      # keta_lints over the examples: they are the user-code surface its rules
+      # are written for, so this is the framework eating its own lint. The
+      # cross-file `drift` check needs an external contract document and no
+      # example ships one, so it is not part of this gate.
+      - name: keta_lints:check (examples)
+        run: |
+          for s in canonical routes query key tx order; do
+            dart run keta_lints:check "$s" examples || exit 1
+          done
       # A new package or example with a test/ dir must join the test matrix
       # below; this diff makes forgetting it a red run, not a silent skip.
       - name: Test matrix covers every test/ dir
