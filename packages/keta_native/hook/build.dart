@@ -11,12 +11,14 @@
 /// BoringSSL bump is a one-line change that never touches hook code. The file
 /// is registered as a hook dependency, so the hook re-runs exactly when the
 /// pin changes; `lib/src/version.dart` mirrors it, held in sync by
-/// `test/version_test.dart`. The source is shallow-fetched (git) into the
-/// hook's shared output directory on the first build and reused afterwards,
-/// keyed by a marker file carrying the pinned commit — so subsequent builds
-/// are offline and the fetch is idempotent. Compilation is a single
-/// [CBuilder.library] call over BoringSSL's checked-in `gen/sources.json`
-/// recipe.
+/// `test/version_test.dart`. The source arrives as GitHub's commit-addressed
+/// archive tarball — one plain HTTPS GET served from the download path
+/// (codeload), needing no git binary or smart-protocol exchange — into the
+/// hook's shared output directory on the first build and is reused
+/// afterwards, keyed by a marker file carrying the pinned commit, so
+/// subsequent builds are offline and the fetch is idempotent. Compilation is
+/// a single [CBuilder.library] call over BoringSSL's checked-in
+/// `gen/sources.json` recipe.
 library;
 
 import 'dart:convert';
@@ -26,8 +28,6 @@ import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:native_toolchain_c/native_toolchain_c.dart';
-
-const _boringSslRepoUrl = 'https://github.com/google/boringssl.git';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
@@ -171,6 +171,10 @@ String _readPinnedCommit(Uri packageRoot) {
 /// Idempotent: a marker file records the checked-out commit; when it already
 /// matches, the (network) fetch is skipped, so builds after the first are
 /// offline. Any partial/mismatched state is wiped and re-fetched.
+///
+/// The commit-addressed tarball is immutable in content, so no ref
+/// resolution or history is involved — the marker comparison alone decides
+/// freshness.
 Future<void> _ensureCheckout(
   Directory checkout,
   String commit,
@@ -182,32 +186,50 @@ Future<void> _ensureCheckout(
     return;
   }
 
-  logger.info('Fetching BoringSSL $commit into ${checkout.path}');
+  final url = Uri.parse(
+    'https://github.com/google/boringssl/archive/$commit.tar.gz',
+  );
+  logger.info('Fetching $url into ${checkout.path}');
   if (checkout.existsSync()) {
     checkout.deleteSync(recursive: true);
   }
   checkout.createSync(recursive: true);
 
-  Future<void> git(List<String> arguments) async {
-    final result = await Process.run(
-      'git',
-      arguments,
-      workingDirectory: checkout.path,
-    );
-    if (result.exitCode != 0) {
-      throw ProcessException(
-        'git',
-        arguments,
-        'BoringSSL fetch step failed:\n${result.stdout}\n${result.stderr}',
-        result.exitCode,
+  final tarball = File.fromUri(
+    checkout.parent.uri.resolve('boringssl-$commit.tar.gz'),
+  );
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(url);
+    final response = await request.close();
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException(
+        'BoringSSL tarball fetch failed: HTTP ${response.statusCode}',
+        uri: url,
       );
     }
+    await response.pipe(tarball.openWrite());
+  } finally {
+    client.close(force: true);
   }
 
-  // Shallow-fetch exactly the pinned commit — no history, no other refs.
-  await git(['init', '--quiet']);
-  await git(['fetch', '--depth', '1', '--quiet', _boringSslRepoUrl, commit]);
-  await git(['checkout', '--quiet', 'FETCH_HEAD']);
+  final tarArgs = [
+    'xzf',
+    tarball.path,
+    '--strip-components=1',
+    '-C',
+    checkout.path,
+  ];
+  final result = await Process.run('tar', tarArgs);
+  if (result.exitCode != 0) {
+    throw ProcessException(
+      'tar',
+      tarArgs,
+      'BoringSSL tarball extraction failed:\n${result.stdout}\n${result.stderr}',
+      result.exitCode,
+    );
+  }
+  tarball.deleteSync();
 
   marker.writeAsStringSync('$commit\n');
   logger.info('BoringSSL $commit checked out.');
