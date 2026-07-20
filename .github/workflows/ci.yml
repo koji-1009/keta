@@ -81,18 +81,23 @@ jobs:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-${{ runner.os }}-
-      # The hooks runner keys the expensive compile artifacts per consuming
-      # package, and a saved cache is immutable, so each BoringSSL consumer
-      # saves under its own key; the restore-keys prefix still shares the
-      # source checkout between them.
+      # The BoringSSL source is identical for every consumer, so it is cached
+      # once against the pin alone; only the compile artifacts, which the
+      # hooks runner keys per consuming package, need a per-job entry.
       - if: contains('packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .dart_tool/hooks_runner
-          # The whole hook dir is the cache identity: boringssl_commit.txt pins
-          # the source, build.dart/link.dart/symbols.dart shape the artifacts.
-          key: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-${{ matrix.dir }}
-          restore-keys: boringssl-test-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-
+          path: .dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
+          key: boringssl-src-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/boringssl_commit.txt') }}
+      - if: contains('packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc', matrix.dir)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .dart_tool/hooks_runner
+            !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
+          # Hook code shapes the artifacts; the pin reaches them through the
+          # source cache above.
+          key: boringssl-obj-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}-${{ matrix.dir }}
       - run: dart pub get
       # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
       # visibly otherwise), so the container and the variable exist only on

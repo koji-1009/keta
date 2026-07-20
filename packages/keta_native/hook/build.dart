@@ -86,6 +86,7 @@ void main(List<String> args) async {
       ...filesOf('crypto', 'srcs'),
       ...filesOf('crypto', 'asm'),
     ];
+    _verifySources(compileSources);
 
     final builder = CBuilder.library(
       name: 'keta_native_crypto',
@@ -166,6 +167,30 @@ String _readPinnedCommit(Uri packageRoot) {
   return commit;
 }
 
+/// Fails the build if a source named by `gen/sources.json` is absent from the
+/// checkout, which is how a pin bump that starts compiling something under
+/// [_unusedTarballDirs] surfaces — as a named missing file here rather than a
+/// compiler error deep in a 370-file command line.
+void _verifySources(List<String> sources) {
+  final missing = sources.where((path) => !File(path).existsSync()).toList();
+  if (missing.isNotEmpty) {
+    throw StateError(
+      'gen/sources.json names ${missing.length} file(s) missing from the '
+      'checkout, e.g. "${missing.first}". If the pinned commit now compiles '
+      'sources under a directory this hook skips at extraction, remove it '
+      'from _unusedTarballDirs.',
+    );
+  }
+}
+
+/// Tarball directories skipped at extraction: upstream test corpora and the
+/// vendored test frameworks, none of which `gen/sources.json` compiles.
+const _unusedTarballDirs = [
+  'third_party/wycheproof_testvectors',
+  'third_party/googletest',
+  'third_party/benchmark',
+];
+
 /// Ensures [checkout] holds the pinned BoringSSL [commit].
 ///
 /// Idempotent: a marker file records the checked-out commit; when it already
@@ -219,6 +244,11 @@ Future<void> _ensureCheckout(
     '--strip-components=1',
     '-C',
     checkout.path,
+    // Upstream's test corpora dwarf the sources this hook compiles
+    // (wycheproof_testvectors alone is ~137 MB against ~60 MB of everything
+    // the build reads). None of it is referenced by gen/sources.json, and
+    // _verifySources below fails the build if that ever stops holding.
+    for (final excluded in _unusedTarballDirs) '--exclude=*/$excluded',
   ];
   final result = await Process.run('tar', tarArgs);
   if (result.exitCode != 0) {
