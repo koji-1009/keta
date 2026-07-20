@@ -23,6 +23,13 @@ class _FakeDb implements Db {
   DbConn get writer => conn;
 
   @override
+  DbCapabilities get capabilities => const DbCapabilities(
+    nativeBool: true,
+    exactDecimal: true,
+    typedTemporal: true,
+  );
+
+  @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) => f(conn);
 
   @override

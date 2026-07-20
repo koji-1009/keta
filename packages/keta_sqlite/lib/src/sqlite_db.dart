@@ -134,6 +134,19 @@ class SqliteDb implements Db {
   @override
   DbConn get writer => _conn;
 
+  /// SQLite has no boolean, no exact-decimal, and no temporal storage class:
+  /// a boolean is an INTEGER `0`/`1`, a NUMERIC-affinity column hands back an
+  /// `int`/`double` with its trailing digits already gone, and a timestamp is
+  /// whatever text was written. All three are declared rather than described
+  /// in prose, so an app that needs one can refuse to boot on this engine
+  /// (`db.requireCapabilities(...)`) instead of discovering it in production.
+  @override
+  DbCapabilities get capabilities => const DbCapabilities(
+    nativeBool: false,
+    exactDecimal: false,
+    typedTemporal: false,
+  );
+
   /// Runs [f] inside a single write transaction, opened with `BEGIN IMMEDIATE`.
   ///
   /// The default `BEGIN` starts a *deferred* transaction that takes no lock

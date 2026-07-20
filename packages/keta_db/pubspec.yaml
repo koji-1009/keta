@@ -12,6 +12,7 @@ resolution: workspace
 
 dependencies:
   keta: ^0.1.0
-
-dev_dependencies:
+  # A normal dependency, not a dev one: package:keta_db/test.dart ships the
+  # adapter conformance suite, exactly as package:keta/test.dart ships the
+  # TestClient harness.
   test: ^1.25.0

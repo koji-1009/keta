@@ -1,5 +1,7 @@
 library;
 
+import 'capabilities.dart';
+
 /// A single database connection.
 ///
 /// Values come back in the engine's storage classes, mapped by the concrete
@@ -74,6 +76,12 @@ abstract interface class DbConn {
 abstract interface class Db {
   DbConn get reader;
   DbConn get writer;
+
+  /// What this engine can and cannot represent — the differences that survive
+  /// every accessor, declared as a value rather than left to the operator's
+  /// memory. See [DbCapabilities], and `requireCapabilities` to assert on it at
+  /// boot.
+  DbCapabilities get capabilities;
 
   /// Runs [f] in a transaction: a normal return commits, a thrown error rolls
   /// back and rethrows. Transactions do not nest — an inner call is a

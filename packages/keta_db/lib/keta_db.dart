@@ -3,6 +3,7 @@
 /// in adapter packages such as keta_sqlite.
 library;
 
+export 'src/capabilities.dart' show DbCapabilities, RequireCapabilities;
 export 'src/db.dart' show Db, DbConn, HasDb;
 export 'src/migrate.dart'
     show
@@ -11,4 +12,5 @@ export 'src/migrate.dart'
         VerifyMigrations,
         applyMigrations,
         loadMigrations;
+export 'src/row.dart' show DbRow;
 export 'src/tx.dart' show tx, txConn;
