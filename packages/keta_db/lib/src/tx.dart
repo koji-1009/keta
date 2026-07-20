@@ -69,7 +69,7 @@ final Key<DbConn> txConn = Key<DbConn>('tx');
 /// real connection, commit/rollback notwithstanding. An unawaited
 /// `session.query(...)` left running past the handler's return is the caller's
 /// own race against COMMIT/ROLLBACK, not something this guard closes.
-Middleware<E> tx<E extends HasDb>() => (Context<E> c, Handler<E> next) {
+Middleware<E> tx<E extends HasDb>() => ordered((Context<E> c, Handler<E> next) {
   return c.env.db.transaction((conn) async {
     final guard = _CompletedGuard(conn);
     c.set(txConn, guard);
@@ -82,7 +82,11 @@ Middleware<E> tx<E extends HasDb>() => (Context<E> c, Handler<E> next) {
       guard._close();
     }
   });
-};
+  // Innermost of keta's ranks, which is what puts `recover()` outside it: a
+  // thrown error must reach this callback (→ ROLLBACK) before anything turns
+  // it into a Response. Registered the other way round, recover() would hand
+  // back a clean value and the failed request's writes would commit.
+}, KetaOrder.resource);
 
 /// A [DbConn] that forwards to the transaction connection until the transaction
 /// completes, then refuses every call.

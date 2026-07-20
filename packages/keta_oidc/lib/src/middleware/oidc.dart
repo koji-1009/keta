@@ -66,7 +66,7 @@ Middleware<E> oidc<E>({
   required JwksSource jwks,
   required JwtValidator validator,
 }) {
-  return (Context<E> c, Handler<E> next) async {
+  return ordered((Context<E> c, Handler<E> next) async {
     final bearer = _extractBearer(c.header('authorization'));
     switch (bearer) {
       case _NoBearer():
@@ -105,7 +105,7 @@ Middleware<E> oidc<E>({
         c.set(oidcPrincipal, principal);
         return next(c);
     }
-  };
+  }, KetaOrder.authenticate);
 }
 
 /// Requires that the authenticated caller hold **every** scope in [scopes]
@@ -144,7 +144,12 @@ Middleware<E> requireScopes<E>(List<String> scopes) {
   for (final scope in scopes) {
     _checkScopeToken(scope);
   }
-  return (Context<E> c, Handler<E> next) {
+  // Authorization, so inside [oidc]'s authenticate rank: the principal this
+  // reads has to exist before it runs. `App.compile` now rejects the reversed
+  // registration outright, ahead of the request-time StateError below, which
+  // stays for the cases a rank cannot see (a hand-composed chain, an oidc()
+  // that never ran because it sits on another route).
+  return ordered((Context<E> c, Handler<E> next) {
     final principal = c.tryGet(oidcPrincipal);
     if (principal == null) {
       throw StateError(
@@ -158,7 +163,7 @@ Middleware<E> requireScopes<E>(List<String> scopes) {
       }
     }
     return next(c);
-  };
+  }, KetaOrder.authorize);
 }
 
 /// Validates one required scope token at factory time, throwing [ArgumentError]

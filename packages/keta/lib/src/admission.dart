@@ -20,6 +20,7 @@ import 'dart:math' as math;
 import 'app.dart';
 import 'chain.dart';
 import 'context.dart';
+import 'order.dart';
 import 'response.dart';
 
 /// Rate-limits requests with a per-key token bucket: each key gets a bucket of
@@ -87,11 +88,19 @@ Middleware<E> rateLimit<E>({
   required Object? Function(Context<E> c) key,
   required int capacity,
   required Duration refillPeriod,
-}) => RateLimiter<E>(
-  key: key,
-  capacity: capacity,
-  refillPeriod: refillPeriod,
-).middleware;
+}) => ordered(
+  RateLimiter<E>(
+    key: key,
+    capacity: capacity,
+    refillPeriod: refillPeriod,
+  ).middleware,
+  // Shedding, so inside accessLog and outside real work. Where it sits
+  // relative to authentication is NOT settled by this rank and cannot be: an
+  // IP-keyed limiter belongs before the auth middleware and a principal-keyed
+  // one after it, and only the caller knows which `key` reads. Pass `order:`
+  // to place it deliberately.
+  KetaOrder.shed,
+);
 
 /// The token-bucket engine behind [rateLimit]. Public within the package (so a
 /// white-box test can inject a clock and read [bucketCount]) but never exported;
@@ -275,8 +284,10 @@ class _Bucket {
 ///
 /// See the library docs for the per-isolate multiplication under
 /// `serve(isolates: n)`.
-Middleware<E> concurrencyLimit<E>({required int maxInFlight}) =>
-    ConcurrencyLimiter<E>(maxInFlight: maxInFlight).middleware;
+Middleware<E> concurrencyLimit<E>({required int maxInFlight}) => ordered(
+  ConcurrencyLimiter<E>(maxInFlight: maxInFlight).middleware,
+  KetaOrder.shed,
+);
 
 /// The in-flight counter behind [concurrencyLimit]. Public within the package
 /// (so a white-box test can read [inFlight]) but never exported; user code
