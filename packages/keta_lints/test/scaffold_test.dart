@@ -517,6 +517,40 @@ void main() {
       },
     };
 
+    test('an implicit mapping tags variants by SCHEMA NAME, the same value '
+        'Schema.validate resolves', () {
+      // OpenAPI 3.1 defaults the discriminator value to the schema name, and
+      // keta's own validator resolves it that way. A lowerCamel tag here would
+      // build a switch that answers to a value that document's validator
+      // refuses — and refuses the one it accepts.
+      final implicit = {
+        'openapi': '3.1.0',
+        'info': {'title': 't', 'version': '1'},
+        'paths': <String, Object?>{},
+        'components': {
+          'schemas': {
+            'Pet': {
+              'oneOf': [
+                {r'$ref': '#/components/schemas/Cat'},
+              ],
+              'discriminator': {'propertyName': 'kind'},
+            },
+            'Cat': {
+              'type': 'object',
+              'required': ['kind', 'meow'],
+              'properties': {
+                'kind': {'type': 'string'},
+                'meow': {'type': 'string'},
+              },
+            },
+          },
+        },
+      };
+      final dtos = generateScaffold(implicit).dtos;
+      expect(dtos, contains("'Cat' => Cat.fromJson(json)"));
+      expect(dtos, isNot(contains("'cat' =>")));
+    });
+
     test('materializes the sealed switch-delegation shape', () {
       final dtos = generateScaffold(doc).dtos;
       expect(dtos, contains('sealed class Event {'));

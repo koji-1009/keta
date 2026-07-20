@@ -140,7 +140,7 @@ bool _isSealed(Map<String, Object?> schema) =>
 
 /// A sealed type's discriminator tag → variant type name, from an explicit
 /// `discriminator.mapping` or, absent one, the `oneOf` refs with the tag being
-/// the variant's lowerCamel name.
+/// the variant's schema name (OpenAPI 3.1's implicit mapping).
 Map<String, String> _variants(Map<String, Object?> schema) {
   final mapping = (schema['discriminator'] as Map)['mapping'];
   if (mapping is Map) {
@@ -149,12 +149,14 @@ Map<String, String> _variants(Map<String, Object?> schema) {
         e.key.toString(): _refName(e.value.toString()),
     };
   }
+  // No mapping: OpenAPI 3.1 defaults the tag to the SCHEMA NAME verbatim, and
+  // `Schema.validate` resolves it that way too — so the switch must read the
+  // name as written. Lower-casing it here produced a switch that answered to a
+  // tag the same document's validator refused, in both directions.
   return {
     for (final ref in schema['oneOf'] as List)
       if (ref is Map && ref[r'$ref'] is String)
-        _lowerFirst(_refName(ref[r'$ref'] as String)): _refName(
-          ref[r'$ref'] as String,
-        ),
+        _refName(ref[r'$ref'] as String): _refName(ref[r'$ref'] as String),
   };
 }
 
