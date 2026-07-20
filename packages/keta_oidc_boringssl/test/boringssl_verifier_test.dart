@@ -9,10 +9,10 @@ import 'dart:typed_data';
 
 import 'package:keta_native/testing.dart';
 import 'package:keta_oidc/keta_oidc.dart';
+import 'package:keta_oidc_boringssl/keta_oidc_boringssl.dart';
 import 'package:test/test.dart';
 
 import 'crypto_support.dart';
-import 'support.dart';
 
 /// One algorithm under test, with a signer and the JWKS entries for the correct
 /// and a different (wrong) key.

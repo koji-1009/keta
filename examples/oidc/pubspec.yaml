@@ -15,6 +15,7 @@ resolution: workspace
 dependencies:
   keta: ^0.1.0
   keta_oidc: ^0.1.0
+  keta_oidc_boringssl: ^0.1.0
   keta_openapi: ^0.1.0
   # testing.dart: bin/demo.dart plays the IdP for a no-network run, minting a
   # key + token via RsaKeyPair (see lib/demo.dart). A real resource server never

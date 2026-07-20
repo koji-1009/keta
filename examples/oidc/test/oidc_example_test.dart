@@ -14,6 +14,7 @@ import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_native/testing.dart';
 import 'package:keta_oidc/keta_oidc.dart';
+import 'package:keta_oidc_boringssl/keta_oidc_boringssl.dart';
 import 'package:keta_oidc_example/app.dart';
 import 'package:keta_oidc_example/env.dart';
 import 'package:test/test.dart';

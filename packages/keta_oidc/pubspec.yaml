@@ -14,7 +14,8 @@ resolution: workspace
 
 dependencies:
   keta: ^0.1.0
-  keta_native: ^0.1.0
 
 dev_dependencies:
+  keta_native: ^0.1.0
+  keta_oidc_boringssl: ^0.1.0
   test: ^1.25.0
