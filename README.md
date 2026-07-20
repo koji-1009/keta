@@ -4,13 +4,12 @@ keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK `^3.
 
 ## The thesis
 
-Structure bears the load, not machinery. There is no reflection, no DI container, no `build_runner`, and no codegen anywhere: the canonical DTO form (`fromJson`/`toJson`/`Schema`) is hand-written — or materialized once by a lint fix, transferring ownership — and kept honest by keta_lints' check/fix loop, which makes drift between a class and its mappers a loud failure rather than a runtime surprise. Derived artifacts flow one way: the OpenAPI document is a shadow of the routes and never a source that drives them. The whole surface is small enough that both humans and AI agents can write conforming code from a single short [guide](llms.txt).
+Structure bears the load, not machinery. There is no reflection, no DI container, no `build_runner`, and no codegen anywhere: the canonical DTO form (`fromJson`/`toJson`/`Schema`) is hand-written — or materialized once by a lint fix, transferring ownership — and kept honest by keta_lints' check/fix loop, which makes drift between a class and its mappers a loud failure rather than a runtime surprise. Derived artifacts flow one way: the declarations (`RouteDoc`/`Schema`, owned by core) are the source that both the runtime security gate and the OpenAPI emitter read, and the OpenAPI document keta_openapi produces is the one-way derived shadow — never a source that drives them. The whole surface is small enough that both humans and AI agents can write conforming code from a single short [guide](llms.txt).
 
 ## A route, three ways
 
 ```dart
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 
 final app = App<void>();
 
@@ -47,11 +46,11 @@ Dependencies flow inward only — Optional → Recommended → Core — and peel
 
 | Package | Ring | Tier | What it is |
 |---|---|---|---|
-| `keta` | 0 | Core | Router, Context, middleware, server, Log, and the `TestClient` harness. Zero production dependencies (`test` resolves only for the shipped harness). |
+| `keta` | 0 | Core | Router, Context, middleware, server, Log, the `TestClient` harness, and the declaration contract — `Schema` validation, `RouteDoc`, and the `enforceSecurity` gate. Zero production dependencies (`test` resolves only for the shipped harness). |
 | `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
-| `keta_sqlite` | 1 | Core | A thin adapter over the `package:sqlite3` family; `:memory:` supported. |
-| `keta_openapi` | 2 | Recommended | `Schema` (validate/require) and the route-table walk that emits OpenAPI 3.1. Runtime assembly only. |
-| `keta_rds` | 3 | Optional | The PostgreSQL adapter — bounded pool, SQLSTATE → keta-exception translation, delegating the wire protocol to `package:postgres`. |
+| `keta_sqlite` | 2 | Core | A thin adapter over the `package:sqlite3` family; `:memory:` supported. |
+| `keta_openapi` | 2 | Recommended | The route-table walk that emits an OpenAPI 3.1 document from `RouteDoc`/`Schema` (owned by `keta`). Pure derivation — runtime assembly, no code generation — so removing it changes no runtime behavior. |
+| `keta_rds` | 2 | Optional | The PostgreSQL adapter — bounded pool, SQLSTATE → keta-exception translation, delegating the wire protocol to `package:postgres`. |
 | `keta_lints` | 3 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, and field types. |
 | `keta_files` | 3 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
 | `keta_shelf` | 3 | Optional | Bidirectional `Handler` ↔ `shelf.Handler` conversion, bodies streaming through with the body limit enforced. |
@@ -59,7 +58,8 @@ Dependencies flow inward only — Optional → Recommended → Core — and peel
 | `keta_otel` | 3 | Optional | `traceparent` → OTLP and a `/metrics` endpoint, with every label axis bounded (no attacker-controlled cardinality). |
 | `keta_bus` | 3 | Optional | A publish/subscribe seam, standalone and core-unaware (SDK-only, zero dependencies): `publish(topic)` / `subscribe(topic)` fan a JSON message out to live listeners, at-most-once. `InMemoryBus` (one isolate) and `IsolateBus` (fan-out across the worker isolates of `serve(isolates: n)`). |
 | `keta_native` | 3 | Optional | The BoringSSL-backed native crypto layer, built via `dart hooks` (native assets): SHA-2 digests, HMAC, and RSA/ECDSA signature verification. BoringSSL is fetched pinned to a commit hash and built from source at hook time — never a prebuilt binary. |
-| `keta_oidc` | 3 | Optional | An OIDC/OAuth2 **resource server**: it verifies the Bearer JWTs an identity provider issues and never mints or brokers tokens itself. Asymmetric-only JWT validation (RS256/RS384/RS512/ES256/ES384 — `HS*`, `alg: none`, and `PS*` are rejected by design) over `keta_native`, a `JwksSource` seam (`StaticJwks` for fixed keys, `HttpJwksSource` for a live JWKS endpoint with OIDC Discovery and refresh discipline), and an `oidc()` / `requireScopes()` middleware pair that injects a principal and answers RFC 6750 challenges. |
+| `keta_oidc` | 3 | Optional | An OIDC/OAuth2 **resource server**: it verifies the Bearer JWTs an identity provider issues and never mints or brokers tokens itself. Asymmetric-only JWT validation (RS256/RS384/RS512/ES256/ES384 — `HS*`, `alg: none`, and `PS*` are rejected by design) over a `SignatureVerifier` seam (build-free — it ships no crypto implementation of its own), a `JwksSource` seam (`StaticJwks` for fixed keys, `HttpJwksSource` for a live JWKS endpoint with OIDC Discovery and refresh discipline), and an `oidc()` / `requireScopes()` middleware pair that injects a principal and answers RFC 6750 challenges. |
+| `keta_oidc_boringssl` | 3 | Optional | The default `SignatureVerifier` for `keta_oidc`, over `keta_native`'s BoringSSL build. Depending on it — rather than on `keta_oidc` alone — is what triggers that from-source build. |
 
 ## Deliberately out of scope for v0.1
 

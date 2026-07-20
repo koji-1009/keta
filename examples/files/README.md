@@ -67,7 +67,7 @@ for the full reasoning.
 ## The list envelope is `listSchema`, not hand-written
 
 `lib/user_dto.dart`'s `userListSchema` is `listSchema(userDtoSchema)`
-(keta_openapi) rather than a hand-written `const Schema` — mirrors
+(from `keta`) rather than a hand-written `const Schema` — mirrors
 `../register`'s identical change, which is what keeps this section's
 "documents identically" claim (and its test) true. One behavior change comes
 with it: `listSchema` closes the envelope (`additionalProperties: false`),
