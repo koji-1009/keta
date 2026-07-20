@@ -10,8 +10,9 @@ import 'response.dart';
 ///
 /// [json] is a JSON Schema fragment restricted to the canonical subset:
 /// primitives, `T?` (optional), `List<T>`, `Map<String, T>`, enums, `$ref` to
-/// another schema, and `oneOf` + `discriminator` for sealed types. [deps] lists
-/// referenced schemas so a walker can collect them transitively.
+/// another schema, and `oneOf` + `discriminator` for sealed types (write those
+/// with [Schema.sealed]). [deps] lists referenced schemas so a walker can
+/// collect them transitively.
 ///
 /// ## The two-posture rule
 ///
@@ -118,6 +119,86 @@ import 'response.dart';
 /// pass through untouched.
 final class Schema {
   const Schema(this.name, this.json, {this.deps = const []});
+
+  /// Builds the schema of a sealed type: an `oneOf` over [variants], keyed by
+  /// an explicit `discriminator` mapping from wire tag to variant.
+  ///
+  /// The mapping is not optional here because it cannot be inferred. JSON
+  /// Schema's implicit mapping resolves a tag as a *schema name*, while keta's
+  /// canonical sealed form writes lowerCamel tags (`'created'` for `Created`),
+  /// so an omitted mapping makes the two disagree: the Dart `switch` reads one
+  /// wire value and [validate] accepts another, and neither side can tell. That
+  /// is what this constructor forecloses — a sealed schema built here cannot be
+  /// missing its mapping, and a hand-written `oneOf` fragment without one is
+  /// authoring damage [validate] throws on.
+  ///
+  /// Each variant must declare [discriminator] among its `properties` and list
+  /// it in `required`: the tag travels *inside* the variant's own payload —
+  /// that is what a discriminator is — so a variant that does not model it
+  /// would reject the very object it exists to accept the moment it also
+  /// declares `additionalProperties: false`. That is checked here, at
+  /// construction, rather than left to surface at the boundary.
+  ///
+  /// Unlike a hand-written `const Schema(...)`, the result is not `const` — it
+  /// composes [variants] into new maps — so a `RouteDoc` embedding it cannot be
+  /// `const` either, exactly as with [listSchema].
+  factory Schema.sealed(
+    String name, {
+    required String discriminator,
+    required Map<String, Schema> variants,
+  }) {
+    if (discriminator.isEmpty) {
+      throw ArgumentError.value(
+        discriminator,
+        'discriminator',
+        'sealed schema "$name": the discriminator property must be named',
+      );
+    }
+    if (variants.isEmpty) {
+      throw ArgumentError.value(
+        variants,
+        'variants',
+        'sealed schema "$name": a sealed type needs at least one variant',
+      );
+    }
+    final refs = <Map<String, Object?>>[];
+    final mapping = <String, String>{};
+    final deps = <Schema>[];
+    // A variant reached by two tags would need two `$ref` entries to the same
+    // schema, and the second mapping entry would silently shadow nothing while
+    // the wire gained a synonym no Dart `switch` arm answers to.
+    final tagOf = <String, String>{};
+    for (final MapEntry(key: tag, value: variant) in variants.entries) {
+      if (tag.isEmpty) {
+        throw ArgumentError.value(
+          variants,
+          'variants',
+          'sealed schema "$name": the tag of variant "${variant.name}" must '
+              'not be empty',
+        );
+      }
+      final claimed = tagOf[variant.name];
+      if (claimed != null) {
+        throw ArgumentError.value(
+          variants,
+          'variants',
+          'sealed schema "$name": tags "$claimed" and "$tag" both name variant '
+              '"${variant.name}"; a variant carries exactly one tag',
+        );
+      }
+      tagOf[variant.name] = tag;
+      _requireDiscriminatorProperty(name, tag, variant, discriminator);
+      final ref = '#/components/schemas/${variant.name}';
+      refs.add({r'$ref': ref});
+      mapping[tag] = ref;
+      deps.add(variant);
+    }
+    return Schema(name, {
+      'oneOf': refs,
+      'discriminator': {'propertyName': discriminator, 'mapping': mapping},
+    }, deps: deps);
+  }
+
   final String name;
   final Map<String, Object?> json;
   final List<Schema> deps;
@@ -211,6 +292,37 @@ final class Schema {
 /// instance, const or not, is a valid key on this SDK). The `$ref` graph is
 /// immutable, so a cached index never goes stale.
 final Expando<Map<String, Schema>> _refIndexCache = Expando();
+
+/// Enforces [Schema.sealed]'s rule that a variant models the discriminator it
+/// is selected by, throwing an [ArgumentError] naming the variant when it does
+/// not. Construction-time, so the malformed pairing never reaches a request.
+void _requireDiscriminatorProperty(
+  String sealedName,
+  String tag,
+  Schema variant,
+  String discriminator,
+) {
+  final properties = variant.json['properties'];
+  if (properties is! Map || !properties.containsKey(discriminator)) {
+    throw ArgumentError.value(
+      variant,
+      'variants',
+      'sealed schema "$sealedName": variant "${variant.name}" (tag "$tag") '
+          'does not declare the discriminator property "$discriminator" among '
+          'its properties',
+    );
+  }
+  final required = variant.json['required'];
+  if (required is! List || !required.contains(discriminator)) {
+    throw ArgumentError.value(
+      variant,
+      'variants',
+      'sealed schema "$sealedName": variant "${variant.name}" (tag "$tag") '
+          'does not list the discriminator property "$discriminator" in '
+          'required',
+    );
+  }
+}
 
 /// Builds the canonical list-endpoint envelope: an object [Schema] wrapping
 /// [itemSchema] as a page of results alongside the un-paginated match count.
