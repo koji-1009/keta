@@ -1,8 +1,10 @@
 # keta_oidc
 
-An OIDC / OAuth2 **resource server** for keta: it verifies the Bearer JWTs an identity provider issues, injects the resulting principal, and authorizes on scope. It is a Ring 3 package — it builds on keta core and, for signature verification, on `keta_native` — and it does exactly one side of OIDC: the side that *consumes* tokens.
+An OIDC / OAuth2 **resource server** for keta: it verifies the Bearer JWTs an identity provider issues, injects the resulting principal, and authorizes on scope. It is a Ring 1 package — it builds on keta core alone — and it does exactly one side of OIDC: the side that *consumes* tokens.
 
-> **Status.** All waves have landed: the JWT decode-and-validate core, the `SignatureVerifier` seam (below), JWKS fetching, the `oidc()` middleware, and the BoringSSL-backed verifier all ship today.
+keta_oidc ships no `SignatureVerifier` implementation of its own, so depending on it never pulls in a build. The production implementation, `BoringSslVerifier` (BoringSSL via `keta_native`), lives in the separate [`keta_oidc_boringssl`](../keta_oidc_boringssl) package — depending on *that* package (rather than on keta_oidc alone) is what triggers the from-source BoringSSL build.
+
+> **Status.** All waves have landed: the JWT decode-and-validate core, the `SignatureVerifier` seam (below), JWKS fetching, the `oidc()` middleware, and the BoringSSL-backed verifier (`keta_oidc_boringssl`) all ship today.
 
 ## Why a resource server, and only that
 
@@ -46,7 +48,7 @@ abstract interface class SignatureVerifier {
 - `signature` is the **raw JOSE signature**. For `ES*` that is the fixed-width `r ‖ s` concatenation JOSE mandates (RFC 7518 §3.4), *not* ASN.1/DER — a backend that needs DER converts it itself. Fixing the JOSE-side form as the thing that crosses the seam keeps backends interchangeable.
 - A non-verifying signature is a **`false` return**, an ordinary outcome; a backend throws only on its own defect (a key it cannot import).
 
-`Jwk` instances are long-lived and reused across calls; a backend may cache a derived native key keyed on `Jwk` identity (an `Expando`). The initial backend is BoringSSL via `keta_native`; the seam exists so it can be swapped.
+`Jwk` instances are long-lived and reused across calls; a backend may cache a derived native key keyed on `Jwk` identity (an `Expando`). The default backend is `BoringSslVerifier` (BoringSSL via `keta_native`), shipped from `keta_oidc_boringssl` rather than from this package — the seam exists so it, or any other backend, can be swapped in without touching this package.
 
 ## Error posture
 

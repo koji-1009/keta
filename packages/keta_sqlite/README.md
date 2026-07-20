@@ -1,6 +1,6 @@
 # keta_sqlite
 
-A thin adapter over the `package:sqlite3` family: `SqliteDb` implements keta_db's `Db` contract on a single embedded SQLite connection, on-disk or `:memory:`. It is Ring 1 — it depends on `keta` (for the exception vocabulary), `keta_db` (for the contract), and `sqlite3` (for the engine), and nothing else.
+A thin adapter over the `package:sqlite3` family: `SqliteDb` implements keta_db's `Db` contract on a single embedded SQLite connection, on-disk or `:memory:`. It is Ring 2 — it depends on `keta` (for the exception vocabulary), `keta_db` (for the contract), and `sqlite3` (for the engine), and nothing else.
 
 Provisional: the native `libsqlite3` is taken from the system. Until a source-pinned build hook bundles it, a `dart compile exe` binary is not self-contained on a distroless/scratch image.
 

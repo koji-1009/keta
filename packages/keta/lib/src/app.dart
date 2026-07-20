@@ -10,6 +10,7 @@ import 'context.dart';
 import 'h1_transport.dart';
 import 'log.dart';
 import 'response.dart';
+import 'route_doc.dart';
 import 'routing.dart';
 import 'transport.dart';
 
@@ -43,7 +44,7 @@ class _Reg<E> {
   final List<String> captureNames;
   final Handler<E> handler;
   final List<Middleware<E>> groupMiddleware;
-  final Object? doc;
+  final RouteDoc? doc;
   final String template;
 }
 
@@ -52,7 +53,7 @@ class RouteEntry {
   const RouteEntry(this.method, this.segments, this.doc, this.template);
   final String method;
   final List<Segment> segments;
-  final Object? doc;
+  final RouteDoc? doc;
   final String template;
 }
 
@@ -76,19 +77,19 @@ class App<E> {
   RouteGroup<E> group(String prefix) =>
       RouteGroup<E>._(this, _prefixSegments(prefix), <Middleware<E>>[]);
 
-  void get(Object path, Handler<E> handler, {Object? doc}) =>
+  void get(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('GET', path, handler, doc, const [], const []);
-  void post(Object path, Handler<E> handler, {Object? doc}) =>
+  void post(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('POST', path, handler, doc, const [], const []);
-  void put(Object path, Handler<E> handler, {Object? doc}) =>
+  void put(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('PUT', path, handler, doc, const [], const []);
-  void delete(Object path, Handler<E> handler, {Object? doc}) =>
+  void delete(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('DELETE', path, handler, doc, const [], const []);
-  void patch(Object path, Handler<E> handler, {Object? doc}) =>
+  void patch(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('PATCH', path, handler, doc, const [], const []);
-  void head(Object path, Handler<E> handler, {Object? doc}) =>
+  void head(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('HEAD', path, handler, doc, const [], const []);
-  void options(Object path, Handler<E> handler, {Object? doc}) =>
+  void options(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _addPlain('OPTIONS', path, handler, doc, const [], const []);
 
   /// Opens the typed-DSL entry for [path]. Bind verbs on the returned [Route]
@@ -106,7 +107,7 @@ class App<E> {
     String method,
     Object path,
     Handler<E> handler,
-    Object? doc,
+    RouteDoc? doc,
     List<Segment> prefixSegments,
     List<Middleware<E>> groupMiddleware,
   ) {
@@ -128,7 +129,7 @@ class App<E> {
     String method,
     Path<T> path,
     TypedHandler<E, T> handler,
-    Object? doc,
+    RouteDoc? doc,
     List<Segment> prefixSegments,
     List<Middleware<E>> groupMiddleware,
   ) {
@@ -158,7 +159,7 @@ class App<E> {
     List<Segment> segments,
     List<Capture<Object?>> captures,
     Handler<E> handler,
-    Object? doc,
+    RouteDoc? doc,
     List<Middleware<E>> groupMiddleware,
   ) {
     final names = [
@@ -363,19 +364,19 @@ class RouteGroup<E> {
     return this;
   }
 
-  void get(Object path, Handler<E> handler, {Object? doc}) =>
+  void get(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('GET', path, handler, doc, _prefix, _middleware);
-  void post(Object path, Handler<E> handler, {Object? doc}) =>
+  void post(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('POST', path, handler, doc, _prefix, _middleware);
-  void put(Object path, Handler<E> handler, {Object? doc}) =>
+  void put(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('PUT', path, handler, doc, _prefix, _middleware);
-  void delete(Object path, Handler<E> handler, {Object? doc}) =>
+  void delete(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('DELETE', path, handler, doc, _prefix, _middleware);
-  void patch(Object path, Handler<E> handler, {Object? doc}) =>
+  void patch(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('PATCH', path, handler, doc, _prefix, _middleware);
-  void head(Object path, Handler<E> handler, {Object? doc}) =>
+  void head(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('HEAD', path, handler, doc, _prefix, _middleware);
-  void options(Object path, Handler<E> handler, {Object? doc}) =>
+  void options(Object path, Handler<E> handler, {RouteDoc? doc}) =>
       _app._addPlain('OPTIONS', path, handler, doc, _prefix, _middleware);
 
   /// Opens the typed-DSL entry for [path] within this group, carrying the
@@ -393,19 +394,19 @@ class Route<E, T> {
   final List<Segment> _prefix;
   final List<Middleware<E>> _middleware;
 
-  void get(TypedHandler<E, T> handler, {Object? doc}) =>
+  void get(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('GET', _path, handler, doc, _prefix, _middleware);
-  void post(TypedHandler<E, T> handler, {Object? doc}) =>
+  void post(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('POST', _path, handler, doc, _prefix, _middleware);
-  void put(TypedHandler<E, T> handler, {Object? doc}) =>
+  void put(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('PUT', _path, handler, doc, _prefix, _middleware);
-  void delete(TypedHandler<E, T> handler, {Object? doc}) =>
+  void delete(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('DELETE', _path, handler, doc, _prefix, _middleware);
-  void patch(TypedHandler<E, T> handler, {Object? doc}) =>
+  void patch(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('PATCH', _path, handler, doc, _prefix, _middleware);
-  void head(TypedHandler<E, T> handler, {Object? doc}) =>
+  void head(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('HEAD', _path, handler, doc, _prefix, _middleware);
-  void options(TypedHandler<E, T> handler, {Object? doc}) =>
+  void options(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('OPTIONS', _path, handler, doc, _prefix, _middleware);
 }
 
@@ -420,7 +421,7 @@ class _Compiled<E> {
   final Handler<E> handler;
   final List<String> captureNames;
   final String template;
-  final Object? doc;
+  final RouteDoc? doc;
 }
 
 /// The compiled dispatcher: a radix trie plus the bound env. Matching stays on

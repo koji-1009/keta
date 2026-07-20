@@ -1,5 +1,10 @@
-/// In-process test harness: drive an [App] with no sockets, build a [Context]
-/// for unit-testing a handler, and run an expectation in both failure shapes.
+/// keta's test-support library, shipped in-package by design: import
+/// `package:keta/test.dart` from test code, alongside `package:keta/keta.dart`.
+/// Production code never imports it — the server library does not re-export it,
+/// and `package:test` exists in the pubspec to back exactly this file.
+///
+/// The harness itself: drive an [App] with no sockets, build a [Context] for
+/// unit-testing a handler, and run an expectation in both failure shapes.
 library;
 
 import 'dart:async';

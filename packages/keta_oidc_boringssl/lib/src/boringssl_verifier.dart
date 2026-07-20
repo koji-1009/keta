@@ -3,10 +3,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:keta_native/keta_native.dart';
-
-import '../jwt/algorithm.dart';
-import '../jwt/jwk.dart';
-import '../jwt/signature_verifier.dart';
+import 'package:keta_oidc/keta_oidc.dart';
 
 /// The production [SignatureVerifier], backed by BoringSSL through
 /// `package:keta_native`. It is the piece that turns keta_oidc's pure-Dart JWT

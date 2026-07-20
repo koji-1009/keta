@@ -79,18 +79,14 @@ void main() {
     expect(schemas['Created'], createdSchema.json);
   });
 
-  test('a null or non-RouteDoc doc still emits an operation', () {
-    final app = App<Ignored>()
-      ..get('/plain', (c) => c.text('x'))
-      ..get('/weird', (c) => c.text('x'), doc: 'not-a-doc');
+  test('a null doc still emits an operation', () {
+    final app = App<Ignored>()..get('/plain', (c) => c.text('x'));
     final doc = OpenApi.fromRoutes(app.routes).toJson();
-    for (final path in ['/plain', '/weird']) {
-      final op = ((doc['paths'] as Map)[path] as Map)['get'] as Map;
-      expect(op.containsKey('summary'), isFalse);
-      expect(op['responses'], {
-        '200': {'description': 'OK'},
-      });
-    }
+    final op = ((doc['paths'] as Map)['/plain'] as Map)['get'] as Map;
+    expect(op.containsKey('summary'), isFalse);
+    expect(op['responses'], {
+      '200': {'description': 'OK'},
+    });
     expect(doc.containsKey('components'), isFalse);
   });
 

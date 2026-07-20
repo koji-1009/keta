@@ -30,7 +30,7 @@ class UserDto {
       'a DTO (by Schema signal) without mappers is keta_canonical_missing',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Point {
   final int x;
   final int y;
@@ -136,7 +136,7 @@ class Weird {
     test('check flags an EXTRA schema property fix would remove (schema drift '
         'in the other direction)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   Dto({required this.id});
@@ -158,7 +158,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properti
     test('a Schema whose properties match the fields is clean (negative: no '
         'false schema drift)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -175,42 +175,51 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], '
 
   group('canonicalDiagnostics — refusal recommendations name the real blocker, '
       'never a no-op fix', () {
-    test('a positional-ctor DTO missing a mapper is told to materialize by '
-        'hand, not to run a fix that refuses positional ctors (regression: the '
-        'keta_canonical_missing message unconditionally recommended '
-        'keta_lints:fix, which does nothing here)', () {
+    test('a positional-ctor Schema DTO with NEITHER mapper is told to '
+        'materialize by hand, not to run a fix that refuses positional ctors '
+        '(regression: the keta_canonical_missing message unconditionally '
+        'recommended keta_lints:fix, which does nothing here)', () {
+      // Both mappers absent + a Schema constant = the missing case; the
+      // positional ctor is the fixer blocker the message must name. (A one-way
+      // projection — exactly one mapper — is legitimate and never fires missing;
+      // that is pinned in the "one-way projections" group below.)
       const source = '''
+import 'package:keta/keta.dart';
 class P {
   final String a;
   final String b;
   P(this.a, this.b);
-  Map<String, Object?> toJson() => {'a': a, 'b': b};
 }
+const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properties': {'a': {'type': 'string'}, 'b': {'type': 'string'}}});
 ''';
       final d = canonicalDiagnostics(source);
       expect(d, hasLength(1));
       expect(d.single.rule, 'keta_canonical_missing');
-      expect(d.single.message, contains('materialize it by hand'));
+      expect(d.single.message, contains('materialize them by hand'));
       expect(d.single.message, contains('positional constructor'));
       // It must not recommend running the fix, because the fix would refuse it.
       expect(d.single.message, isNot(contains('run keta_lints:fix')));
       expect(applyCanonicalFix(source), source); // proof the fix is a no-op
     });
 
-    test('a DTO missing a mapper with an unresolvable field type is told to '
-        'materialize by hand, naming the unsupported type', () {
+    test('a Schema DTO with NEITHER mapper and an unresolvable field type is '
+        'told to materialize by hand, naming the unsupported type', () {
+      // The Schema lists both fields (so there is no separate schema drift),
+      // isolating the missing finding — whose advice must name the unresolvable
+      // `when` as the blocker keeping the fixer from materializing the mappers.
       const source = '''
+import 'package:keta/keta.dart';
 class D {
   final DateTime when;
   final String id;
   D({required this.when, required this.id});
-  Map<String, Object?> toJson() => {'when': when.toIso8601String(), 'id': id};
 }
+const dSchema = Schema('D', {'type': 'object', 'required': ['id'], 'properties': {'when': {'type': 'string'}, 'id': {'type': 'string'}}});
 ''';
       final d = canonicalDiagnostics(source);
       expect(d, hasLength(1));
       expect(d.single.rule, 'keta_canonical_missing');
-      expect(d.single.message, contains('materialize it by hand'));
+      expect(d.single.message, contains('materialize them by hand'));
       expect(
         d.single.message,
         contains('field type outside the canonical subset'),
@@ -219,10 +228,11 @@ class D {
       expect(applyCanonicalFix(source), source); // proof the fix is a no-op
     });
 
-    test('a fixable DTO missing a mapper still recommends keta_lints:fix '
-        '(negative: the gate did not over-suppress the recommendation)', () {
+    test('a fixable Schema DTO with NEITHER mapper still recommends '
+        'keta_lints:fix (negative: the gate did not over-suppress the '
+        'recommendation), and the fix materializes both mappers', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Ok {
   final String id;
   Ok({required this.id});
@@ -233,8 +243,12 @@ const okSchema = Schema('Ok', {'type': 'object', 'required': ['id'], 'properties
       expect(d, hasLength(1));
       expect(d.single.rule, 'keta_canonical_missing');
       expect(d.single.message, contains('run keta_lints:fix'));
-      // And the fix genuinely materializes the mapper (not a no-op).
-      expect(applyCanonicalFix(source), isNot(source));
+      // And the fix genuinely materializes BOTH mappers (not a no-op).
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains('factory Ok.fromJson(Map<String, Object?> json)'));
+      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
     test('a positional-ctor DTO with drift still fires keta_canonical_drift '
@@ -572,7 +586,6 @@ class P {
     // A hand-written enhanced enum plus a DTO that uses it, both canonical.
     const source = '''
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 enum Role {
   admin('admin'),
   superUser('super-user');
@@ -720,7 +733,7 @@ class Dto {
         'finding: check reports keta_schema_drift and fix reconciles the '
         'Schema while leaving the refused mapper untouched', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -753,7 +766,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], '
         'for the Schema (fix #3 made Schema repair ctor-independent), NOT to '
         'reconcile by hand naming the ctor blocker', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class P {
   final String a;
   final String b;
@@ -785,7 +798,7 @@ const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properti
       'isSchemaFixable is not a blanket yes) — the advice names the blocker',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class D {
   final DateTime when;
   final String id;
@@ -841,43 +854,93 @@ class Dto {
     // to end (check + fix + idempotence).
   });
 
-  group('missing-mapper message names the sibling drift', () {
-    test('missing toJson + a drifted (present) fromJson names BOTH axes, since '
-        'one fix run rewrites both', () {
-      const source = '''
-class Dto {
+  group('one-way projections are legitimate (no missing finding)', () {
+    test(
+      'a toJson-only output projection draws no missing finding, and the fix '
+      'does NOT materialize a fromJson (its directionality is declared by the '
+      'present mapper)',
+      () {
+        const source = '''
+class Out {
   final String id;
-  Dto({required this.id});
-  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as int);
+  final int? age;
+  Out({required this.id, this.age});
+  Map<String, Object?> toJson() => {'id': id, if (age != null) 'age': age};
+}
+''';
+        // toJson present, fromJson absent — a legitimate output-only shape.
+        expect(canonicalDiagnostics(source), isEmpty);
+        // The fixer must not forge the absent mirror: byte-identical output.
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('fromJson')));
+      },
+    );
+
+    test('a toJson-only projection whose keys drift still draws toJson-drift '
+        '(no missing), and the fix reconciles the present toJson without adding '
+        'a fromJson', () {
+      const source = '''
+class Out {
+  final String id;
+  final String name;
+  Out({required this.id, required this.name});
+  Map<String, Object?> toJson() => {'id': id};
 }
 ''';
       final d = canonicalDiagnostics(source);
       expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_canonical_missing');
-      expect(d.single.message, contains('no toJson method'));
-      expect(d.single.message, contains('fromJson has also drifted'));
-      expect(d.single.message, contains('run keta_lints:fix'));
-      // And the fix genuinely rewrites both: it materializes toJson AND repairs
-      // the stale fromJson cast.
+      expect(d.single.rule, 'keta_canonical_drift');
+      expect(d.single.message, contains('fields not in toJson: name'));
       final fixed = applyCanonicalFix(source);
-      expect(fixed, contains("id: json['id'] as String,"));
-      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(fixed, contains("'name': name,"));
+      expect(fixed, isNot(contains('fromJson'))); // no mirror forged
       expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('missing toJson + a clean (present) fromJson names only the missing '
-        'side (negative: no spurious sibling mention)', () {
-      const source = '''
-class Dto {
+    test(
+      'a fromJson-only input projection is symmetric: a clean fromJson draws '
+      'nothing (no missing), and the fix does NOT materialize a toJson',
+      () {
+        const source = '''
+class In {
   final String id;
-  Dto({required this.id});
-  factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
+  In({required this.id});
+  factory In.fromJson(Map<String, Object?> json) => In(id: json['id'] as String);
 }
 ''';
-      final d = canonicalDiagnostics(source);
-      expect(d.single.rule, 'keta_canonical_missing');
-      expect(d.single.message, contains('no toJson method'));
-      expect(d.single.message, isNot(contains('has also drifted')));
-    });
+        expect(canonicalDiagnostics(source), isEmpty);
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('toJson')));
+      },
+    );
+
+    test(
+      'a fromJson-only projection whose cast drifts still draws type drift '
+      '(no missing), and the fix repairs the cast without adding a toJson',
+      () {
+        const source = '''
+class In {
+  final String id;
+  In({required this.id});
+  factory In.fromJson(Map<String, Object?> json) => In(id: json['id'] as int);
+}
+''';
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_type_drift');
+        expect(
+          d.single.message,
+          contains('fromJson casts as int but the field is String'),
+        );
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, contains("id: json['id'] as String,"));
+        expect(fixed, isNot(contains('toJson'))); // no mirror forged
+        expect(canonicalDiagnostics(fixed), isEmpty);
+        expect(applyCanonicalFix(fixed), fixed); // idempotent
+      },
+    );
   });
 }

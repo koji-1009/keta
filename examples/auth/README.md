@@ -42,7 +42,7 @@ the app's own state, and a real app swaps it for Redis or a database table
 without touching the verifier, `/me`, or `/logout`.
 
 Cookie auth is documented in OpenAPI as an `apiKey`-style scheme
-(`type: apiKey, in: cookie, name: sid`) — keta_openapi ships `bearer` and a
+(`type: apiKey, in: cookie, name: sid`) — keta ships `bearer` and a
 header-carried `apiKey`, so this example mints its own `cookieAuth`
 `SecurityScheme` constant for the cookie-carried case.
 

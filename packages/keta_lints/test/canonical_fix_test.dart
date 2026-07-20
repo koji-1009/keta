@@ -18,7 +18,7 @@ void main() {
   group('applyCanonicalFix', () {
     test('materializes missing mappers', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class UserDto {
   final String id;
   final int? age;
@@ -42,7 +42,7 @@ const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], '
       'reconciles drift across fromJson, toJson, and the schema (M4 gate)',
       () {
         const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class UserDto {
   final String id;
@@ -72,7 +72,7 @@ const userDtoSchema = Schema('UserDto', {
 
     test('removing two adjacent fields does not corrupt source', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class Dto {
   final String a;
@@ -104,7 +104,7 @@ const dtoSchema = Schema('Dto', {
 
     test('renaming the sole field yields valid source', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class One {
   final String uuid;
@@ -129,19 +129,26 @@ const oneSchema = Schema('One', {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test('materializes a half-missing mapper pair', () {
-      const source = '''
+    test(
+      'does NOT forge the absent mirror of a one-way (fromJson-only) class '
+      'the present mapper declares the direction; the fixer leaves it alone',
+      () {
+        const source = '''
 class Dto {
   final String id;
   Dto({required this.id});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
 }
 ''';
-      final fixed = applyCanonicalFix(source);
-      expect(fixed, contains('Map<String, Object?> toJson()'));
-      expect(canonicalDiagnostics(fixed), isEmpty);
-      expect(applyCanonicalFix(fixed), fixed); // idempotent
-    });
+        // fromJson present, toJson absent, no Schema — a legitimate input-only
+        // projection. The fixer must not materialize a toJson (that would forge a
+        // direction the class never declared), so the output is byte-identical.
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, source);
+        expect(fixed, isNot(contains('toJson')));
+        expect(canonicalDiagnostics(fixed), isEmpty);
+      },
+    );
 
     test('a class with final fields but no canonical signal is ignored', () {
       const source = '''
@@ -176,7 +183,7 @@ class Dto {
 
     test('preserves an enum property refinement and adds nested-DTO deps', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 
 class Address {
   final String city;
@@ -250,6 +257,10 @@ class Dto {
   final Map<String, Item>? maybeMap;
   Dto({required this.roles, required this.items, required this.roleMap, required this.itemMap, this.maybeRole, this.maybeItem, this.maybeList, this.maybeMap});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(roles: const [], items: const [], roleMap: const {}, itemMap: const {});
+  // Both mappers are present but drift (fromJson reads no keys, toJson is empty),
+  // so BOTH regenerate — exercising fromJson AND toJson generation across the
+  // full type matrix. (A one-way class would leave its absent side alone.)
+  Map<String, Object?> toJson() => {};
 }
 ''';
       final fixed = applyCanonicalFix(source);
@@ -338,7 +349,7 @@ class Dto {
         'rewrite the Schema — CI shipped a stale OpenAPI document; check now '
         'reports keta_schema_drift for exactly what fix reconciles)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String? email;
@@ -370,7 +381,7 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id'], 'properti
       // guard exists to catch. (The schema must actually drift for both to touch
       // it: under D-2's per-member granularity a matching schema is left alone.)
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dup { final String id; Dup({required this.id}); }
 class Dup { final String id; Dup({required this.id}); }
 const dupSchema = Schema('Dup', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'stale': {'type': 'string'}}});
@@ -467,7 +478,7 @@ class Dto {
 
     test('fix preserves top-level schema keys (no data loss)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String name;
@@ -486,12 +497,17 @@ const dtoSchema = Schema('Dto', {'type': 'object', 'required': ['id', 'name'], '
     });
 
     test('fix escapes \$ in a field name and converges', () {
+      // A Schema-declared DTO with neither mapper (the materialize-from-scratch
+      // case), so the fixer generates BOTH mappers AND the Schema properties
+      // from the field model — exercising the `\$` escaping on every generated
+      // key (a one-way class would leave one side ungenerated).
       const source = '''
+import 'package:keta/keta.dart';
 class Dto {
   final String a\$b;
   Dto({required this.a\$b});
-  factory Dto.fromJson(Map<String, Object?> json) => Dto(a\$b: json['a\$b'] as String);
 }
+const dtoSchema = Schema('Dto', {'type': 'object'});
 ''';
       final fixed = applyCanonicalFix(source);
       parseString(content: fixed, throwIfDiagnostics: true); // compiles
@@ -504,7 +520,7 @@ class Dto {
     test('a schema-only drift leaves an inline comment inside toJson '
         'byte-for-byte (the mappers are not touched)', () {
       const source = '''
-import 'package:keta_openapi/keta_openapi.dart';
+import 'package:keta/keta.dart';
 class Dto {
   final String id;
   final String email;
@@ -631,7 +647,6 @@ class Dto {
     // A hand-written enhanced enum plus a DTO that uses it, both canonical.
     const source = '''
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 enum Role {
   admin('admin'),
   superUser('super-user');

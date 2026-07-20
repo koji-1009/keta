@@ -1,0 +1,23 @@
+name: keta_oidc_boringssl
+description: >-
+  The default SignatureVerifier for keta_oidc's JWT resource-server core,
+  backed by keta_native's BoringSSL build. Depending on this package is what
+  pulls the from-source BoringSSL build into a consumer's hook chain;
+  keta_oidc itself stays build-free.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  keta_oidc: ^0.1.0
+  keta_native: ^0.1.0
+
+dev_dependencies:
+  # The all-real middleware integration test composes a real app with
+  # TestClient; production code here never touches keta itself.
+  keta: ^0.1.0
+  test: ^1.25.0

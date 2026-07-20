@@ -1,5 +1,4 @@
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 
 enum Role { admin, member }
 
@@ -96,9 +95,9 @@ const userDtoSchema = Schema('UserDto', {
 /// `items` + `total` is the generic pagination envelope: `items` is this page's
 /// rows (bounded by `?limit`/`?offset`), `total` is how many match the query
 /// across all pages. `fromJson` is kept even though the server only emits this
-/// shape: a Schema-backed DTO is round-trippable by this repo's canonical
-/// convention (keta_lints' `keta_canonical_missing` flags a class with a Schema
-/// and `toJson` but no `fromJson`).
+/// shape: the list envelope mirrors [UserDto] and round-trips by this repo's
+/// canonical convention. keta_lints does not force it — a one-way projection
+/// (only a `toJson`) is a legitimate output shape it leaves unflagged.
 class UserList {
   const UserList({required this.items, required this.total});
 

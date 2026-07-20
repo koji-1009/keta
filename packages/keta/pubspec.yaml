@@ -1,9 +1,9 @@
 name: keta
 description: >-
   keta (桁) — a reflection-free, codegen-free HTTP server framework for Dart.
-  Ring 0 Foundation: router, Context, middleware, server, Log, test harness.
-  Zero production dependencies — a compiled binary carries only the SDK;
-  `test` resolves solely for the shipped test harness.
+  Ring 0 Foundation: router, Context, middleware, server, Log, and the
+  in-package test-support library (package:keta/test.dart). The server
+  depends on nothing beyond the SDK.
 version: 0.1.0
 publish_to: none
 
@@ -13,8 +13,7 @@ environment:
 resolution: workspace
 
 dependencies:
-  # keta/test.dart ships the in-process harness (testBothModes registers cases
-  # with package:test); the compiled production binary never imports it, so
-  # `dart compile exe` excludes it.
+  # Backs the test-support library this package ships by design
+  # (package:keta/test.dart) — imported by test code only.
   test: ^1.25.0
 

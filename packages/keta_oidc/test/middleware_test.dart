@@ -1,18 +1,18 @@
 /// Drives oidc() and requireScopes() through a real app composition with
 /// TestClient: the two 401 shapes, every JwtRejection → invalid_token, the
 /// 503/500 non-token failures, scope authorization and scope-claim union,
-/// principal injection and non-leakage, the author-defect StateError, an
-/// upgrade route gated by auth, and one all-real path (BoringSslVerifier +
-/// StaticJwks + a keta_native-signed token).
+/// principal injection and non-leakage, the author-defect StateError, and an
+/// upgrade route gated by auth — all over the stub verifier. The one all-real
+/// path (BoringSslVerifier + a keta_native-signed token) lives in
+/// keta_oidc_boringssl's suite, beside the implementation, so this package
+/// never depends — even dev-only — on a package that depends on it.
 library;
 
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
-import 'package:keta_native/testing.dart';
 import 'package:keta_oidc/keta_oidc.dart';
 import 'package:test/test.dart';
 
-import 'crypto_support.dart';
 import 'support.dart';
 
 /// A fixed clock so token expiry is deterministic on the stub path.
@@ -474,34 +474,4 @@ void main() {
       expect(await result.socket!.messages.first, 'hello');
     });
   });
-
-  test(
-    'all-real path: BoringSslVerifier + StaticJwks + a signed token → 200',
-    () async {
-      final pair = RsaKeyPair.generate();
-      final token = signedToken(
-        alg: 'RS256',
-        kid: 'k1',
-        sign: pair.signPkcs1Sha256,
-      );
-      final source = StaticJwks.parse(
-        jwksJson([rsaJwkOf(pair, kid: 'k1', alg: 'RS256')]),
-      );
-      final validator = JwtValidator(
-        verifier: BoringSslVerifier(),
-        algorithms: {JwsAlgorithm.rs256},
-        issuer: 'https://issuer',
-        audience: 'api://resource',
-      );
-      final app = App<Object?>()
-        ..use(oidc(jwks: source, validator: validator))
-        ..get('/me', _meHandler);
-      final res = await TestClient<Object?>(
-        app,
-        null,
-      ).get('/me', headers: _auth(token));
-      expect(res.status, 200);
-      expect(res.json(), {'sub': 'user-1', 'scopes': <String>[]});
-    },
-  );
 }

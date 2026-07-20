@@ -2,7 +2,6 @@ import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/env.dart';
 import 'package:keta_files_example/user_dto.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 
 /// `/users/:id` — the `_id` in this file's name is the capture, and the only
 /// place it is named. `captures` is absent because `id` is a string, which is

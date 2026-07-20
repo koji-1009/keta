@@ -48,16 +48,17 @@ void main() {
     });
 
     test('the doc travels with the handler that earns it', () {
+      const getDoc = RouteDoc(success: Success());
       final app = App<Env>();
       const Exported<Env>(
-        get: Serve(_ok, doc: 'the-get-doc'),
+        get: Serve(_ok, doc: getDoc),
         post: Serve(_ok),
       ).bind(app, const ['x']);
 
       final byMethod = {for (final r in app.routes) r.method: r.doc};
       // Together in one value, so a doc cannot end up on a method the file does
       // not serve, and a rename cannot silently unbind it.
-      expect(byMethod['GET'], 'the-get-doc');
+      expect(byMethod['GET'], same(getDoc));
       expect(byMethod['POST'], isNull);
     });
 

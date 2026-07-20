@@ -1,8 +1,8 @@
 # keta_native
 
-The Ring 3 native crypto layer for keta. It builds BoringSSL's `libcrypto` from a pinned source commit at hook (native-assets) time and exposes a small, hand-written FFI surface over the verify-oriented primitives keta needs — SHA-2 digests, HMAC, and RSA/ECDSA signature verification. It owns exactly one idea: give the pure-Dart rings a fast, correct, standards-backed verifier without shelling out or trusting a hand-rolled big-integer implementation.
+The standalone native crypto layer beside keta — it depends on nothing in the workspace, so it carries no ring; outer packages pull it in with the same standing as a third-party dependency. It builds BoringSSL's `libcrypto` from a pinned source commit at hook (native-assets) time and exposes a small, hand-written FFI surface over the verify-oriented primitives keta needs — SHA-2 digests, HMAC, and RSA/ECDSA signature verification. It owns exactly one idea: give the pure-Dart rings a fast, correct, standards-backed verifier without shelling out or trusting a hand-rolled big-integer implementation.
 
-Its first consumer is keta_oidc's JWT resource-server path, which validates inbound tokens. That path needs to *verify* signatures and compute HMACs, not mint keys or issue tokens — so the production surface is verification-only, and everything that signs lives behind a separate `testing.dart` import.
+Its first consumer is `keta_oidc_boringssl`'s `BoringSslVerifier`, the default signature backend for keta_oidc's JWT resource-server path, which validates inbound tokens. That path needs to *verify* signatures and compute HMACs, not mint keys or issue tokens — so the production surface is verification-only, and everything that signs lives behind a separate `testing.dart` import.
 
 ## Why a source build, and why pinned
 
@@ -28,7 +28,7 @@ All inputs and outputs are `Uint8List` of raw bytes.
 - `RsaPublicKey.fromComponents(modulus, exponent)` — from JWK-shaped big-endian `n`/`e`; `verifyPkcs1Sha256/384/512` implement JOSE `RS256/384/512` (RSASSA-PKCS1-v1_5 over the message).
 - `EcPublicKey.p256(x, y)` / `EcPublicKey.p384(x, y)` — from big-endian affine coordinates; `verifyEcdsaSha256/384` implement `ES256/384`.
 
-**ECDSA signatures are DER.** The verify methods take a DER-encoded `SEQUENCE { r, s }`. JOSE carries the signature as the raw fixed-width `r || s` concatenation, so converting raw→DER is the caller's job (keta_oidc does this for JWS) — keta_native deliberately does not guess an encoding.
+**ECDSA signatures are DER.** The verify methods take a DER-encoded `SEQUENCE { r, s }`. JOSE carries the signature as the raw fixed-width `r || s` concatenation, so converting raw→DER is the caller's job (`keta_oidc_boringssl` does this for JWS) — keta_native deliberately does not guess an encoding.
 
 ### Error posture
 

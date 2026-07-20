@@ -1,6 +1,6 @@
 name: keta_rds
 description: >-
-  Ring 3 adapter binding keta_db to PostgreSQL over package:postgres. Owns a
+  Ring 2 adapter binding keta_db to PostgreSQL over package:postgres. Owns a
   bounded reader/writer connection pool, error translation, and migrations;
   writes no wire protocol of its own.
 version: 0.1.0

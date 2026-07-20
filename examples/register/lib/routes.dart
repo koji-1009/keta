@@ -1,8 +1,6 @@
 import 'package:keta/keta.dart';
 import 'package:keta_db/keta_db.dart';
 import 'package:keta_multipart/keta_multipart.dart';
-import 'package:keta_openapi/keta_openapi.dart';
-
 import 'auth.dart';
 import 'env.dart';
 import 'events.dart';
@@ -366,7 +364,7 @@ void register(App<Env> app) {
         ),
       );
 
-  // A multipart upload (keta_multipart, Optional Ring 3): stream the parts once,
+  // A multipart upload (keta_multipart, Optional Ring 1): stream the parts once,
   // buffering small text fields and reporting file sizes without holding the
   // upload in memory. Persistence would be the app's job — this demo has none,
   // so it never touches the database and sits outside the tx() group above.

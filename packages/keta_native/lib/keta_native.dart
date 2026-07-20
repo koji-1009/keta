@@ -1,4 +1,4 @@
-/// keta_native — the Ring 3 native crypto layer for keta, built on BoringSSL's
+/// keta_native — the standalone (no ring) native crypto layer, built on BoringSSL's
 /// libcrypto (compiled from a pinned commit at hook / native-assets build
 /// time). It exposes a small, **verification-oriented** surface:
 ///

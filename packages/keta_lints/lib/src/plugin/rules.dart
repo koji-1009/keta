@@ -189,17 +189,18 @@ class KetaQueryRule extends _KetaRule {
 }
 
 /// `keta_canonical_missing` + `keta_canonical_drift` + `keta_type_drift` +
-/// `keta_schema_drift` — a DTO's mapper is absent, its mapper keys have drifted
-/// from its field set, a fromJson cast has drifted from a field's declared type,
-/// or its `Schema` constant has drifted from its field set (a wrong OpenAPI
-/// document).
+/// `keta_schema_drift` — a Schema-declared DTO carries no mapper at all (a
+/// one-way projection with exactly one mapper is legitimate, never flagged), a
+/// present mapper's keys have drifted from its field set, a fromJson cast has
+/// drifted from a field's declared type, or its `Schema` constant has drifted
+/// from its field set (a wrong OpenAPI document).
 class KetaCanonicalRule extends _KetaRule {
   KetaCanonicalRule()
     : super(
         name: 'keta_canonical',
         description:
-            'A DTO must carry fromJson/toJson and a Schema whose keys match its '
-            'final fields.',
+            "A DTO's present mappers and Schema must match its final fields, "
+            'and a Schema-declared DTO must carry at least one mapper.',
       );
 
   @override

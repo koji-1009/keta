@@ -10,7 +10,7 @@ import 'dart:typed_data';
 import 'package:keta_native/testing.dart';
 // Reach into src directly: the encoder is internal to the verifier library and
 // deliberately not exported, but it carries a strictness contract worth pinning.
-import 'package:keta_oidc/src/verify/boringssl_verifier.dart';
+import 'package:keta_oidc_boringssl/src/boringssl_verifier.dart';
 import 'package:test/test.dart';
 
 import 'crypto_support.dart';

@@ -2,8 +2,6 @@ library;
 
 import 'package:keta/keta.dart';
 
-import 'route_doc.dart';
-import 'schema.dart';
 import 'yaml.dart';
 
 /// An OpenAPI 3.1 document assembled from a route table. Truth flows one way:
@@ -39,7 +37,7 @@ class OpenApi {
     final allTags = <String>{};
 
     for (final route in routes) {
-      final doc = route.doc is RouteDoc ? route.doc as RouteDoc : null;
+      final doc = route.doc;
       // null follows the global default; an empty list is explicitly public.
       final effective = doc?.security ?? security;
       final path = _openApiPath(route.segments);
@@ -55,11 +53,9 @@ class OpenApi {
       // `path` embeds capture names (`{id}` vs `{userId}`), so two routes
       // differing only in capture name would land in two different `paths`
       // entries here and slip past a `path`-keyed guard, yet `App.compile`
-      // deliberately treats them as one conflict (its `conflictKey` collapses
-      // every capture to `*` — packages/keta/lib/src/routing.dart, not
-      // exported from keta's public API, so mirrored below as
-      // `conflictKey`). The guard therefore keys off that same collapsed
-      // shape, not off `path`.
+      // deliberately treats them as one conflict (`conflictKey` collapses
+      // every capture to `*`). The guard therefore keys off that same
+      // collapsed shape, not off `path`.
       final conflict = conflictKey(route.method, route.segments);
       if (!routeConflicts.add(conflict)) {
         throw StateError('route conflict: $routeLabel registered twice');
@@ -411,29 +407,6 @@ Iterable<(String, Map<String, Object?>)> _pathParameters(
       index++;
     }
   }
-}
-
-/// The route-conflict key: literals verbatim, every capture collapsed to `*`
-/// so two routes that differ only in capture name still collide. Mirrors
-/// `conflictKey` in packages/keta/lib/src/routing.dart, which `App.compile`
-/// uses for exactly this check but which is not part of keta's public API
-/// (`package:keta/keta.dart` does not export it), hence the copy here rather
-/// than an import of keta's `src/`.
-///
-/// A hand-copy of a private function is a silent drift channel: nothing breaks
-/// if keta changes its collapse rule and this does not. That channel is closed
-/// by `test/conflict_key_parity_test.dart`, which imports keta's implementation
-/// directly (`package:keta/src/routing.dart` — a workspace-internal test may)
-/// and asserts the two produce identical keys over a corpus. Public, not
-/// `_`-private, solely so that test can reach it; it is not exported from the
-/// package's public API.
-String conflictKey(String method, List<Segment> segments) {
-  final buffer = StringBuffer(method);
-  for (final segment in segments) {
-    buffer.write('/');
-    buffer.write(segment is LiteralSegment ? segment.value : '*');
-  }
-  return buffer.toString();
 }
 
 String _openApiPath(List<Segment> segments) {

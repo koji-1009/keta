@@ -4,8 +4,6 @@ import 'dart:math';
 
 import 'package:keta/keta.dart';
 import 'package:keta_bus/keta_bus.dart';
-import 'package:keta_openapi/keta_openapi.dart';
-
 import 'env.dart';
 
 /// The authenticated caller's role, set by whichever verifier admitted the

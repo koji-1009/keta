@@ -1,6 +1,6 @@
 name: keta_sqlite
 description: >-
-  Ring 1 adapter binding keta_db to package:sqlite3. Supports on-disk and
+  Ring 2 adapter binding keta_db to package:sqlite3. Supports on-disk and
   in-memory databases; distribution is declared via build hooks.
 version: 0.1.0
 publish_to: none

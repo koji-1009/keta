@@ -73,18 +73,20 @@ void main() {
   );
 
   test('App.routes exposes registered routes in order with their docs', () {
+    const getDoc = RouteDoc(success: Success(), summary: 'get-user');
+    const postDoc = RouteDoc(success: Success(), summary: 'post-p');
     final app = App<Env>();
-    app.get('/users/:id', (c) => c.text(''), doc: 'get-user');
+    app.get('/users/:id', (c) => c.text(''), doc: getDoc);
     app
         .on(root.segments('p').capture(integer))
-        .post((c, p) => c.text(''), doc: 'post-p');
+        .post((c, p) => c.text(''), doc: postDoc);
     final routes = app.routes;
     expect(
       [for (final r in routes) (r.method, r.template)],
       [('GET', '/users/:id'), ('POST', '/p/:p0')],
     );
-    expect(routes[0].doc, 'get-user');
-    expect(routes[1].doc, 'post-p');
+    expect(routes[0].doc, same(getDoc));
+    expect(routes[1].doc, same(postDoc));
   });
 
   test('an empty capture name in a pattern fails fast', () {

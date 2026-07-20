@@ -1,6 +1,4 @@
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
-
 import 'env.dart';
 
 /// Who the request is. A verifier puts this in the request store; handlers read

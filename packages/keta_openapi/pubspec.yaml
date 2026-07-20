@@ -1,7 +1,7 @@
 name: keta_openapi
 description: >-
-  Ring 2 for keta: the Schema constant type, RouteDoc, and the route-table walk
-  that emits OpenAPI 3.1 from runtime values.
+  Ring 1 for keta: the route-table walk that emits an OpenAPI 3.1 document from
+  the RouteDoc/Schema declarations owned by keta core. Pure derivation.
 version: 0.1.0
 publish_to: none
 

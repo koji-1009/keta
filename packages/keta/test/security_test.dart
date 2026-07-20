@@ -9,7 +9,6 @@ library;
 
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
 
 class Env {}

@@ -29,6 +29,7 @@ workspace:
   - packages/keta_bus
   - packages/keta_native
   - packages/keta_oidc
+  - packages/keta_oidc_boringssl
   - examples/register
   - examples/files
   - examples/auth

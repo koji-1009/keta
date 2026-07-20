@@ -191,12 +191,22 @@ class KetaCanonicalRuleTest extends AnalysisRuleTest {
       'Point',
       'keta_canonical_missing',
     );
+    // A Schema-declared DTO with NEITHER mapper is the missing case (a one-way
+    // projection — exactly one mapper — is legitimate and never fires missing).
+    // `Schema` is a tiny inline stub so the fixture carries no unrelated
+    // analyzer diagnostics, and `Point` stays the first declaration so its name
+    // token keeps offset 6.
     await assertDiagnostics(
       r'''
 class Point {
   final int x;
-  Point(this.x);
-  Map<String, Object?> toJson() => {'x': x};
+  Point({required this.x});
+}
+const pointSchema = Schema('Point', {'type': 'object', 'properties': {'x': {'type': 'integer'}}});
+class Schema {
+  const Schema(this.name, this.def);
+  final String name;
+  final Object def;
 }
 ''',
       [
@@ -204,9 +214,7 @@ class Point {
           6,
           5,
           name: 'keta_canonical_missing',
-          messageContainsAll: [
-            '[$id] class Point has final fields but no fromJson factory',
-          ],
+          messageContainsAll: ['[$id] class Point has a Schema constant but'],
         ),
       ],
     );

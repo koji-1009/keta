@@ -57,11 +57,11 @@ import 'principal.dart';
 /// of a route — including an SSE (`c.sse`) or WebSocket (`Response.upgrade`)
 /// route: verification runs and can answer 401 *before* the handler ever builds
 /// the upgrade value, because the upgrade is an ordinary return value the auth
-/// gate sees first. Pair with keta_openapi by declaring `bearer` on a route's
-/// `RouteDoc` for the OpenAPI projection and enforcing it at runtime with
-/// `oidc()`; the two are independent (openapi documents, `oidc()` enforces — and
-/// owns the RFC 6750 challenge a boolean `enforceSecurity` verifier cannot
-/// express).
+/// gate sees first. Pair with the declaration contract by putting `bearer` on a
+/// route's `RouteDoc` (keta) for the OpenAPI projection and enforcing it at
+/// runtime with `oidc()`; the two are independent (the document declares,
+/// `oidc()` enforces — and owns the RFC 6750 challenge a boolean
+/// `enforceSecurity` verifier cannot express).
 Middleware<E> oidc<E>({
   required JwksSource jwks,
   required JwtValidator validator,

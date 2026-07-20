@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:keta/keta.dart';
 import 'package:keta_native/testing.dart';
 import 'package:keta_oidc/keta_oidc.dart';
+import 'package:keta_oidc_boringssl/keta_oidc_boringssl.dart';
 
 import 'app.dart';
 import 'env.dart';

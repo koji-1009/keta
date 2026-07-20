@@ -10,7 +10,6 @@
 library;
 
 import 'package:keta/keta.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 import 'package:test/test.dart';
 
 /// A schema whose sole `message` StateError contains every fragment listed.

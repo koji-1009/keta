@@ -2,8 +2,9 @@ library;
 
 import 'dart:async';
 
-import 'package:keta/keta.dart';
-
+import 'app.dart';
+import 'context.dart';
+import 'response.dart';
 import 'route_doc.dart';
 
 /// The runtime counterpart of the `security` declarations: the schemes required
@@ -35,10 +36,7 @@ class SecurityPolicy<E> {
 /// It stays on the synchronous path (no [Future] allocated) when the route is
 /// public or a verifier answers synchronously, so a public request pays nothing.
 Middleware<E> enforceSecurity<E>(SecurityPolicy<E> policy) => (c, next) {
-  final doc = c.routeDoc;
-  final required = doc is RouteDoc && doc.security != null
-      ? doc.security!
-      : policy.defaults;
+  final required = c.routeDoc?.security ?? policy.defaults;
   if (required.isEmpty) return next(c);
   return _admit(c, next, required, policy, 0);
 };

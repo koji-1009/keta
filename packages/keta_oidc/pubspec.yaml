@@ -1,6 +1,6 @@
 name: keta_oidc
 description: >-
-  Ring 3 OIDC resource server for keta: JWT validation (RS256/ES256 family),
+  Ring 1 OIDC resource server for keta: JWT validation (RS256/ES256 family),
   JWKS fetch with kid-based caching, principal injection, and scope
   authorization. Verification-only by design; token issuance and IdP client
   flows are out of scope.
@@ -14,7 +14,7 @@ resolution: workspace
 
 dependencies:
   keta: ^0.1.0
-  keta_native: ^0.1.0
 
 dev_dependencies:
+  keta_native: ^0.1.0
   test: ^1.25.0

@@ -1,6 +1,6 @@
 # keta
 
-The Ring 0 core of [keta](../../README.md): router, `Context`, middleware, the `serve` lifecycle, `Log`, the HTTP/1.1 transport, and the `TestClient` harness. It depends on nothing but the Dart SDK — the only entry in `pubspec.yaml` is `test`, which resolves solely to back the shipped `package:keta/test.dart` harness and is tree-shaken out of `dart compile exe` binaries. Everything above it (database, OpenAPI, OIDC, ...) is an outer ring that can be peeled off without touching this package; see the root README's [package table](../../README.md#packages).
+The Ring 0 core of [keta](../../README.md): router, `Context`, middleware, the `serve` lifecycle, `Log`, the HTTP/1.1 transport, the `TestClient` harness, and the declaration contract — `Schema` validation, `RouteDoc`, and the `SecurityPolicy`/`enforceSecurity` runtime gate. The server depends on nothing but the Dart SDK; the package also ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) — a separate import for test code, which is why `test` appears in the pubspec. Everything above it (database, OpenAPI emission, OIDC, ...) is an outer ring that can be peeled off without touching this package; see the root README's [package table](../../README.md#packages).
 
 ## Routing: two syntaxes, one `Path`
 
@@ -17,7 +17,7 @@ app.on(root.segments('users').capture(integer('id')))
    .get((c, (int,) p) => c.json({'id': p.$1}));
 ```
 
-Verbs are `get post put delete patch head options`, each taking an optional `doc:` that the core carries opaquely (keta_openapi interprets it). Paths build from `root` with `.segments('a/b')` (literals) and `.capture(...)` (built-in captures `string`, `integer`, `number`, `boolean`; a custom `Capture<T>` is a `parse` + `schema` pair whose `parse` throws `BadRequest` on invalid input). The typed tuple form covers one to four captures (`PathCapture0`–`PathCapture3`). `app.group('/prefix')` scopes middleware to a subtree. Registration fails fast: the same method + template twice is a `StateError` when the table compiles (at `serve` or `TestClient` construction — both run the same `compile`), and a duplicate capture name throws at registration. Match precedence is literal over capture, with backtracking; an unmatched path is a 404, a matched path with the wrong method is a 405 carrying the RFC 9110 `Allow` header.
+Verbs are `get post put delete patch head options`, each taking an optional `doc: RouteDoc?` — the route's OpenAPI/security contract, read by this package's own `enforceSecurity` gate and by keta_openapi's emitter. Paths build from `root` with `.segments('a/b')` (literals) and `.capture(...)` (built-in captures `string`, `integer`, `number`, `boolean`; a custom `Capture<T>` is a `parse` + `schema` pair whose `parse` throws `BadRequest` on invalid input). The typed tuple form covers one to four captures (`PathCapture0`–`PathCapture3`). `app.group('/prefix')` scopes middleware to a subtree. Registration fails fast: the same method + template twice is a `StateError` when the table compiles (at `serve` or `TestClient` construction — both run the same `compile`), and a duplicate capture name throws at registration. Match precedence is literal over capture, with backtracking; an unmatched path is a 404, a matched path with the wrong method is a 405 carrying the RFC 9110 `Allow` header.
 
 ## Context
 
@@ -82,3 +82,4 @@ The project gate is that each documented invariant has a test. The map:
 | single-process serve end-to-end and env disposal; multi-isolate serve and no-leak spawn failure | `test/serve_test.dart`, `test/serve_isolates_test.dart` |
 | bounded log backlog, oldest-first eviction, honest dropped-count reporting | `test/log_test.dart` |
 | data-shaped path form (`List<Segment>`) binds, reads via `c.param`, unbounded arity | `test/data_path_test.dart` |
+| `conflictKey`: capture names/types irrelevant to the key, literals must match verbatim, method distinguishes otherwise-identical shapes | `test/routing_test.dart` |

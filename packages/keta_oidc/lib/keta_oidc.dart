@@ -30,11 +30,10 @@
 /// * [JwksUnavailable] / [JwksDiscoveryException] / [JwksMalformed] — the typed,
 ///   non-[JwtRejection] failures of the key source itself.
 ///
-/// The production [SignatureVerifier] closes the seam with real crypto:
-///
-/// * [BoringSslVerifier] — verifies RS*/ES* signatures over BoringSSL (via
-///   `package:keta_native`), caching each key's native conversion by [Jwk]
-///   identity and doing the JOSE `r ‖ s` → DER adaptation for ES*.
+/// keta_oidc ships no [SignatureVerifier] implementation of its own — the
+/// production one, `BoringSslVerifier` (BoringSSL via `package:keta_native`),
+/// lives in the separate `keta_oidc_boringssl` package, so depending on
+/// keta_oidc alone never pulls in a BoringSSL build.
 ///
 /// The middleware layer wires it all into keta's request pipeline:
 ///
@@ -70,4 +69,3 @@ export 'src/jwt/signature_verifier.dart' show SignatureVerifier;
 export 'src/jwt/validator.dart' show JwtValidator;
 export 'src/middleware/oidc.dart' show oidc, requireScopes;
 export 'src/middleware/principal.dart' show OidcPrincipal, oidcPrincipal;
-export 'src/verify/boringssl_verifier.dart' show BoringSslVerifier;

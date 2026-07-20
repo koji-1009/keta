@@ -213,12 +213,15 @@ String templateOf(List<Segment> segments) {
 /// The route-conflict key: literals verbatim, every capture collapsed to `*`
 /// so two routes that differ only in capture names count as a conflict.
 ///
-/// keta_openapi hand-copies this rule (its `openapi.dart` has its own
-/// `conflictKey`) so `OpenApi.fromRoutes` can catch the same conflict when it
-/// runs standalone, without importing this non-exported `src/`. A change to the
-/// collapse rule here must be mirrored there; keta_openapi's
-/// `test/conflict_key_parity_test.dart` imports both and asserts they agree, so
-/// it is the test that fails first if the two drift.
+/// Exported because `App.compile` is not the only place that needs to decide
+/// whether two routes are "the same route": an OpenAPI emitter walking a
+/// route table independently (keta_openapi's `OpenApi.fromRoutes`, which can
+/// run standalone without a live [App]) must reject the same pair `App.compile`
+/// would reject and merge into one document path item everything `App.compile`
+/// would treat as one route — `/users/:id` and `/users/:userId` are one
+/// conflict, not two OpenAPI paths, because a request can only ever match one
+/// of them. This is the single public source both read; there is no longer a
+/// copy anywhere to drift.
 String conflictKey(String method, List<Segment> segments) {
   final buf = StringBuffer(method);
   for (final s in segments) {

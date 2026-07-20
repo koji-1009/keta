@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:keta/keta.dart';
 import 'package:keta_oidc/keta_oidc.dart';
+import 'package:keta_oidc_boringssl/keta_oidc_boringssl.dart';
 import 'package:keta_oidc_example/app.dart';
 import 'package:keta_oidc_example/env.dart';
 

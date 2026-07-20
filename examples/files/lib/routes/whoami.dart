@@ -1,7 +1,7 @@
+import 'package:keta/keta.dart';
 import 'package:keta_files/keta_files.dart';
 import 'package:keta_files_example/auth.dart';
 import 'package:keta_files_example/env.dart';
-import 'package:keta_openapi/keta_openapi.dart';
 
 final exported = Exported<Env>(
   get: Serve(
