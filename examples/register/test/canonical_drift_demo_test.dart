@@ -26,7 +26,7 @@ void main() {
   test('adding a field is caught, then reconciled, by canonical fix', () {
     final original = File('lib/user_dto.dart').readAsStringSync();
 
-    const ctorAnchor = 'required this.tags,\n  });';
+    const ctorAnchor = 'this.createdAt,\n  });';
     const fieldAnchor = 'final List<String> tags;';
     expect(
       original.contains(ctorAnchor) && original.contains(fieldAnchor),
@@ -42,10 +42,7 @@ void main() {
     // That gap between the field set and the three things that must mirror it
     // IS the drift this test exists to demonstrate.
     final drifted = original
-        .replaceFirst(
-          ctorAnchor,
-          'required this.tags,\n    this.nickname,\n  });',
-        )
+        .replaceFirst(ctorAnchor, 'this.createdAt,\n    this.nickname,\n  });')
         .replaceFirst(fieldAnchor, '$fieldAnchor\n  final String? nickname;');
     expect(
       drifted,

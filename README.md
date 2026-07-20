@@ -34,6 +34,12 @@ Future<void> main() async {
 
 The two routing syntaxes converge on one internal `Path` value; a documented route also emits OpenAPI 3.1 via `OpenApi.fromRoutes(app.routes, ...)`.
 
+## Engine differences are declared, not remembered
+
+SQLite stands in for PostgreSQL in tests, so the same `fromRow` runs against both — and where the two genuinely differ, the difference has to live somewhere. `db.capabilities` puts it in a value: whether the engine has a boolean storage class, whether a decimal column keeps every digit, whether temporal types are distinguished. An application asserts what it needs at boot (`db.requireCapabilities(exactDecimal: true)`) and refuses to start on an engine that cannot hold it, rather than discovering the rounded money column in production.
+
+Differences a reader can normalize faithfully are the row accessors' job — `row.boolAt('active')` reads both a `bool` and the `0`/`1` a boolean-less engine stores — and the caller declares the type, because the adapter never sees the schema. Differences no reader can recover are not papered over: `row.decimalAt` refuses a `double` outright, since by then the digits are already gone. Every refusal is a `StateError` (a 500, nothing leaked): a row comes from the server's own schema and SQL, so it is never the caller's fault. Adapters prove their declared capabilities against one shared conformance suite in `package:keta_db/test.dart`, whose expectations switch on the capabilities rather than on the engine's name.
+
 ## Middleware order is a value, not a convention
 
 A chain that runs in the wrong order fails quietly: an `ETag` computed over an already-gzipped body, a transaction that commits a request which threw, a scope check reading a principal that does not exist yet. So the position is carried by the middleware itself. `KetaOrder` holds the ranks keta's own ship with, co-authored and co-tested at one commit of this workspace, and `App.compile` refuses a chain whose ranks descend — reading app-wide middleware followed by the route's group middleware, the sequence they actually compose in.
@@ -53,7 +59,7 @@ Two axes, deliberately separate. **Ring** is measured: a package's ring is its p
 | Package | Ring | Tier | What it is |
 |---|---|---|---|
 | `keta` | 0 | Core | Router, Context, middleware and their ordering ranks, server, Log, the declaration contract — `Schema` validation, `RouteDoc`, and the `enforceSecurity` gate — and the in-package test-support library (`package:keta/test.dart`, the `TestClient` harness). The server itself depends on nothing beyond the SDK. |
-| `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, and the migration runner. |
+| `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, the migration runner, `DbCapabilities` and the row accessors that read what engines spell differently, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
 | `keta_openapi` | 1 | Recommended | The route-table walk that emits an OpenAPI 3.1 document from `RouteDoc`/`Schema` (owned by `keta`). Pure derivation — runtime assembly, no code generation — so removing it changes no runtime behavior. |
 | `keta_lints` | 1 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, field types, and middleware ordering (reading `keta`'s own ranks, so the lint and the runtime cannot disagree). |
 | `keta_files` | 1 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |

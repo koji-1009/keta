@@ -198,6 +198,17 @@ class RdsDb implements Db {
   @override
   late final DbConn writer = _PoolConn(_writerPool);
 
+  /// PostgreSQL holds all three natively, and this adapter renders each as
+  /// what the column type carries: `boolean` as a `bool`, `numeric`/`decimal`
+  /// as its exact digits in a `String`, and `timestamptz`/`timestamp`/`date`
+  /// as the ISO form the column actually says (see `values.dart`).
+  @override
+  DbCapabilities get capabilities => const DbCapabilities(
+    nativeBool: true,
+    exactDecimal: true,
+    typedTemporal: true,
+  );
+
   /// Pins one connection from the writer pool for the whole
   /// `BEGIN`..`COMMIT`/`ROLLBACK` span and runs [f] against it.
   ///

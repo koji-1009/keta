@@ -93,7 +93,7 @@ void register(App<Env> app) {
       final role = c.tryQuery<String>('role');
       final where = role == null ? '' : ' where role = ?';
       final rows = await c.env.db.reader.query(
-        'select id, name, age, role, tags from users$where '
+        'select id, name, age, role, tags, active, balance, created_at from users$where '
         'order by id limit ? offset ?',
         role == null ? [limit, offset] : [role, limit, offset],
       );
@@ -135,7 +135,7 @@ void register(App<Env> app) {
       .get(
         (c, (Role,) p) async {
           final rows = await c.env.db.reader.query(
-            'select id, name, age, role, tags from users where role = ? order by id',
+            'select id, name, age, role, tags, active, balance, created_at from users where role = ? order by id',
             [p.$1.name],
           );
           return c.json(
@@ -194,7 +194,7 @@ void register(App<Env> app) {
     '/users/:id',
     (c) async {
       final rows = await c.env.db.reader.query(
-        'select id, name, age, role, tags from users where id = ?',
+        'select id, name, age, role, tags, active, balance, created_at from users where id = ?',
         [c.param<String>('id')],
       );
       if (rows.isEmpty) throw const NotFound('user not found');
@@ -246,8 +246,21 @@ void register(App<Env> app) {
     (c, _) async {
       final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));
       await c.get(txConn).execute(
-        'insert into users (id, name, age, role, tags) values (?, ?, ?, ?, ?)',
-        [dto.id, dto.name, dto.age, dto.role.name, dto.tags.join(',')],
+        'insert into users (id, name, age, role, tags, active, balance, '
+        'created_at) values (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          dto.id,
+          dto.name,
+          dto.age,
+          dto.role.name,
+          dto.tags.join(','),
+          // A boolean is written the way this engine stores one; capabilities
+          // says which that is, so the branch is a declaration rather than a
+          // guess about the driver.
+          c.env.db.capabilities.nativeBool ? dto.active ?? true : 1,
+          dto.balance,
+          DateTime.now().toUtc().toIso8601String(),
+        ],
       );
       // Publish only after the write succeeds: a duplicate id throws Conflict
       // above and this line never runs, so the feed never announces a create
@@ -290,8 +303,16 @@ void register(App<Env> app) {
         );
       }
       final changed = await c.get(txConn).execute(
-        'update users set name = ?, age = ?, role = ?, tags = ? where id = ?',
-        [dto.name, dto.age, dto.role.name, dto.tags.join(','), pathId],
+        'update users set name = ?, age = ?, role = ?, tags = ?, balance = ? '
+        'where id = ?',
+        [
+          dto.name,
+          dto.age,
+          dto.role.name,
+          dto.tags.join(','),
+          dto.balance,
+          pathId,
+        ],
       );
       if (changed == 0) throw const NotFound('user not found');
       c.env.bus.publish(usersTopic, {'kind': 'updated', 'id': pathId});

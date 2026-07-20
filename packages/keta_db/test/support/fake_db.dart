@@ -67,6 +67,13 @@ class FakeDb implements Db {
   late final DbConn writer = _DirectConn(this, 'writer');
 
   @override
+  DbCapabilities capabilities = const DbCapabilities(
+    nativeBool: true,
+    exactDecimal: true,
+    typedTemporal: true,
+  );
+
+  @override
   Future<T> transaction<T>(Future<T> Function(DbConn conn) f) async {
     if (_inTx) throw StateError('transactions do not nest');
     _inTx = true;
