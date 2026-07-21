@@ -1,12 +1,47 @@
 # keta — agent guide
 
-keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK
-^3.12). Routing, middleware, transactions, lifecycle, and OpenAPI output are
-carried by a constructor graph and routes-as-values. User code reads as plain
-Dart. This file is enough to write handlers, DTOs, mappers, schema constants,
-and tests by hand.
+keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK ^3.12). Routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values. User code reads as plain Dart. This file is enough to write handlers, DTOs, mappers, schema constants, and tests by hand.
 
-Packages: `keta` (core — routing, Context, middleware, plus the `Schema`/`RouteDoc`/`SecurityPolicy` declaration contract), `keta_db` + `keta_sqlite` + `keta_rds` (database), `keta_openapi` (OpenAPI 3.1 emission from the route table — a pure derivation, no contract types of its own), `keta_oidc` (Bearer-JWT resource server behind a `SignatureVerifier` seam; `keta_oidc_boringssl` supplies the default BoringSSL-backed implementation, over `keta_native`). Dependencies flow inward; `keta`'s server depends on nothing beyond the SDK, and the package ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
+Dependencies flow inward. `keta`'s server depends on nothing beyond the SDK, and the package ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
+
+## Packages
+
+| Package | What it is |
+|---|---|
+| `keta` | Router, `Context`, middleware, declaration contract (`Schema`/`RouteDoc`/`SecurityPolicy`), server, `Log`, and `TestClient` (via the separate `package:keta/test.dart`). |
+| `keta_db` | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, migrations, `DbCapabilities`, row accessors, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
+| `keta_openapi` | OpenAPI 3.1 emitter — a pure derivation from the route table, no contract types of its own. |
+| `keta_lints` | Stable-ID diagnostics plus the materializing `check`/`fix` loop; an analyzer plugin over the same engine puts identical findings in the IDE. |
+| `keta_files` | File-based routing — a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
+| `keta_static` | Static assets as a prefix-scoped middleware (`ETag`/`304`, byte `Range`, `Cache-Control`, media types) with `AssetSource` as the bytes seam. |
+| `keta_multipart` | `multipart/form-data` reception as a `Stream<Part>`, bounded by `MultipartLimits`; boundary parsing via `package:mime`. |
+| `keta_otel` | `traceparent` → OTLP/HTTP JSON exporter, plus a `/metrics` endpoint — every label axis bounded (no attacker-controlled cardinality). |
+| `keta_oidc` | Bearer-JWT resource server — asymmetric-only, verification-only (`HS*`, `alg: none`, and `PS*` rejected). |
+| `keta_sqlite` | SQLite adapter over `package:sqlite3` (`:memory:` supported). |
+| `keta_rds` | PostgreSQL adapter over `package:postgres` — bounded pool, `SQLSTATE` → keta-exception translation, migrations. |
+| `keta_oidc_boringssl` | Default `SignatureVerifier` for `keta_oidc`, backed by `keta_native`'s BoringSSL build. |
+| `keta_bus` | Standalone pub/sub seam (no keta dependency): `InMemoryBus` (one isolate) and `IsolateBus` (fanout across the worker isolates of `serve(isolates: n)`), at-most-once. |
+| `keta_native` | Standalone BoringSSL-backed native crypto via `dart hooks` (SHA-2 digests, HMAC, RSA/ECDSA signature verification); BoringSSL built from a pinned commit at hook time. |
+
+## Contents
+
+- [Routing](#routing)
+- [Context](#context)
+- [Serve and lifecycle](#serve-and-lifecycle)
+- [Errors and middleware](#errors-and-middleware)
+- [Typed headers](#typed-headers)
+- [Middleware order](#middleware-order)
+- [Admission control](#admission-control)
+- [Canonical forms](#canonical-forms-write-these-exactly)
+- [Contract loop (keta_lints)](#contract-loop-keta_lints)
+- [List endpoints](#list-endpoints)
+- [OpenAPI](#openapi)
+- [OIDC (keta_oidc)](#oidc-keta_oidc)
+- [SSE and WebSocket](#sse-and-websocket)
+- [Cross-isolate bus (keta_bus)](#cross-isolate-bus-keta_bus)
+- [Static assets (keta_static)](#static-assets-keta_static)
+- [Database](#database)
+- [Testing](#testing)
 
 ## Routing
 
@@ -30,34 +65,62 @@ app.on(root.segments('users').capture(string('uid')).segments('posts').capture(i
 
 A custom capture is a `parse` + `schema` pair: `Capture<T>(T Function(String) parse, {String? name, required Map<String, Object?> schema})`; `parse` must throw `BadRequest` on invalid input (every other exception is a defect → 500).
 
-Verbs: `get post put delete patch head options`. Registering the same
-method+template twice is a boot-time `StateError`. Match precedence is literal
-over capture. `app.group('/prefix')..use(m)` scopes middleware to a subtree.
+Verbs: `get post put delete patch head options`. Registering the same method+template twice is a boot-time `StateError`. Match precedence is literal over capture. `app.group('/prefix')..use(m)` scopes middleware to a subtree.
 
 ## Context
 
 `c.env` (your environment), `c.method`, `c.uri`, `c.routeTemplate` (the matched route's template, e.g. `/users/:id`; `null` when nothing matched) — the bounded-cardinality dimension for metrics, spans, and hand-rolled logging; a raw request path is attacker-controlled and unbounded, so it must never feed a label axis, and there is no `c.route` that falls back to it. `c.header('name')` (lower-cased, first value), `c.headerAll('name')` (every value, multi-value symmetry), `c.remoteAddress`. `c.cookie('name')` / `c.cookies` read request cookies (parsed once from the `Cookie` header, RFC 6265 pair syntax; malformed pairs skipped, first-wins on duplicates, values kept as opaque octets). To set a cookie, render a `SetCookie` value onto ordinary multi-value headers — there is no second channel: `c.json(v, headers: {'set-cookie': [SetCookie('sid', 'abc', maxAge: Duration(hours: 1), httpOnly: true, secure: true, sameSite: SameSite.lax).toHeaderValue()]})`. `SetCookie(name, value, {maxAge, expires, domain, path, secure, httpOnly, sameSite})` validates name/value/domain/path at construction (a `;`, control char, etc. throws `ArgumentError` — header injection is unrepresentable) and enforces that `SameSite.none` requires `secure: true` (RFC 6265bis); `expires` is emitted as an IMF-fixdate in UTC. `c.param<T>('name')` parses a path capture — String/int/double/bool (bad input → 400). Query parameters share `param`'s type-parsing contract (String/int/double/bool) but not its presence guarantee — a path capture is always present because the route matched, whereas a query parameter may be absent, so the absence behavior is the accessor's, not a symmetry: `c.query<T>('name')` (absence → 400, the required form — required-ness is expressed by which accessor you call, not by a flag), `c.tryQuery<T>('name')` (absence → null, the optional form), `c.queryAll<T>('name')` (repeated `?tag=a&tag=b` keys; absence → `[]`). `c.get<T>(key)` / `c.tryGet` / `c.set` use identity `Key<T>('name')` (never const). `c.body()` decodes JSON (cached; bad JSON → 400; over the size limit → 413); `c.bodyBytes()` / `c.bodyStream()` for raw. `c.aborted` completes on timeout or disconnect (cooperative). Responses: `c.json(value, {status})`, `c.text(str, {status})` — `status` is named (Dart forbids optional-positional after named). `c.log` is `env.log` with reqId and route baked in — the matched template, or the fixed placeholder `unmatchedRoute` (`'(unmatched)'`, exported by keta) when nothing matched, so even ad hoc logging never keys on the raw path either. `c.routeDoc` is the matched route's `RouteDoc?` (from `package:keta`, present when the route declared one) — the router carries it without interpreting it; `enforceSecurity` (below) and keta_openapi's emitter are what read it.
 
-## Errors & middleware
+## Serve and lifecycle
 
-`KetaException` is sealed — everything a handler may throw or a client may receive is one named subtype, each `const Xxx(message, [detail])`: `BadRequest` (400, the canonical parse/validation failure), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `PayloadTooLarge` (413, `maxBodyBytes` exceeded), `UnprocessableEntity` (422), `NotImplementedYet` (501), `Unavailable` (503, nothing was reached at all — unreachable server, exhausted pool, a lock never taken), `TransientFailure` (503, distinct from `Unavailable` — the request *did* reach a healthy system and lost a concurrency race there, e.g. a serialization failure or a deadlock the engine broke; retryability is the type, not a flag, so `is TransientFailure` is the retry check, and keta itself never retries — only the application knows whether replaying is idempotency-safe), `GatewayTimeout` (504, `timeout()`). For a status with no named subtype, use the factory `KetaException.status(status, message, [detail])`. The one-sentence rule: throw a `KetaException` subtype and the response carries its status; every other exception (`ArgumentError`, `StateError`, `FormatException`, ...) is a defect → 500, logged, no detail leaked. A non-removable last-resort fallback converts any uncaught error just before the transport: `KetaException` → its status + `{"error": message}`, anything else → 500 + empty body + logged. `recover()` is the customizable form of the same — being sealed, an exhaustive `switch` works when you override it. Built-in middleware: `accessLog()`, `recover()`, `cors(allowOrigins: [...])`, `etag()`, `gzip({threshold: 1024})`, `rateLimit(key:, capacity:, refillPeriod:)`, `concurrencyLimit(maxInFlight:)`, `timeout(Duration)`, `tracing()`. Apply with `app.use(...)`; they run in registration order, app-wide before group. `etag()` adds a strong `ETag` (FNV-1a 64 over the buffered body — no crypto dep; a cache validator needs a fast fingerprint, not collision resistance) to 200s and answers a matching conditional `GET`/`HEAD` with `304` (weak comparison, `*`, and comma lists per RFC 9110; content headers dropped; stream bodies and non-200s pass through). `gzip()` compresses a buffered `String`/`List<int>` body when the request accepts gzip (honoring `gzip;q=0`), adds `Content-Encoding: gzip` and `Vary: Accept-Encoding`, and skips compression for streams, already-encoded bodies, 204/304, or bodies under `threshold`; the transport then frames the correct post-compression `Content-Length`. Recommended ordering when both are used: register `gzip()` before `etag()` (gzip outer, etag inner) so the tag is computed over the un-encoded body — deterministic regardless of the compressor (RFC 9110 §8.8.3 permits a pre-encoding validator).
+`App<E>` is generic on your environment type `E` — an ordinary Dart class holding whatever a request needs (`db`, `bus`, configuration). `App<void>` is the env-less form (`boot` returns `null`, `c.env` is `null`). Start with `app.serve(Future<E> Function() boot, {int port = 8080, int isolates = 1, Transport? transport, int maxBodyBytes = 1 << 20})`. `boot` runs once per isolate, and every isolate owns and later closes its own env — the signature (`Future<E>` returned from `boot`) makes "boots N times" visible rather than passing one instance that cannot cross an isolate boundary. With `isolates > 1`, `boot` and handlers must be sendable (top-level or static tear-offs, or closures over sendable state); a non-sendable one fails fast with a `StateError` when the isolate is spawned. A custom `transport` is only supported with a single isolate. Returns a `Server` whose `shutdown({Duration grace = Duration(seconds: 30)})` drains in-flight work and — when `E is Disposable` — calls `env.close()` last. A failed worker spawn tears down what already started (kills spawned workers, closes worker-0's socket, disposes worker-0's env) rather than leaking a bound port and an un-closed env.
+
+Two optional env contracts change the framework's default behavior. `HasLog` (`Log get log`) — when `E` implements it, `c.log` and access logs flow through `env.log` (with `reqId` and `route` baked in); otherwise the framework falls back to a default `StdoutLog`. `Disposable` (`Future<void> close()`) — when `E` implements it, `Server.shutdown` calls `close()` after draining.
+
+`Log` is a structured logger: `debug(msg, [fields])`, `info(msg, [fields])`, `warn(msg, [fields])`, `error(msg, [error, st, fields])`, `flush()`, and `withFields(fields)` for a view that adds `fields` to every subsequent line. `StdoutLog` writes one JSON line per event (`{"ts","level","msg", ...fields}`) through a non-blocking sink with a bounded backlog (default 8 MiB): a stalled log collector costs the oldest lines — dropped and honestly reported in-band on the next successful drain — never the server. Every isolate flushes on a timer and on shutdown.
+
+```dart
+class MyEnv implements HasLog, Disposable {
+  MyEnv(this.db, this.log);
+  final Db db;
+  @override final Log log;
+  @override Future<void> close() => db.close();
+}
+
+Future<void> main() async {
+  final app = App<MyEnv>();
+  routes(app);
+  await app.serve(
+    () async => MyEnv(await SqliteDb.open('app.db'), StdoutLog()),
+    port: 8080,
+    isolates: 4,
+  );
+}
+```
+
+## Errors and middleware
+
+`KetaException` is sealed — everything a handler may throw or a client may receive is one named subtype, each `const Xxx(message, [detail])`: `BadRequest` (400, the canonical parse/validation failure), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `PayloadTooLarge` (413, `maxBodyBytes` exceeded), `UnprocessableEntity` (422), `NotImplementedYet` (501), `Unavailable` (503, nothing was reached at all — unreachable server, exhausted pool, a lock never taken), `TransientFailure` (503, distinct from `Unavailable` — the request *did* reach a healthy system and lost a concurrency race there, e.g. a serialization failure or a deadlock the engine broke; retryability is the type, not a flag, so `is TransientFailure` is the retry check, and keta itself never retries — only the application knows whether replaying is idempotency-safe), `GatewayTimeout` (504, `timeout()`). For a status with no named subtype, use the factory `KetaException.status(status, message, [detail])`. The one-sentence rule: throw a `KetaException` subtype and the response carries its status; every other exception (`ArgumentError`, `StateError`, `FormatException`, ...) is a defect → 500, logged, no detail leaked. A non-removable last-resort fallback converts any uncaught error just before the transport: `KetaException` → its status + `{"error": message}`, anything else → 500 + empty body + logged. `recover()` is the customizable form of the same — being sealed, an exhaustive `switch` works when you override it.
+
+Built-in middleware: `accessLog()`, `recover()`, `cors(allowOrigins: [...])`, `etag()`, `gzip({threshold: 1024})`, `rateLimit(key:, capacity:, refillPeriod:)`, `concurrencyLimit(maxInFlight:)`, `timeout(Duration)`, `tracing()`. Apply with `app.use(...)`; they run in registration order, app-wide before group. `etag()` adds a strong `ETag` (FNV-1a 64 over the buffered body — no crypto dep; a cache validator needs a fast fingerprint, not collision resistance) to 200s and answers a matching conditional `GET`/`HEAD` with `304` (weak comparison, `*`, and comma lists per RFC 9110; content headers dropped; stream bodies and non-200s pass through). `gzip()` compresses a buffered `String`/`List<int>` body when the request accepts gzip (honoring `gzip;q=0`), adds `Content-Encoding: gzip` and `Vary: Accept-Encoding`, and skips compression for streams, already-encoded bodies, 204/304, or bodies under `threshold`; the transport then frames the correct post-compression `Content-Length`. Recommended ordering when both are used: register `gzip()` before `etag()` (gzip outer, etag inner) so the tag is computed over the un-encoded body — deterministic regardless of the compressor (RFC 9110 §8.8.3 permits a pre-encoding validator).
+
+## Typed headers
 
 Headers have types. `HeaderCodec<T>` converts a header's raw values to a type and back; `HeaderAccessor<T>` binds a lower-cased name to a codec and is `const`, so an application declares its own beside its routes (`const traceId = HeaderAccessor('x-trace-id', HeaderCodec(decode: …, encode: …))`). Read with `c.headerAs(authorization)` (absent → 400) or `c.tryHeaderAs(authorization)` (absent → null) — required-ness is which accessor you call, as with `c.query`/`c.tryQuery`. Write with `headers: cacheControl.write(const CacheControl(isPublic: true, maxAge: Duration(hours: 1)))`. **A malformed header is a `BadRequest` (400)** — it came off the wire, so it is the caller's, the opposite posture from a DB row's `StateError`/500. Shipped: `authorization` (`Authorization(scheme, credentials)`; the credential format is the scheme's business, not the type's), `cacheControl` (`CacheControl`; an unmodelled directive is dropped, not refused), `acceptEncoding` (`AcceptEncoding.qualityOf`/`wildcard`/`accepts`/`acceptsAny` — a named coding beats `*`, and `q=0` is a refusal), `ifNoneMatch` (`EntityTagCondition.matches`, weak comparison, `*`), `range` (`ByteRange.resolve(length)` → `(start, end)` or null when unsatisfiable), and `setCookies` for the multi-value `Set-Cookie`. `range` is the one header that is *ignored* rather than refused when unreadable (RFC 9110 requires serving the whole representation), so it decodes to absent instead of throwing. `gzip()` and `etag()` read through these codecs — the parsing has one home, not one per reader.
 
+## Middleware order
+
 Ordering is carried by ranks the middleware themselves hold, not by a checklist. `MiddlewareOrder` is a comparison contract (`int rank`, `String name`) and nothing more; `KetaOrder` holds the positions keta's own middleware ship with — `observe` (accessLog) → `crossOrigin` (cors) → `recover` → `shed` (rateLimit, concurrencyLimit) → `deadline` (timeout) → `negotiate` (gzip) → `validate` (etag) → `authenticate` (enforceSecurity, oidc) → `authorize` (requireScopes) → `resource` (tx), spaced by `KetaOrder.spacing` (1000). `cors()` sits outside `recover()` and `timeout()` deliberately: a 500 or a 504 needs its CORS headers too. `App.compile` (so `serve` and `TestClient` alike) throws a `StateError` naming both when a chain's ranks descend, reading app-wide middleware followed by the route's group middleware — the sequence they actually compose in, which is per route because group middleware is snapshotted at registration. The **vocabulary is yours**: declare it as a sealed class implementing `MiddlewareOrder`, so a stage can carry a value and recur at two depths — `rateLimit` keyed by IP belongs before authentication and keyed by principal after it, and both are shedding: `..use(rateLimit(key: byIp, ...), order: const Shed(3000))` … `..use(rateLimit(key: byPrincipal, ...), order: const Shed(7500))`. `app.use(m)` / `group.use(m)` take an optional `order:` that overrides whatever the middleware was tagged with; a middleware with no position is unconstrained and constrains nothing, and a stack that declares nothing is checked against nothing. `ordered(m, position)` tags your own middleware at its definition site, and `orderOf(m)` reads the tag. The `keta_middleware_order` lint reports a descending pair inside one visible run of `use()` calls (editor speed, partial by construction); `App.compile` is what guarantees the order.
+
+## Admission control
 
 Admission control sheds load, cheaply, before it's spent: `rateLimit<E>({required Object? Function(Context<E>) key, required int capacity, required Duration refillPeriod})` is a per-key token bucket — a `key` returning `null` exempts the request entirely (no bucket touched); a request that finds an empty bucket is refused `429` with a `Retry-After` (whole seconds, always honest since refill is deterministic) — there is no 429 `KetaException` member, admission control answers with a bare `Response.json` directly. `concurrencyLimit<E>({required int maxInFlight})` sheds past an in-flight ceiling with a bare `503` (no `Retry-After` — a free-slot time is unknowable); a slot is held from request entry to the *`Response` value* being produced (return or throw), never a streamed body's or upgraded socket's lifetime, so idle SSE/WS clients cannot pin every slot forever. Both are per-isolate, not process-wide: under `serve(isolates: n)` neither limiter coordinates across isolates, so the effective limit is the configured one × `n` — size the per-isolate value as `desired / isolates` for an exact global bound. Placement: `rateLimit` keyed by IP (or any request-only attribute) goes *before* auth, so a flood is refused before authentication work is spent; keyed by authenticated principal it goes *after* the auth middleware that sets it (a `null` key exempting requests before the principal exists is the wrong outcome for a login flood). `concurrencyLimit` goes outermost among real-work middleware. Both sit just inside `accessLog()` so a shed 429/503 is still logged.
 
 ## Canonical forms (write these exactly)
 
-Scope: primitives (String/int/double/bool), `T?` (optional, omitted from
-`required` and from `toJson` when null), `List<T>`, nested DTOs (`$ref` + deps),
-enums (plain form: values are `name` strings; the enhanced wire form below when a
-wire value isn't a plain identifier), and sealed types (oneOf + discriminator).
-Generics are out of scope.
+Scope: primitives (String/int/double/bool), `T?` (optional, omitted from `required` and from `toJson` when null), `List<T>`, nested DTOs (`$ref` + deps), enums (plain form: values are `name` strings; the enhanced wire form below when a wire value isn't a plain identifier), and sealed types (oneOf + discriminator). Generics are out of scope.
 
-The complete DTO shape — hand-written, agent-written, and lint-materialized code
-must be identical:
+The complete DTO shape — hand-written, agent-written, and lint-materialized code must be identical:
 
 ```dart
 enum Role { admin, member }
@@ -101,15 +164,11 @@ const userDtoSchema = Schema('UserDto', {
 });
 ```
 
-Nested DTO: in `fromJson`, `Other.fromJson(json['x'] as Map<String, Object?>)`;
-in the schema, `'x': {'\$ref': '#/components/schemas/Other'}` and
-`deps: [otherSchema]`.
+Nested DTO: in `fromJson`, `Other.fromJson(json['x'] as Map<String, Object?>)`; in the schema, `'x': {'\$ref': '#/components/schemas/Other'}` and `deps: [otherSchema]`.
 
-Optional `factory X.fromRow(Map<String, Object?> row)` builds from a DB row —
-same shape as `fromJson`, but numeric-origin values are converted explicitly.
+Optional `factory X.fromRow(Map<String, Object?> row)` builds from a DB row — same shape as `fromJson`, but numeric-origin values are converted explicitly.
 
-Sealed with a discriminator — `switch` on the `type` field (lowerCamel variant
-names); schema is `oneOf` + `discriminator`, each variant an ordinary DTO:
+Sealed with a discriminator — `switch` on the `type` field (lowerCamel variant names); schema is `oneOf` + `discriminator`, each variant an ordinary DTO:
 
 ```dart
 sealed class Event {
@@ -122,13 +181,7 @@ sealed class Event {
 }
 ```
 
-Enhanced enum — when a wire value is not a plain Dart identifier (a hyphen, a
-leading digit) or is a reserved word, the enum carries the wire string. The Dart
-name is derived deterministically (already-valid → verbatim; else split on
-non-alphanumerics and camel-join, `super-user`→`superUser`; leading digit → `$2fa`;
-reserved word → `default_`). The Schema lists the WIRE strings, never the Dart
-names. A plain enum (all wire values already identifiers) stays `enum Role { admin,
-member }` with `Role.values.byName(...)`/`.name`:
+Enhanced enum — when a wire value is not a plain Dart identifier (a hyphen, a leading digit) or is a reserved word, the enum carries the wire string. The Dart name is derived deterministically (already-valid → verbatim; else split on non-alphanumerics and camel-join, `super-user`→`superUser`; leading digit → `$2fa`; reserved word → `default_`). The Schema lists the WIRE strings, never the Dart names. A plain enum (all wire values already identifiers) stays `enum Role { admin, member }` with `Role.values.byName(...)`/`.name`:
 
 ```dart
 enum Role {
@@ -145,18 +198,23 @@ enum Role {
 const roleSchema = Schema('Role', {'type': 'string', 'enum': ['admin', 'super-user']});
 ```
 
-Field mappers use `Role.fromWire(json['role'] as String)` / `role.wire` (scalar) and
-`(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()` /
-`roles.map((e) => e.wire).toList()` (list). `fromWire` throws `BadRequest`, so a file
-with an enhanced enum imports `package:keta/keta.dart`.
+Field mappers use `Role.fromWire(json['role'] as String)` / `role.wire` (scalar) and `(json['roles'] as List).map((e) => Role.fromWire(e as String)).toList()` / `roles.map((e) => e.wire).toList()` (list). `fromWire` throws `BadRequest`, so a file with an enhanced enum imports `package:keta/keta.dart`.
 
-A single `Schema` constant is one source of truth: OpenAPI output,
-`schema.validate(value)` (list of violations) and `schema.require(value)`
-(throws `BadRequest` with the violation list as `detail` on any violation),
-and contract tests.
+A single `Schema` constant is one source of truth: OpenAPI output, `schema.validate(value)` (list of violations) and `schema.require(value)` (throws `BadRequest` with the violation list as `detail` on any violation), and contract tests.
 
-Usage: `final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));`
-(`requireMap` requires, then hands the result back typed as `Map<String, Object?>` — the shape every write handler needs before `fromJson`. `require` remains the untyped primitive — `Object? require(Object?)`, unchanged — for a schema that isn't `type: object`.)
+Usage: `final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));` (`requireMap` requires, then hands the result back typed as `Map<String, Object?>` — the shape every write handler needs before `fromJson`. `require` remains the untyped primitive — `Object? require(Object?)`, unchanged — for a schema that isn't `type: object`.)
+
+## Contract loop (keta_lints)
+
+`keta_lints` makes canonical-form drift a loud, correlatable failure instead of a runtime surprise. Every diagnostic prints as `[<id>] <rule>: <message> (<file>)`, where `<id>` is a stable 16-hex hash of `file|scope|rule` (package-relative path), so an agent (or a suppression list) can correlate it across runs, machines, and the CLI ⇄ analyzer-plugin boundary — a squiggle in the editor and a red CI line are the same finding. Materializing `fix` reconciles the canonical form in place when it disagrees with the class, so the loop closes deterministically without human judgment on the intermediate step:
+
+```bash
+dart run keta_lints:check canonical lib/   # report drift; exits 1 on any finding
+dart run keta_lints:fix canonical lib/     # materialize / reconcile in place
+dart run keta_lints:check canonical lib/   # verify converged (exits 0)
+```
+
+Subcommands (each over files or directories, except `drift`, which takes two documents): `canonical` (`fromJson`/`toJson`/`Schema` drift on DTOs), `routes` (route ⇄ `RouteDoc` coverage), `query` (`c.query` vs `c.tryQuery` misuse against handler-side null semantics), `internal-await` (a discarded `Future` inside keta code that should be awaited), `key` (`Key<T>` const misuse — identity keys must not be const), `tx` (transaction boundary correctness, including `keta_tx_outside_recover`), and `drift <oracle.yaml> <shadow.yaml>` (compares an oracle and a shadow OpenAPI document). See `packages/keta_lints/README.md` for the rule catalogue and full semantics.
 
 ## List endpoints
 
@@ -199,7 +257,7 @@ app.get(
 
 ## OpenAPI
 
-Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., description: ..., tags: ['users'], operationId: 'getUser', failureResponses: {code: schema_or_Failure}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe; a schema on a 204/304 is an emit-time error). `description` (prose) and `tags` (grouping, aggregated sorted+deduped into the document's top-level `tags`) are optional; `operationId` is optional but **document-wide-unique** — two routes with the same id is a hard error at emit, naming both. `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route); each value is a bare `Schema` (defaults to `application/json`) or a `Failure(schema, {contentType: 'application/json'})` for a non-JSON error body (`text/plain`, `application/problem+json`). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag. A WebSocket route documents its 101 with `doc: RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` instead of a `success` (see the SSE & WebSocket section).
+Attach `doc: RouteDoc(success: Success(status: 200, schema: schema, contentType: 'application/json'), requestBody: schema, requestBodyType: 'application/json', summary: ..., description: ..., tags: ['users'], operationId: 'getUser', failureResponses: {code: schema_or_Failure}, security: [...], query: [...])` to a route. `success` is required: a doc with no 2xx/3xx is unrepresentable, so the emitter never guesses (`POST` answers 201, `DELETE` answers 204 — declare it, don't let it default to 200). `Success.schema` is `null` when there's nothing to document (a 204, a `text/plain` probe; a schema on a 204/304 is an emit-time error). `description` (prose) and `tags` (grouping, aggregated sorted+deduped into the document's top-level `tags`) are optional; `operationId` is optional but **document-wide-unique** — two routes with the same id is a hard error at emit, naming both. `failureResponses` keys must be 400–599 (a 2xx/3xx there is an emit-time error naming the route); each value is a bare `Schema` (defaults to `application/json`) or a `Failure(schema, {contentType: 'application/json'})` for a non-JSON error body (`text/plain`, `application/problem+json`). `query: [QueryParam(name, capture, {required: false})]` reuses `Capture` for its `schema` fragment (projected to `in: query`); required-ness is enforced by the handler's accessor choice (`c.query` vs `c.tryQuery`), not by this flag. A WebSocket route documents its 101 with `doc: RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` instead of a `success` (see the SSE and WebSocket section).
 
 Validation has two postures and never a third: a malformed *schema* fragment (an `items` that isn't an object, a `$ref` missing from `deps`, a misspelled `type`) is the schema author's defect — a `StateError` that becomes a **500**, never a client violation; only invalid *instance* data (a missing required property, a wrong type, an out-of-set enum value) is a **400**. (`schema.validate` returns the violations; `schema.require`/`requireMap` throw the 400.)
 
@@ -240,13 +298,27 @@ app.group('/admin')..use(requireScopes(['admin:write']))..get('/panel', handler)
 
 `JwksSource` is the one seam a key comes through: `HttpJwksSource.discover(issuer:)` (or `.fromJwksUri(uri)` when the endpoint is already known) for production — OIDC Discovery once, then a cached, single-flight, cooldown-throttled, serve-stale-on-failure refresh loop — versus `StaticJwks.parse(jwksJson)` for tests, no network and no live IdP but the same real `BoringSslVerifier` doing the same signature check (see `package:keta_native/testing.dart` for minting test keys and signing test tokens). A missing or bad token is `401` (`WWW-Authenticate: Bearer` bare when no Bearer credentials were presented at all, or `error="invalid_token"` with a category description — never a claim value or key material — when they were bad); a missing required scope is `403` (`error="insufficient_scope"`); the key source being unreachable with nothing cached is `503` (the token was never judged — not the caller's fault); a discovery trust failure (the discovery document's own `issuer` not matching the one configured) is `500` (a server-side config/trust failure, never laundered into a `401`). `c.get(oidcPrincipal)` returns an `OidcPrincipal`: `subject` (`sub`, nullable), `scopes` (the union of the token's `scope` and `scp` claims), and `claims` (the full validated claim set — read any application/custom claim from `claims.raw`).
 
-## SSE & WebSocket
+## SSE and WebSocket
 
 SSE: `SseEvent(data, {String? event, String? id, Duration? retry})` is a value type — `data` is the only required field and MAY contain newlines (rendered as one `data:` line per segment; CR/CRLF normalize to LF). The other fields are single-line by construction, so the constructor throws `ArgumentError` on a CR or LF in `event`/`id`, a NUL (U+0000) in `id`, or a negative `retry` (each would forge a second event or silently void the field). `c.sse(Stream<SseEvent> events, {Duration? keepAlive, Duration? maxIdle, Duration? maxLifetime, Map<String, List<String>>? headers})` returns a `200` `Response` with a `Stream<List<int>>` body; it sets `content-type: text/event-stream; charset=utf-8` and `cache-control: no-cache` (your `headers` merge over and may override). `keepAlive` is opt-in — null means no timer is ever created; when set, a `: keep-alive` comment is emitted after that idle interval and re-armed on each event. `maxIdle` and `maxLifetime` are opt-in lifetime bounds, both null by default (no bound). `maxIdle` fires when no *application* event (one delivered from `events`) has gone out for that long — a `keepAlive` comment deliberately does NOT reset this clock, since it is server-originated filler, not evidence the app is still producing. `maxLifetime` is an absolute cap measured from when streaming starts, regardless of activity, firing even under backpressure. Either bound's expiry ends the stream the same way a client disconnect does — the body controller closes on a clean boundary, never mid-event. The subscription and every timer (`keepAlive`, `maxIdle`, `maxLifetime`) tear down on stream completion/error, client disconnect, `c.aborted` (timeout/disconnect), or a bound expiring — whichever first. No new transport: the H1 transport frames the stream as chunked, and `gzip()`/`etag()` pass stream bodies through untouched, so SSE composes unchanged. `SseEvent.toWire()` / `.encode()` give the wire text / UTF-8 bytes if you assemble a body yourself.
 
 WebSocket (over HTTP/1.1): a handshake is a GET — no new verb — so an ordinary `app.get(path, (c) => Response.upgrade(onConnected, {String? subprotocol, Duration? maxIdle, Duration? maxLifetime}))` declares it. `Response.upgrade` carries an `Upgrade` value that fixes status 101 and no body; because the intent to upgrade is a *returned value*, every declaration-driven middleware runs in front of it — a security verifier throws `Unauthorized`/401 and the `Upgrade` is never even constructed. `onConnected(UpgradedChannel channel)` is invoked once by a transport that can switch protocols (inert data otherwise). `UpgradedChannel`: `Stream<Object> get messages` (each a `String` text or `List<int>` binary frame), `void send(Object message)` (String → text, List<int> → binary; a send after close is a state error), `Future<void> close([int? code, String? reason])` (idempotent), `Future<void> get done`. A `subprotocol`, when set, must have been offered by the client or the handshake fails. `maxIdle`/`maxLifetime` are opt-in bounds on the switched connection, both null by default (no bound, no timer created). `maxIdle` resets only on an INBOUND frame — one arriving via `UpgradedChannel.messages` — and never on a `send()`, since a send proves nothing about whether the peer is still there to receive it; a push-only handler that never reads `messages` gets no resets and is reaped on schedule. `maxLifetime` is a plain wall-clock deadline from channel realization, regardless of traffic in either direction. Either expiry closes the channel server-side with WebSocket close code 1001 ("Going Away") — the same code graceful shutdown already uses for an open socket, so a client sees one consistent "server-initiated, not your fault" close across every server-driven teardown. A non-upgrade request to an upgrade route gets `426 Upgrade Required`; graceful shutdown closes open sockets with 1001. OpenAPI shadow: `RouteDoc.upgrade(upgrade: SwitchingProtocols(subprotocol: ...))` documents the 101 — a `SwitchingProtocols` sits parallel to `Success` and is mutually exclusive with it (its 101 carries no body). Socket-free test: `await TestClient(app, env).connect(path, {headers})` returns a `TestUpgrade` — `.upgraded`/`.socket` (a `TestSocket` with `messages`, `send`, `close`, `done`) when it upgraded, else `.rejection` (the `TestResponse` the pipeline produced instead, e.g. a 401 from the gate).
 
 `timeout(Duration)` never bounds an SSE or upgrade response's lifetime — both are produced synchronously, so the timer never arms; it bounds time-to-response only, and streams must bound themselves via their own opt-in `maxIdle`/`maxLifetime` (`c.sse`'s and `Response.upgrade`'s bounds, above) — `c.aborted` still fires independently on client disconnect. `accessLog()` marks such a response with `upgrade: true` / `streaming: true` in its log fields (`ms` is time-to-first-byte, not stream duration).
+
+## Cross-isolate bus (keta_bus)
+
+`keta_bus` is a standalone publish/subscribe seam — no dependency on keta core, and keta core does not know about it. `Bus` carries messages from a `publish(topic, message)` to every `subscribe(topic)` stream, with **at-most-once** delivery: a message reaches only the subscribers whose streams are being listened to at the moment of publish, and is otherwise dropped. There is no replay, no persistence, no wildcard matching, and no at-least-once redelivery (these are deliberate omissions, not gaps to fill later — a durable event log is a different tool). An empty topic throws `ArgumentError`; after `close()`, `publish`/`subscribe` throw `StateError`. Two implementations ship. `InMemoryBus` is one isolate — the seam for tests and single-isolate servers. `IsolateBus` spans the worker isolates of one process, so a message published on any isolate reaches subscribers on every connected isolate — built for `serve(isolates: n)`: create the hub in the main isolate and hand each worker the hub's `connectPort`. Payloads must survive `SendPort` transfer for `IsolateBus` (JSON-compatible values). Wiring a bus into a request `Env` (and closing it on shutdown, e.g. from `Disposable.close`) is the application's job.
+
+```dart
+abstract interface class Bus {
+  void publish(String topic, Object? message);
+  Stream<Object?> subscribe(String topic);
+  Future<void> close();
+}
+```
+
+Typical use: an SSE stream on isolate A subscribes to `user:${id}:events`, and a mutation handler on isolate B publishes on that topic during a write — the pattern `examples/register` uses for `/users/events`, and the same pattern `examples/auth` uses to close a live SSE stream from the server side on session revocation.
 
 ## Static assets (keta_static)
 
@@ -264,17 +336,28 @@ Wrap writes in a transaction with the `tx()` middleware and read the connection 
 
 ## Testing
 
-`TestClient`, `testContext`, `testBothModes`, `TestUpgrade`, and `TestSocket`
-all live in `package:keta/test.dart` — a separate import alongside
-`package:keta/keta.dart`, not re-exported by it; omit it and `TestClient` is an
-undefined name.
+`TestClient`, `testContext`, `testBothModes`, `TestUpgrade`, and `TestSocket` all live in `package:keta/test.dart` — a separate import alongside `package:keta/keta.dart`, not re-exported by it; omit it and `TestClient` is an undefined name. `TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/delete/patch/head/options`, returning a `TestResponse` with `status`, `headers`, `text()`, `json()`. `testContext(env, ...)` builds a `Context` for a single handler. `testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation against both the synchronous-throw and rejected-Future failure shapes. Contract-green means the *shape* conforms (round-trips, schema validation, response conformance, invalid body → 400) — not that behavior is correct. Business correctness lives in `examples` and hand-written tests above that floor.
 
-`TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/
-delete/patch/head/options`, returning a `TestResponse` with `status`,
-`headers`, `text()`, `json()`. `testContext(env, ...)` builds a `Context` for a single handler.
-`testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation
-against both the synchronous-throw and rejected-Future failure shapes.
+```dart
+// Full pipeline via TestClient — the common path.
+test('GET /users/42 returns the row', () async {
+  final res = await TestClient(app, env).get('/users/42');
+  expect(res.status, 200);
+  expect((await res.json() as Map)['id'], 42);
+});
 
-Contract-green means the *shape* conforms (round-trips, schema validation,
-response conformance, invalid body → 400) — not that behavior is correct.
-Business correctness lives in `examples` and hand-written tests above that floor.
+// Isolated Context for a single handler — no router, no middleware.
+test('handler builds the response', () async {
+  final c = testContext(env, method: 'GET', uri: Uri.parse('/users/42'));
+  final res = await myHandler(c);
+  expect(res.status, 200);
+});
+
+// One expectation across both failure shapes (sync throw + Future.error).
+testBothModes('validation raises BadRequest', (mode) async {
+  await expectLater(
+    mode.wrap(() => userDtoSchema.require({'id': 1})),
+    throwsA(isA<BadRequest>()),
+  );
+});
+```
