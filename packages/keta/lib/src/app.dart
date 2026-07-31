@@ -290,23 +290,59 @@ class App<E> {
   /// one instance that cannot cross an isolate boundary. With [isolates] > 1,
   /// [boot] and this app's handlers must be sendable (top-level or static
   /// tear-offs, or closures over sendable state); a non-sendable one fails fast
-  /// with a [StateError] when the isolate is spawned. A custom [transport] is
-  /// only supported with a single isolate.
+  /// with a [StateError] when the isolate is spawned.
+  ///
+  /// A transport can be supplied two ways, and which one is right follows the
+  /// same rule as [boot]. [transport] hands over one already-built instance and
+  /// is therefore single-isolate only — an instance cannot cross an isolate
+  /// boundary. [transportFactory] is a sendable builder invoked once per
+  /// isolate, so each worker constructs its own; it is how a configured
+  /// transport reaches `serve(isolates: n)` at all.
+  ///
+  /// That distinction is what makes TLS and `idleTimeout` usable in production.
+  /// `H1Transport` has carried `securityContext` and `idleTimeout` since they
+  /// were introduced, but the only way to pass either was [transport], which
+  /// `isolates > 1` refused — so the knob that bounds a slow-header hold was
+  /// unreachable in exactly the multi-isolate configuration a real deployment
+  /// runs, while the transport's own doc said a TLS listener shares the accept
+  /// queue across isolates "exactly as the plaintext one does". It does; there
+  /// was simply no way to ask for it. With a factory there is:
+  ///
+  /// ```dart
+  /// Transport tls() => H1Transport(
+  ///   securityContext: SecurityContext()
+  ///     ..useCertificateChain('cert.pem')
+  ///     ..usePrivateKey('key.pem'),
+  ///   idleTimeout: const Duration(seconds: 10),
+  /// );
+  ///
+  /// await app.serve(boot, isolates: 4, transportFactory: tls);
+  /// ```
+  ///
+  /// Passing both is an authoring defect and throws.
   Future<Server> serve(
     Future<E> Function() boot, {
     int port = 8080,
     int isolates = 1,
     Transport? transport,
+    Transport Function()? transportFactory,
     int maxBodyBytes = 1 << 20,
   }) async {
     if (isolates < 1) {
       throw ArgumentError.value(isolates, 'isolates', 'must be >= 1');
     }
+    if (transport != null && transportFactory != null) {
+      throw ArgumentError(
+        'pass either transport (one instance, single isolate) or '
+        'transportFactory (built per isolate), not both',
+      );
+    }
     if (isolates > 1 && transport != null) {
       throw ArgumentError.value(
         transport,
         'transport',
-        'not supported with isolates > 1',
+        'not supported with isolates > 1 — an instance cannot cross an isolate '
+            'boundary; pass transportFactory instead',
       );
     }
     // Worker 0 runs on the current isolate; bind it first so a configuration
@@ -330,6 +366,7 @@ class App<E> {
       router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
       final t =
           transport ??
+          transportFactory?.call() ??
           H1Transport(
             onError: (e, st) => router.baseLog.error('transport error', e, st),
           );
@@ -345,7 +382,14 @@ class App<E> {
     try {
       for (var i = 1; i < isolates; i++) {
         workers.add(
-          await _spawnWorker<E>(this, boot, port, maxBodyBytes, router.baseLog),
+          await _spawnWorker<E>(
+            this,
+            boot,
+            port,
+            maxBodyBytes,
+            router.baseLog,
+            transportFactory,
+          ),
         );
       }
     } catch (_) {
@@ -788,6 +832,7 @@ Future<_Worker> _spawnWorker<E>(
   int port,
   int maxBodyBytes,
   Log log,
+  Transport Function()? transportFactory,
 ) async {
   final ready = ReceivePort();
   final worker = _Worker(ReceivePort());
@@ -822,7 +867,7 @@ Future<_Worker> _spawnWorker<E>(
   try {
     final isolate = await Isolate.spawn(
       _workerEntry<E>,
-      (app, boot, port, maxBodyBytes, ready.sendPort),
+      (app, boot, port, maxBodyBytes, ready.sendPort, transportFactory),
       onError: worker.events.sendPort,
       onExit: worker.events.sendPort,
       errorsAreFatal: true,
@@ -854,15 +899,23 @@ Future<_Worker> _spawnWorker<E>(
 }
 
 Future<void> _workerEntry<E>(
-  (App<E>, Future<E> Function(), int, int, SendPort) args,
+  (App<E>, Future<E> Function(), int, int, SendPort, Transport Function()?)
+  args,
 ) async {
-  final (app, boot, port, maxBodyBytes, ready) = args;
+  final (app, boot, port, maxBodyBytes, ready, transportFactory) = args;
   final env = await boot();
   final fallbackLog = env is HasLog ? null : StdoutLog();
   final router = app.compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
-  final transport = await H1Transport(
-    onError: (e, st) => router.baseLog.error('transport error', e, st),
-  ).bind(port, router.dispatch);
+  // Each worker builds its own transport from the factory, which is why the
+  // factory (and not an instance) is what crosses the isolate boundary — the
+  // whole point of the parameter. Without one this is the default H1 transport,
+  // exactly as before.
+  final t =
+      transportFactory?.call() ??
+      H1Transport(
+        onError: (e, st) => router.baseLog.error('transport error', e, st),
+      );
+  final transport = await t.bind(port, router.dispatch);
 
   final control = ReceivePort();
   ready.send(control.sendPort);

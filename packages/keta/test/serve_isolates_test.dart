@@ -91,6 +91,65 @@ void main() {
     },
   );
 
+  group('transportFactory', () {
+    test('a configured transport reaches every worker', () async {
+      // The claim this makes true: `H1Transport`'s doc says a TLS listener
+      // shares the accept queue across `serve(isolates: n)` "exactly as the
+      // plaintext one does". It does — but `transport:` was the only way to
+      // supply one and `isolates > 1` rejected it outright, so neither TLS nor
+      // idleTimeout could be configured in a multi-isolate server at all.
+      final server = await buildIsoApp().serve(
+        bootIso,
+        isolates: 3,
+        port: 8098,
+        transportFactory: boundedTransport,
+      );
+      addTearDown(() => server.shutdown(grace: const Duration(seconds: 1)));
+
+      final client = HttpClient();
+      addTearDown(client.close);
+      // Every worker shares the accept queue, so several requests land across
+      // the isolates that each built their own transport from the factory.
+      for (var i = 0; i < 6; i++) {
+        final resp = await (await client.getUrl(
+          Uri.parse('http://127.0.0.1:8098/ping'),
+        )).close();
+        expect(resp.statusCode, 200);
+        await resp.drain<void>();
+      }
+    });
+
+    test('an instance and a factory together is an authoring defect', () {
+      expect(
+        buildIsoApp().serve(
+          bootIso,
+          port: 8099,
+          transport: const H1Transport(),
+          transportFactory: boundedTransport,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('an instance with isolates > 1 still says why, and what to use', () {
+      expect(
+        buildIsoApp().serve(
+          bootIso,
+          isolates: 2,
+          port: 8100,
+          transport: const H1Transport(),
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('transportFactory'),
+          ),
+        ),
+      );
+    });
+  });
+
   test('a worker that dies after binding is reported, and shutdown does not '
       'wait for it', () async {
     // The spec lists worker-isolate death as a required chaos scenario and it
@@ -123,6 +182,15 @@ void main() {
     );
   });
 }
+
+/// A transport built per isolate, carrying a knob that only a configured
+/// transport can hold. `H1Transport` has had `idleTimeout` since it was
+/// introduced, but the only way to pass one was `transport:`, which
+/// `isolates > 1` refused — so the knob that bounds a slow-header hold was
+/// unreachable in exactly the configuration a real deployment runs. Top-level
+/// so it is sendable; the factory, not an instance, is what crosses.
+Transport boundedTransport() =>
+    const H1Transport(idleTimeout: Duration(seconds: 5));
 
 /// Death reports observed by the parent isolate. A worker gets its own copy of
 /// this library's statics, so only the parent's entries land here — which is
