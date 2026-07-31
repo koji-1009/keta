@@ -59,7 +59,7 @@ class RdsDb implements Db {
   /// proxy.
   ///
   /// [statementTimeout], when given, caps how long any single statement may run
-  /// on a pooled connection (see the class doc and [_openWithTimeout]); a
+  /// on a pooled connection (see the class doc and [openWithTimeout]); a
   /// non-positive or sub-millisecond value is rejected here at construction.
   factory RdsDb(
     Endpoint endpoint, {
@@ -71,7 +71,7 @@ class RdsDb implements Db {
   }) {
     _validateStatementTimeout(statementTimeout);
     Pool<Connection> poolFor(Endpoint e) => Pool<Connection>(
-      () => _openWithTimeout(
+      () => openWithTimeout(
         () => Connection.open(e, settings: settings),
         statementTimeout,
       ),
@@ -103,7 +103,7 @@ class RdsDb implements Db {
   }) {
     _validateStatementTimeout(statementTimeout);
     Pool<Connection> poolFor(String u) => Pool<Connection>(
-      () => _openWithTimeout(() => Connection.openFromUrl(u), statementTimeout),
+      () => openWithTimeout(() => Connection.openFromUrl(u), statementTimeout),
       (c) => c.close(),
       maxConnections: maxConnections,
       acquireTimeout: acquireTimeout,
@@ -140,35 +140,6 @@ class RdsDb implements Db {
             'statement_timeout to 0, which disables the cap entirely',
       );
     }
-  }
-
-  /// Opens a connection via [open] and, when [statementTimeout] is set, pins a
-  /// session-level `statement_timeout` on it before it is ever handed out, so
-  /// every connection any pool opens carries the cap. Issued at open time (not
-  /// per query) because it is a session GUC that survives for the connection's
-  /// life; a pooled connection therefore inherits it once and keeps it.
-  ///
-  /// When the cap fires, PostgreSQL cancels the running statement server-side
-  /// with SQLSTATE 57014 (query_canceled). keta_rds does NOT translate 57014
-  /// (that is outside this option's remit): it surfaces as the driver's own
-  /// `ServerException`, which — like any untranslated server error — becomes a
-  /// plain 500. It is deliberately neither a [Unavailable] nor a
-  /// [TransientFailure]: a statement that blew its own deadline is not something
-  /// to blindly retry.
-  static Future<Connection> _openWithTimeout(
-    Future<Connection> Function() open,
-    Duration? statementTimeout,
-  ) async {
-    final conn = await open();
-    if (statementTimeout != null) {
-      // A whole-number millisecond literal; PostgreSQL reads a bare integer as
-      // milliseconds. Not a placeholder-bound value: SET does not accept
-      // parameters, and the integer is framework-computed, never user input.
-      await conn.execute(
-        'SET statement_timeout = ${statementTimeout.inMilliseconds}',
-      );
-    }
-    return conn;
   }
 
   final Pool<Connection> _writerPool;
@@ -362,6 +333,52 @@ Future<List<Map<String, Object?>>> _runQuery(
 /// picks it automatically for a parameterless `ignoreRows` execute), which is
 /// what allows a migration's several `;`-separated statements to run in one
 /// call; a parameterized statement is prepared and bound via `?` placeholders.
+/// Opens a connection via [open] and, when [statementTimeout] is set, pins a
+/// session-level `statement_timeout` on it before it is ever handed out, so
+/// every connection any pool opens carries the cap. Issued at open time (not
+/// per query) because it is a session GUC that survives for the connection's
+/// life; a pooled connection therefore inherits it once and keeps it.
+///
+/// When the cap fires, PostgreSQL cancels the running statement server-side
+/// with SQLSTATE 57014 (query_canceled). keta_rds does NOT translate 57014
+/// (that is outside this option's remit): it surfaces as the driver's own
+/// `ServerException`, which — like any untranslated server error — becomes a
+/// plain 500. It is deliberately neither an `Unavailable` nor a
+/// `TransientFailure`: a statement that blew its own deadline is not something
+/// to blindly retry.
+///
+/// Lives at the library top level, outside [RdsDb], so the leak-on-failed-SET
+/// contract below can be driven by a test double without a live server and
+/// without putting a seam on the exported class.
+Future<Connection> openWithTimeout(
+  Future<Connection> Function() open,
+  Duration? statementTimeout,
+) async {
+  final conn = await open();
+  if (statementTimeout != null) {
+    try {
+      // A whole-number millisecond literal; PostgreSQL reads a bare integer
+      // as milliseconds. Not a placeholder-bound value: SET does not accept
+      // parameters, and the integer is framework-computed, never user input.
+      await conn.execute(
+        'SET statement_timeout = ${statementTimeout.inMilliseconds}',
+      );
+    } catch (_) {
+      // The connection is open but the pool never received it, so nothing else
+      // can ever close it: `Pool` unwinds its own accounting on a failed open,
+      // and a resource it was not handed is not in `poolStats` either. Leaking
+      // here is unbounded BY CONSTRUCTION — the accounting rolls back every
+      // time, so each retry opens a fresh backend and abandons it, sailing
+      // straight past `maxConnections`. Not a theoretical path: `SET` is
+      // rejected outright by transaction-pooling proxies (pgbouncer, RDS
+      // Proxy), where this fires on every single acquire.
+      await conn.close();
+      rethrow;
+    }
+  }
+  return conn;
+}
+
 Future<int> _runExecute(
   Session session,
   String sql,
