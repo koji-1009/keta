@@ -1,6 +1,6 @@
 # keta — agent guide
 
-keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK ^3.12). Routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values. User code reads as plain Dart. This file is enough to write handlers, DTOs, mappers, schema constants, and tests by hand.
+keta is a reflection-free HTTP server framework for Dart (SDK ^3.12) with no build step: nothing is generated at build time, there are no `.g.dart` files, and no tool has to run before the code compiles. (Two optional tools write Dart into your own files: `keta_lints:fix` materializes a DTO's canonical form once, and `keta_files:sync` maintains a marked route-manifest region. Both produce checked-in source you own.) Routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values. User code reads as plain Dart. This file is enough to write handlers, DTOs, mappers, schema constants, and tests by hand.
 
 Dependencies flow inward. `keta`'s server depends on nothing beyond the SDK, and the package ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
 

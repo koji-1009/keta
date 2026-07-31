@@ -55,7 +55,7 @@ A WebSocket handshake is a plain `GET` whose handler returns `Response.upgrade(o
 
 ## Deliberately out of scope
 
-Judged absences, not TODOs — the [root README](../../README.md#deliberately-out-of-scope-for-v01) records them for v0.1: static file serving, HTTP/2 and HTTP/3 transports (only the `Transport` seam exists here), session stores (the cookie primitives above are in core; stores on top of them are not), template engines, content negotiation (keta is JSON-first), and runtime configuration reload. Within this package the source records its own: no 429 `KetaException`, no process-wide admission coordination, and no timer or background work the caller did not opt into.
+Judged absences, not TODOs — the [root README](../../README.md#deliberately-out-of-scope-for-v01) records them for v0.1: HTTP/2 and HTTP/3 transports (only the `Transport` seam exists here), session stores (the cookie primitives above are in core; stores on top of them are not), template engines, content negotiation (keta is JSON-first), and runtime configuration reload. Within this package the source records its own: no 429 `KetaException`, no process-wide admission coordination, and no timer or background work the caller did not opt into.
 
 ## Every claim here is tested
 
