@@ -61,6 +61,95 @@ void register(app) {
       expect(d, hasLength(2));
       expect(d.map((e) => e.id).toSet(), hasLength(2));
     });
+
+    group('group prefixes', () {
+      test('a capture from a group prefix is readable, not unknown', () {
+        // The core is explicit that captures come from the whole path, so a
+        // captured group prefix must be readable via c.param. Reading only the
+        // verb's own literal reported correct code as broken — and the repo's
+        // own CI stayed green because no example happened to use a captured
+        // prefix.
+        const source = '''
+void register(app) {
+  final tenants = app.group('/tenants/:tid');
+  tenants.get('/users/:id', (c) {
+    c.param('tid');
+    c.param('id');
+  });
+}
+''';
+        expect(routeDiagnostics(source), isEmpty);
+      });
+
+      test('an unknown param under a group still reports, with the full '
+          'template in the message', () {
+        const source = '''
+void register(app) {
+  final tenants = app.group('/tenants/:tid');
+  tenants.get('/users/:id', (c) => c.text(c.param('nope')));
+}
+''';
+        final d = routeDiagnostics(
+          source,
+        ).where((e) => e.rule == 'keta_param_unknown').toList();
+        expect(d, hasLength(1));
+        expect(d.single.message, contains('/tenants/:tid/users/:id'));
+      });
+
+      test('nested groups compose their prefixes', () {
+        const source = '''
+void register(app) {
+  final api = app.group('/api');
+  final tenants = api.group('/tenants/:tid');
+  tenants.get('/users/:id', (c) {
+    c.param('tid');
+    c.param('id');
+  });
+}
+''';
+        expect(routeDiagnostics(source), isEmpty);
+      });
+
+      test('a cascade off a group resolves its prefix too', () {
+        const source = '''
+void register(app) {
+  app.group('/tenants/:tid')
+    ..get('/users/:id', (c) {
+      c.param('tid');
+      c.param('id');
+    });
+}
+''';
+        expect(routeDiagnostics(source), isEmpty);
+      });
+
+      test('two groups sharing a relative path get distinct ids', () {
+        // The prefix is part of the template, so it must be part of the scope
+        // the id hashes; without it these two findings collided into one.
+        const source = '''
+void register(app) {
+  final a = app.group('/a');
+  final b = app.group('/b');
+  a.get('/x', (c) => c.text(c.param('nope')));
+  b.get('/x', (c) => c.text(c.param('nope')));
+}
+''';
+        final d = routeDiagnostics(
+          source,
+        ).where((e) => e.rule == 'keta_param_unknown').toList();
+        expect(d, hasLength(2));
+        expect(d.map((e) => e.id).toSet(), hasLength(2));
+      });
+
+      test('a plain app registration is unaffected', () {
+        const source = '''
+void register(app) {
+  app.get('/users/:id', (c) => c.text(c.param('id')));
+}
+''';
+        expect(routeDiagnostics(source), isEmpty);
+      });
+    });
   });
 
   group('internalAwaitDiagnostics', () {

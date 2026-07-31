@@ -3,6 +3,7 @@
 library;
 
 export 'src/canonical.dart' show canonicalDiagnostics;
+export 'src/cli_paths.dart' show resolveDartFiles;
 export 'src/diagnostic.dart' show Diagnostic, diagnosticId;
 export 'src/drift.dart' show contractDrift;
 export 'src/fix.dart' show applyCanonicalFix;

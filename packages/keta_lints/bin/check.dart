@@ -89,7 +89,7 @@ void _sourceCheck(
     exit(64);
   }
   final diagnostics = [
-    for (final file in _dartFiles(args))
+    for (final file in resolveDartFiles(args))
       // Normalize to a package-relative path so the stable id matches the one
       // the analyzer plugin computes from its absolute path, and matches across
       // machines regardless of how the file was addressed on the command line.
@@ -99,21 +99,6 @@ void _sourceCheck(
       ),
   ];
   _report(diagnostics, cleanMessage);
-}
-
-Iterable<String> _dartFiles(List<String> paths) sync* {
-  for (final path in paths) {
-    final type = FileSystemEntity.typeSync(path);
-    if (type == FileSystemEntityType.directory) {
-      yield* Directory(path)
-          .listSync(recursive: true)
-          .whereType<File>()
-          .map((f) => f.path)
-          .where((p) => p.endsWith('.dart'));
-    } else if (path.endsWith('.dart')) {
-      yield path;
-    }
-  }
 }
 
 void _report(List<Diagnostic> diagnostics, String cleanMessage) {

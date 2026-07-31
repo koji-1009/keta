@@ -41,16 +41,40 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
   final String file;
   final List<Diagnostic> diagnostics;
 
+  /// Prefixes of names bound to a group in this file:
+  /// `final api = app.group('/api')` records `api -> '/api'`.
+  ///
+  /// A name that is not here is assumed to be the app itself (prefix `''`),
+  /// which is what the rule always did. That assumption is right for
+  /// `app.get(...)` and for the `void register(App<Env> app)` shape the
+  /// examples use, and it is what keeps this rule syntactic and single-file.
+  /// It is wrong only for a group arriving from outside the file — a
+  /// `RouteGroup` parameter — which is why that shape is named in the rule's
+  /// documented limits rather than silently mis-reported.
+  final _groupPrefixes = <String, String>{};
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    final prefix = _groupPrefixOf(node.initializer);
+    if (prefix != null) _groupPrefixes[node.name.lexeme] = prefix;
+    super.visitVariableDeclaration(node);
+  }
+
   @override
   void visitMethodInvocation(MethodInvocation node) {
     final args = node.argumentList.arguments;
     if (httpMethods.contains(node.methodName.name) &&
-        node.target != null &&
         args.length >= 2 &&
         args[0] is SimpleStringLiteral &&
         args[1] is FunctionExpression) {
+      // The registration's full template is the group prefix plus the literal.
+      // Reading the literal alone reported `c.param('tid')` — a capture the
+      // core documents as readable from a captured group prefix — as unknown
+      // on correct code, and gave two routes under different prefixes but the
+      // same relative path one shared stable id.
       _check(
         node.methodName.name,
+        _prefixOfTarget(node),
         args[0] as SimpleStringLiteral,
         args[1] as FunctionExpression,
       );
@@ -58,12 +82,61 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
     super.visitMethodInvocation(node);
   }
 
+  /// The group prefix of whatever [node] registers on; `''` when it is the app
+  /// (or anything this file cannot see as a group).
+  String _prefixOfTarget(MethodInvocation node) {
+    final target = node.target;
+    if (target != null) return _groupPrefixOf(target) ?? '';
+    // A cascade section carries no target of its own; the router is the
+    // cascade's. `app.group('/admin')..get('/x', h)` lands here.
+    for (AstNode? n = node.parent; n != null; n = n.parent) {
+      if (n is CascadeExpression) return _groupPrefixOf(n.target) ?? '';
+      if (n is FunctionBody) break; // left the expression; no cascade above
+    }
+    return '';
+  }
+
+  /// The prefix an expression contributes when it denotes a GROUP, or null when
+  /// it does not denote one this file can see.
+  String? _groupPrefixOf(Expression? expr) {
+    switch (expr) {
+      case SimpleIdentifier():
+        return _groupPrefixes[expr.name];
+      case MethodInvocation(methodName: final m) when m.name == 'group':
+        final args = expr.argumentList.arguments;
+        if (args.length != 1 || args.first is! SimpleStringLiteral) return null;
+        // Groups nest: `app.group('/a').group('/b')` is '/a/b'. An unresolvable
+        // receiver contributes nothing rather than poisoning the whole prefix.
+        final outer = expr.target == null
+            ? ''
+            : _groupPrefixOf(expr.target) ?? '';
+        return _join(outer, (args.first as SimpleStringLiteral).value);
+      // `app.group('/a')..use(m)` used directly as a router expression.
+      case CascadeExpression():
+        return _groupPrefixOf(expr.target);
+      case ParenthesizedExpression():
+        return _groupPrefixOf(expr.expression);
+      default:
+        return null;
+    }
+  }
+
+  static String _join(String prefix, String rest) {
+    if (prefix.isEmpty) return rest;
+    final a = prefix.endsWith('/')
+        ? prefix.substring(0, prefix.length - 1)
+        : prefix;
+    final b = rest.startsWith('/') ? rest : '/$rest';
+    return '$a$b';
+  }
+
   void _check(
     String method,
+    String prefix,
     SimpleStringLiteral pathLiteral,
     FunctionExpression handler,
   ) {
-    final path = pathLiteral.value;
+    final path = _join(prefix, pathLiteral.value);
     final captures = _captures(path);
     final used = <String, SimpleStringLiteral>{};
     handler.body.accept(_ParamCollector(used));
