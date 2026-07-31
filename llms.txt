@@ -9,7 +9,7 @@ Dependencies flow inward. `keta`'s server depends on nothing beyond the SDK, and
 | Package | What it is |
 |---|---|
 | `keta` | Router, `Context`, middleware, declaration contract (`Schema`/`RouteDoc`/`SecurityPolicy`), server, `Log`, and `TestClient` (via the separate `package:keta/test.dart`). |
-| `keta_db` | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, migrations, `DbCapabilities`, row accessors, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
+| `keta_db` | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `HasDb` environment contract, migrations, `DbCapabilities`, row accessors, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
 | `keta_openapi` | OpenAPI 3.1 emitter — a pure derivation from the route table, no contract types of its own. |
 | `keta_lints` | Stable-ID diagnostics plus the materializing `check`/`fix` loop; an analyzer plugin over the same engine puts identical findings in the IDE. |
 | `keta_files` | File-based routing — a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
@@ -214,7 +214,7 @@ dart run keta_lints:fix canonical lib/     # materialize / reconcile in place
 dart run keta_lints:check canonical lib/   # verify converged (exits 0)
 ```
 
-Subcommands (each over files or directories, except `drift`, which takes two documents): `canonical` (`fromJson`/`toJson`/`Schema` drift on DTOs), `routes` (route ⇄ `RouteDoc` coverage), `query` (`c.query` vs `c.tryQuery` misuse against handler-side null semantics), `internal-await` (a discarded `Future` inside keta code that should be awaited), `key` (`Key<T>` const misuse — identity keys must not be const), `tx` (transaction boundary correctness, including `keta_tx_outside_recover`), and `drift <oracle.yaml> <shadow.yaml>` (compares an oracle and a shadow OpenAPI document). See `packages/keta_lints/README.md` for the rule catalogue and full semantics.
+Subcommands (each over files or directories, except `drift`, which takes two documents): `canonical` (`fromJson`/`toJson`/`Schema` drift on DTOs), `routes` (`c.param('x')` names vs the route template's captures, in both directions — an unknown name and an unread capture; a group prefix bound in the same file is part of the template), `query` (`c.query`/`tryQuery`/`queryAll` on a name not declared in `RouteDoc(query: [...])`, and a `required: true` param read with `tryQuery`), `internal-await` (**flags the presence of `await`** in keta's own composition modules, where a `FutureOr` fast path must not be forced onto the event loop; framework development only, opt out per line with `// keta:allow-await`), `key` (a `Key(...)` constructed inline at a `get`/`tryGet`/`set` call, where the fresh identity makes the value unreachable), `tx` (`use(tx())` registered outside `use(recover())`, which commits a failed request), `order` (a `use()` run whose middleware ranks descend), and `drift <oracle.yaml> <shadow.yaml>` (compares an oracle and a shadow OpenAPI document). Every subcommand that takes files exits `64` when its arguments name nothing it can read, so a gate cannot pass by having examined nothing. See `packages/keta_lints/README.md` for the rule catalogue and full semantics.
 
 ## List endpoints
 
@@ -336,7 +336,7 @@ Wrap writes in a transaction with the `tx()` middleware and read the connection 
 
 ## Testing
 
-`TestClient`, `testContext`, `testBothModes`, `TestUpgrade`, and `TestSocket` all live in `package:keta/test.dart` — a separate import alongside `package:keta/keta.dart`, not re-exported by it; omit it and `TestClient` is an undefined name. `TestClient(app, env)` runs the full pipeline with no sockets: `get/post/put/delete/patch/head/options`, returning a `TestResponse` with `status`, `headers`, `text()`, `json()`. `testContext(env, ...)` builds a `Context` for a single handler. `testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation against both the synchronous-throw and rejected-Future failure shapes. Contract-green means the *shape* conforms (round-trips, schema validation, response conformance, invalid body → 400) — not that behavior is correct. Business correctness lives in `examples` and hand-written tests above that floor.
+`TestClient`, `TestServer`, `testContext`, `testBothModes`, `TestUpgrade`, and `TestSocket` all live in `package:keta/test.dart` — a separate import alongside `package:keta/keta.dart`, not re-exported by it; omit it and `TestClient` is an undefined name. `TestClient(app, env, {maxBodyBytes})` runs the full pipeline with no sockets: `get/post/put/delete/patch/head/options` (the body-bearing verbs take `json:` or a raw `body:`), returning a `TestResponse` with `status`, `headers` (first value each), `headerValues` (every value, for a repeated header like `set-cookie`), `text()`, `json()`. `testContext(env, {method, path, params, headers, jsonBody, rawBody, maxBodyBytes, closed})` builds a `Context` for a single handler; completing `closed` completes `c.aborted`, which is how a disconnect is exercised. `TestServer.start(app, env)` binds a real socket for the cases the socket-free path cannot express — malformed framing, a truncated body, a peer that walks away — and `sendRaw` writes a request verbatim. `testBothModes(desc, (mode) { ... mode.wrap(run) ... })` runs an expectation against both the synchronous-throw and rejected-Future failure shapes. Contract-green means the *shape* conforms (round-trips, schema validation, response conformance, invalid body → 400) — not that behavior is correct. Business correctness lives in `examples` and hand-written tests above that floor.
 
 ```dart
 // Full pipeline via TestClient — the common path.
@@ -347,17 +347,30 @@ test('GET /users/42 returns the row', () async {
 });
 
 // Isolated Context for a single handler — no router, no middleware.
+// `path:` is a String; `params:` supplies the captures the router would have.
 test('handler builds the response', () async {
-  final c = testContext(env, method: 'GET', uri: Uri.parse('/users/42'));
+  final c = testContext(env, method: 'GET', path: '/users/42', params: {'id': '42'});
   final res = await myHandler(c);
   expect(res.status, 200);
 });
 
 // One expectation across both failure shapes (sync throw + Future.error).
+// `wrap` takes — and returns — a `FutureOr<Response> Function()`; CALL the
+// returned closure, and have the body produce a Response.
 testBothModes('validation raises BadRequest', (mode) async {
   await expectLater(
-    mode.wrap(() => userDtoSchema.require({'id': 1})),
+    mode.wrap(() => Response.json(userDtoSchema.require(badBody)))(),
     throwsA(isA<BadRequest>()),
   );
+});
+
+// Real bytes on a real socket, for what TestClient cannot express: malformed
+// framing, a truncated body, a peer that stops talking. `sendRaw` writes the
+// request verbatim and returns the raw response ('' when nothing was answered).
+test('a malformed request is answered, not crashed on', () async {
+  final server = await TestServer.start(app, env);
+  addTearDown(server.close);
+  final raw = await server.sendRaw('GET /%c0%af HTTP/1.1\r\nhost: x\r\n\r\n');
+  expect(TestServer.statusOf(raw), 400);
 });
 ```
