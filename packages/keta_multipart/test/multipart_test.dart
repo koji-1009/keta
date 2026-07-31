@@ -3,6 +3,7 @@
 /// limits, and out-of-order/partial-consumption safety against `package:mime`.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:keta/keta.dart';
@@ -427,6 +428,158 @@ void main() {
         got.add((p.name, await p.text()));
       }
       expect(got, [('a', 'hello'), ('b', 'world')]);
+    });
+
+    group('a frame the parser rejects is a BadRequest, not an escaped error', () {
+      // package:mime reports an unparseable frame by throwing SYNCHRONOUSLY
+      // from the source subscription's onData, so the throw lands in the zone
+      // that registered the callback rather than on the stream `parts()`
+      // returns. Unguarded that zone is the root zone, where the throw is an
+      // unhandled error that ends the isolate — one unauthenticated POST was
+      // enough to take a server down, and neither `recover()` nor the
+      // transport's defensive catch could see it. Each case below rides that
+      // exact path, so a regression is a dead test process, not a red
+      // assertion.
+      final rejected = {
+        'a space inside a header field name':
+            '--B\r\nContent Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
+        'a boundary terminated by something other than CRLF':
+            '--B\tX\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
+        'a bare CR inside a header value':
+            '--B\r\nContent-Disposition: form-data;\rname="a"\r\n\r\nv\r\n--B--\r\n',
+        'an empty body': '',
+        'a body with no boundary in it at all': 'not multipart at all',
+      };
+      for (final entry in rejected.entries) {
+        test(entry.key, () {
+          expect(
+            parts(ctx(utf8.encode(entry.value))).toList(),
+            throwsA(isA<BadRequest>()),
+          );
+        });
+      }
+    });
+
+    test(
+      'a body that stops arriving ends the read instead of hanging',
+      () async {
+        // A truncated upload produces NO event: the parser never advances and
+        // never fails, and dart:io leaves the request body stalled rather than
+        // erroring it, so an unguarded `await part.text()` waits forever and
+        // holds its request slot. `c.aborted` — completed here by `abort()`, in
+        // production by a disconnect, a `timeout()`, or a graceful shutdown — is
+        // the only signal that arrives, so it must terminate both the part
+        // stream and the body being read.
+        final peerGone = Completer<void>();
+        final c = testContext<Object?>(
+          null,
+          method: 'POST',
+          headers: {'content-type': 'multipart/form-data; boundary=B'},
+          // A part header and the start of its body, with no closing boundary.
+          rawBody: utf8.encode(
+            '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\npar',
+          ),
+          closed: peerGone.future,
+        );
+        final reads = <Object>[];
+        final loop = () async {
+          await for (final p in parts(c)) {
+            try {
+              reads.add(await p.text());
+            } on KetaException catch (e) {
+              reads.add(e);
+            }
+          }
+        }();
+        // The read is outstanding; nothing has failed on its own.
+        await Future<void>.delayed(Duration.zero);
+        expect(reads, isEmpty);
+
+        peerGone.complete();
+        await expectLater(loop, throwsA(isA<BadRequest>()));
+        expect(reads.single, isA<BadRequest>());
+      },
+    );
+
+    group('over a real socket', () {
+      // This package had no wire-level test at all, and it is the one that
+      // rides the deliberate `c.bodyStream()` escape (so `maxBodyBytes` does
+      // not apply, and these limits are the only ones there are) while handing
+      // framing to a third-party parser. Both of the defects below are
+      // invisible to `testContext`: the parser's throw goes to the root zone
+      // rather than to any future a test awaits, and a truncated upload
+      // produces no event at all, only a peer that stops talking.
+      late TestServer server;
+
+      String upload(String body, {int? declaredLength}) =>
+          'POST /u HTTP/1.1\r\n'
+          'host: x\r\n'
+          'content-type: multipart/form-data; boundary=B\r\n'
+          'content-length: ${declaredLength ?? body.length}\r\n'
+          '\r\n$body';
+
+      setUp(() async {
+        final app = App<Object?>()
+          ..use(recover())
+          ..post('/u', (c) async {
+            final names = <String>[];
+            await for (final p in parts(c)) {
+              names.add('${p.name}=${await p.text()}');
+            }
+            return c.text(names.join(','));
+          });
+        server = await TestServer.start(app, null);
+      });
+      tearDown(() => server.close());
+
+      test('a malformed part header answers 400 and leaves the server '
+          'serving', () async {
+        // Before the parser's throw was contained this did not return 400 — it
+        // ended the process. Under `serve(isolates: n)` it took a worker per
+        // request until it hit the one that ends everything. Unauthenticated,
+        // one request, no body size needed.
+        final first = await server.sendRaw(
+          upload(
+            '--B\r\nContent Disposition: form-data; name="a"\r\n\r\nv\r\n'
+            '--B--\r\n',
+          ),
+        );
+        expect(TestServer.statusOf(first), 400);
+
+        // The point of the wire test: a live server answering afterwards is the
+        // assertion. A dead one cannot fail this — it never replies at all.
+        final second = await server.sendRaw(
+          upload(
+            '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n'
+            '--B--\r\n',
+          ),
+        );
+        expect(TestServer.statusOf(second), 200);
+      });
+
+      test('a client that abandons a half-sent upload does not strand the '
+          'request', () async {
+        // Declares more than it sends, then half-closes: the peer is gone with
+        // the body unfinished. dart:io neither errors nor closes the request
+        // body here, so an unguarded read waits forever and holds its slot.
+        const partial =
+            '--B\r\nContent-Disposition: form-data; name="a"\r\n'
+            '\r\npar';
+        await server.sendRaw(
+          upload(partial, declaredLength: partial.length + 500),
+          halfCloseAfterWrite: true,
+        );
+        // The abandoned request answers nothing (the peer left), so the
+        // observable is that the server is still healthy rather than pinned.
+        final after = await server.sendRaw(
+          upload(
+            '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\nok\r\n'
+            '--B--\r\n',
+          ),
+        );
+        expect(TestServer.statusOf(after), 200);
+        expect(after, contains('a=ok'));
+      });
     });
 
     test('boundary-like bytes inside a body are preserved verbatim', () async {
