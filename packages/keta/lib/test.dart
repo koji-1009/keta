@@ -9,11 +9,13 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:test/test.dart' show test;
 
 import 'src/app.dart';
 import 'src/context.dart';
+import 'src/h1_transport.dart';
 import 'src/log.dart';
 import 'src/response.dart';
 import 'src/transport.dart';
@@ -24,6 +26,12 @@ import 'src/upgrade.dart';
 /// [rawBody], when given, is used as the request body verbatim (taking
 /// precedence over [jsonBody]) so a malformed-JSON or over-limit body can be
 /// exercised; [maxBodyBytes] sets the body-size ceiling.
+///
+/// [closed] is the same signal a Transport supplies for a client disconnect:
+/// completing it completes `c.aborted`, exactly as `request.closed` does in a
+/// real dispatch. Without it a unit test cannot reach the cooperative-
+/// cancellation half of a handler's contract — the half that decides whether a
+/// peer walking away frees the request or strands it.
 Context<E> testContext<E>(
   E env, {
   String method = 'GET',
@@ -33,6 +41,7 @@ Context<E> testContext<E>(
   Object? jsonBody,
   List<int>? rawBody,
   int maxBodyBytes = 1 << 20,
+  Future<void>? closed,
 }) {
   final baseLog = env is HasLog
       ? (env as HasLog).log
@@ -60,47 +69,61 @@ Context<E> testContext<E>(
         // as the matched template — the same bounded value a real dispatch
         // would have baked into the log line.
         ..matchedTemplate = path;
+  // The same wiring `Router.dispatch` applies to `request.closed`; `abort()` is
+  // idempotent, so a signal that never completes costs nothing.
+  if (closed != null) {
+    unawaited(closed.then((_) => ctx.abort()));
+  }
   return Context<E>(ctx);
 }
 
 /// A socket-free client that runs the full pipeline — radix compilation,
 /// matching, middleware, and handlers — against an in-memory request.
 class TestClient<E> {
-  TestClient(App<E> app, E env) : _router = app.compile(env);
+  /// [maxBodyBytes] is the same ceiling `serve()` takes, so the 413 boundary is
+  /// reachable here rather than only through a real server.
+  TestClient(App<E> app, E env, {int maxBodyBytes = 1 << 20})
+    : _router = app.compile(env, maxBodyBytes: maxBodyBytes);
   final Router<E> _router;
 
   Future<TestResponse> get(String path, {Map<String, String>? headers}) =>
-      _send('GET', path, null, headers);
+      _send('GET', path, null, null, headers);
 
+  /// [body], when given, is sent verbatim and takes precedence over [json] —
+  /// the way to exercise a malformed or non-JSON payload through the pipeline.
   Future<TestResponse> post(
     String path, {
     Object? json,
+    List<int>? body,
     Map<String, String>? headers,
-  }) => _send('POST', path, json, headers);
+  }) => _send('POST', path, json, body, headers);
 
   Future<TestResponse> put(
     String path, {
     Object? json,
+    List<int>? body,
     Map<String, String>? headers,
-  }) => _send('PUT', path, json, headers);
+  }) => _send('PUT', path, json, body, headers);
 
   Future<TestResponse> delete(
     String path, {
     Object? json,
+    List<int>? body,
     Map<String, String>? headers,
-  }) => _send('DELETE', path, json, headers);
+  }) => _send('DELETE', path, json, body, headers);
 
   Future<TestResponse> patch(
     String path, {
     Object? json,
+    List<int>? body,
     Map<String, String>? headers,
-  }) => _send('PATCH', path, json, headers);
+  }) => _send('PATCH', path, json, body, headers);
 
   Future<TestResponse> options(String path, {Map<String, String>? headers}) =>
-      _send('OPTIONS', path, null, headers);
+      _send('OPTIONS', path, null, null, headers);
 
   Future<TestResponse> head(String path, {Map<String, String>? headers}) =>
-      _send('HEAD', path, null, headers);
+      _send('HEAD', path, null, null, headers);
 
   /// Attempts a WebSocket upgrade against [path], running the FULL pipeline —
   /// matching, app/group middleware, the security gate, `recover` — before the
@@ -149,12 +172,18 @@ class TestClient<E> {
     String method,
     String path,
     Object? json,
+    List<int>? body,
     Map<String, String>? headers,
   ) async {
-    final request = _TestRequest(method, Uri.parse(path), {
-      for (final e in (headers ?? const {}).entries)
-        e.key.toLowerCase(): [e.value],
-    }, json == null ? const [] : utf8.encode(jsonEncode(json)));
+    final request = _TestRequest(
+      method,
+      Uri.parse(path),
+      {
+        for (final e in (headers ?? const {}).entries)
+          e.key.toLowerCase(): [e.value],
+      },
+      body ?? (json == null ? const [] : utf8.encode(jsonEncode(json))),
+    );
     final response = await _router.dispatch(request);
     return TestResponse._from(response);
   }
@@ -162,9 +191,17 @@ class TestClient<E> {
 
 /// The materialized result of a [TestClient] request.
 class TestResponse {
-  TestResponse._(this.status, this.headers, this._body);
+  TestResponse._(this.status, this.headers, this.headerValues, this._body);
   final int status;
+
+  /// Each header flattened to its first value, for assertion convenience.
   final Map<String, String> headers;
+
+  /// Every value of every header, in order. [headers] cannot express a response
+  /// that legitimately repeats one — `set-cookie` above all — so an assertion
+  /// about "both cookies were set" had no way to be written.
+  final Map<String, List<String>> headerValues;
+
   final String _body;
 
   static Future<TestResponse> _from(Response response) async {
@@ -177,17 +214,117 @@ class TestResponse {
       ),
       _ => '',
     };
-    return TestResponse._(response.status, {
-      // Flattened to first value for assertion convenience; multi-value fidelity
-      // is exercised at the Response/bridge level.
-      for (final e in response.headers.entries)
-        e.key: e.value.isEmpty ? '' : e.value.first,
-    }, text);
+    return TestResponse._(
+      response.status,
+      {
+        for (final e in response.headers.entries)
+          e.key: e.value.isEmpty ? '' : e.value.first,
+      },
+      {
+        for (final e in response.headers.entries)
+          e.key: List.unmodifiable(e.value),
+      },
+      text,
+    );
   }
 
   String text() => _body;
 
   Object? json() => _body.isEmpty ? null : jsonDecode(_body);
+}
+
+/// Runs an [App] on a real socket, so a test can put arbitrary BYTES on the
+/// wire instead of a request this library built for it.
+///
+/// [TestClient] calls `Router.dispatch` directly, which is what makes it fast
+/// and deterministic — and also strictly weaker than production, in ways that
+/// decide whether a defect is reachable by a test at all:
+///
+/// * dart:io validates response header names and values; the semantic layer's
+///   gate is separate, so a header this framework accepts and the wire refuses
+///   is invisible without a socket.
+/// * a real transport wraps dispatch in a defensive `catch`, so what a test
+///   sees as an escaped exception is a 500 in production — and vice versa.
+/// * a synchronous throw from inside a source subscription reaches the ROOT
+///   ZONE, not any future a test awaits. In production that ends the isolate.
+///   An in-memory `Stream.value` body may never even take that path.
+/// * malformed framing — a bad percent-escape, a broken multipart header, a
+///   truncated upload — cannot be expressed as a `Map` and a decoded object.
+///
+/// Every one of those is a defect class this harness could not ask about, which
+/// is why they went unfound while the suite was green. Reach for [TestServer]
+/// whenever the thing under test is what happens when the bytes are hostile or
+/// the peer misbehaves; [TestClient] remains right for everything above the
+/// framing.
+class TestServer {
+  TestServer._(this._server, this.port);
+  final TransportServer _server;
+
+  /// The bound loopback port.
+  final int port;
+
+  /// Binds [app] with [env] on an ephemeral loopback port.
+  ///
+  /// [onError] receives what the transport reports; it defaults to swallowing,
+  /// so a test that deliberately provokes transport errors is not drowned in
+  /// stack traces. Pass a recorder to assert on them.
+  static Future<TestServer> start<E>(
+    App<E> app,
+    E env, {
+    int maxBodyBytes = 1 << 20,
+    void Function(Object error, StackTrace stack)? onError,
+  }) async {
+    final router = app.compile(env, maxBodyBytes: maxBodyBytes);
+    // Port 0 lets the OS pick, so parallel suites never collide on a constant.
+    final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = probe.port;
+    await probe.close();
+    final server = await H1Transport(
+      onError: onError ?? (_, _) {},
+    ).bind(port, router.dispatch);
+    return TestServer._(server, port);
+  }
+
+  /// Writes [request] to the socket VERBATIM and returns the raw response.
+  ///
+  /// Nothing is framed, escaped, or content-length-corrected on the way out:
+  /// the point is to send bytes no client library would produce. Give the
+  /// literal request line, headers, blank line, and body.
+  ///
+  /// Returns the empty string when the server answers nothing before [timeout]
+  /// — which is itself an assertable outcome, since "the request hung and held
+  /// its slot" is exactly the failure a truncated upload used to cause.
+  Future<String> sendRaw(
+    String request, {
+    Duration timeout = const Duration(seconds: 2),
+    bool halfCloseAfterWrite = false,
+  }) async {
+    final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+    socket.write(request);
+    await socket.flush();
+    if (halfCloseAfterWrite) {
+      // Models the client that starts a body and walks away: the server sees
+      // EOF with the declared length unmet.
+      await socket.close();
+    }
+    final bytes = await socket
+        .timeout(timeout, onTimeout: (sink) => sink.close())
+        .fold<List<int>>(<int>[], (a, b) => a..addAll(b))
+        .catchError((Object _) => <int>[]);
+    socket.destroy();
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+
+  /// The status line's code from a [sendRaw] result, or null when the server
+  /// answered nothing.
+  static int? statusOf(String rawResponse) {
+    final line = rawResponse.split('\r\n').first;
+    final parts = line.split(' ');
+    return parts.length < 2 ? null : int.tryParse(parts[1]);
+  }
+
+  Future<void> close({Duration grace = const Duration(milliseconds: 200)}) =>
+      _server.close(grace: grace);
 }
 
 /// The two shapes a handler can fail in.
