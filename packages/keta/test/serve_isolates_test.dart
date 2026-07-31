@@ -4,6 +4,7 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -89,4 +90,90 @@ void main() {
       await probe.close();
     },
   );
+
+  test('a worker that dies after binding is reported, and shutdown does not '
+      'wait for it', () async {
+    // The spec lists worker-isolate death as a required chaos scenario and it
+    // had no test. The old code closed the `errors` port in the `finally` right
+    // after a successful spawn, so nothing was listening when a worker later
+    // died: with a `shared: true` listener the corpse simply left the accept
+    // set, the process kept serving on one fewer isolate with nothing logged,
+    // and shutdown then sent to a dead control port and waited out the entire
+    // `grace + 5s` for an ack that could never come.
+    deaths.clear();
+    parentIsolate = true;
+    final server = await buildIsoApp().serve(
+      bootThatCrashesWorkers,
+      isolates: 2,
+      port: 8097,
+    );
+    // `bootThatCrashesWorkers` arms a timer in the spawned isolate only; worker
+    // 0 boots here and stays healthy, which is what keeps this test's own
+    // process alive to observe the death.
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    expect(deaths, hasLength(1));
+
+    final watch = Stopwatch()..start();
+    await server.shutdown(grace: const Duration(seconds: 2));
+    watch.stop();
+    expect(
+      watch.elapsed,
+      lessThan(const Duration(seconds: 2)),
+      reason: 'a dead worker must not be waited on',
+    );
+  });
+}
+
+/// Death reports observed by the parent isolate. A worker gets its own copy of
+/// this library's statics, so only the parent's entries land here — which is
+/// exactly the isolate whose log is supposed to carry the report.
+final deaths = <String>[];
+
+/// Set by the test before serving. A spawned isolate initializes this library
+/// afresh, so it reads `false` there and `true` here — the discriminator that
+/// lets one boot function be healthy in the parent and fatal in a worker.
+/// (`Isolate.current.debugName` cannot do this job: package:test already runs
+/// the test body in a spawned isolate of its own.)
+var parentIsolate = false;
+
+/// Boots normally on the parent isolate and arms a fatal async error on any
+/// spawned one, so the worker dies AFTER it has bound and been handed back.
+Future<IsoEnv> bootThatCrashesWorkers() async {
+  if (!parentIsolate) {
+    Timer(
+      const Duration(milliseconds: 200),
+      // Uncaught, in the root zone, with `errorsAreFatal: true`: the isolate
+      // dies exactly as it would on any unhandled error in worker code.
+      () => throw StateError('worker crash'),
+    );
+  }
+  return IsoEnv(_DeathRecordingLog());
+}
+
+class _DeathRecordingLog implements Log {
+  final _out = StdoutLog(flushInterval: Duration.zero);
+
+  @override
+  void error(
+    String msg, [
+    Object? error,
+    StackTrace? st,
+    Map<String, Object?> fields = const {},
+  ]) {
+    if (msg.startsWith('worker isolate died')) deaths.add(msg);
+  }
+
+  @override
+  void debug(String msg, [Map<String, Object?> fields = const {}]) =>
+      _out.debug(msg, fields);
+  @override
+  void info(String msg, [Map<String, Object?> fields = const {}]) =>
+      _out.info(msg, fields);
+  @override
+  void warn(String msg, [Map<String, Object?> fields = const {}]) =>
+      _out.warn(msg, fields);
+  @override
+  Future<void> flush() => _out.flush();
+  @override
+  Log withFields(Map<String, Object?> fields) => this;
 }

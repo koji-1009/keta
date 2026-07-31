@@ -315,20 +315,38 @@ class App<E> {
     // A running server flushes periodically; only the env-less fallback needs a
     // timer here (a HasLog env owns its own).
     final fallbackLog = env is HasLog ? null : StdoutLog();
-    final router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
-    final t =
-        transport ??
-        H1Transport(
-          onError: (e, st) => router.baseLog.error('transport error', e, st),
-        );
-    final server = await t.bind(port, router.dispatch);
+    // Named before `compile`, because everything between here and a bound
+    // socket can throw and the teardown below needs something to flush.
+    final bootLog = fallbackLog ?? (env as HasLog).log;
+    final Router<E> router;
+    final TransportServer server;
+    try {
+      // Both of these fail on ordinary misconfiguration — `compile` on a route
+      // conflict or a middleware-order violation (the documented boot-time
+      // fail-fast), `bind` on a port already in use. Neither used to release
+      // anything, so the very errors the framework raises to stop a bad start
+      // left the env open AND left `fallbackLog`'s periodic timer pinning the
+      // isolate: a process that caught the error to exit cleanly hung instead.
+      router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
+      final t =
+          transport ??
+          H1Transport(
+            onError: (e, st) => router.baseLog.error('transport error', e, st),
+          );
+      server = await t.bind(port, router.dispatch);
+    } catch (_) {
+      await _teardown(env, bootLog);
+      rethrow;
+    }
     if (isolates == 1) {
       return _Server<E>(env, router.baseLog, server);
     }
     final workers = <_Worker>[];
     try {
       for (var i = 1; i < isolates; i++) {
-        workers.add(await _spawnWorker<E>(this, boot, port, maxBodyBytes));
+        workers.add(
+          await _spawnWorker<E>(this, boot, port, maxBodyBytes, router.baseLog),
+        );
       }
     } catch (_) {
       // Partial startup: worker 0 already bound its socket and booted its env.
@@ -336,12 +354,10 @@ class App<E> {
       // so a failed spawn never leaks a live listener and an un-closed env with
       // no Server handle to release them.
       for (final worker in workers) {
-        worker.isolate.kill(priority: Isolate.immediate);
+        worker.kill();
       }
       await server.close(grace: Duration.zero);
-      if (env is Disposable) await (env as Disposable).close();
-      await router.baseLog.flush();
-      if (router.baseLog is StdoutLog) (router.baseLog as StdoutLog).dispose();
+      await _teardown(env, router.baseLog);
       rethrow;
     }
     return _MultiServer<E>(env, router.baseLog, server, workers);
@@ -660,6 +676,28 @@ abstract interface class Server {
   Future<void> shutdown({Duration grace});
 }
 
+/// Releases an env and its log — the one place that happens.
+///
+/// Every path that stops owning the pair runs this: a startup that failed
+/// before binding, a failed worker spawn, either `Server.shutdown`, and a
+/// worker's own exit. It is a function rather than three lines copied five
+/// times because copied it was, and two of the copies were simply missing —
+/// silently, since the symptom is a process that will not exit rather than an
+/// error anyone sees.
+///
+/// The `finally` is the second half. `env.close()` can throw (a pool that fails
+/// to drain), and a throw used to skip the flush and the timer dispose that
+/// follow it — losing the log lines that explain the failure, at the one moment
+/// they are worth most, and hanging the process on the way out.
+Future<void> _teardown<E>(E env, Log log) async {
+  try {
+    if (env is Disposable) await (env as Disposable).close();
+  } finally {
+    await log.flush();
+    if (log is StdoutLog) log.dispose();
+  }
+}
+
 class _Server<E> implements Server {
   _Server(this.env, this._baseLog, this._transport);
   final E env;
@@ -669,17 +707,35 @@ class _Server<E> implements Server {
   @override
   Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
     await _transport.close(grace: grace);
-    if (env is Disposable) await (env as Disposable).close();
-    await _baseLog.flush();
-    if (_baseLog is StdoutLog) _baseLog.dispose();
+    await _teardown(env, _baseLog);
   }
 }
 
-/// A handle to a spawned worker isolate and its shutdown control port.
+/// A handle to a spawned worker isolate, its shutdown control port, and the
+/// port over which the isolate reports its own death.
 class _Worker {
-  _Worker(this.isolate, this.control);
-  final Isolate isolate;
-  final SendPort control;
+  _Worker(this.events);
+
+  /// Carries the isolate's `onError` payload and its `onExit` signal. Held open
+  /// for the worker's whole life: closing it right after a successful spawn —
+  /// which is what used to happen — throws away the only channel on which a
+  /// worker can say it died. A `shared: true` listener that dies leaves the
+  /// accept set silently, so the process kept serving on N-1 isolates with
+  /// nothing logged, and shutdown then spent the full grace waiting for an ack
+  /// from an isolate that no longer existed.
+  final ReceivePort events;
+
+  late final Isolate isolate;
+  late final SendPort control;
+
+  /// Set when the isolate reports that it is gone. A dead worker is not sent
+  /// to, not waited for, and not killed.
+  bool dead = false;
+
+  void kill() {
+    if (!dead) isolate.kill(priority: Isolate.immediate);
+    events.close();
+  }
 }
 
 /// The server for [App.serve] with `isolates > 1`: worker 0 runs here, the rest
@@ -696,25 +752,32 @@ class _MultiServer<E> implements Server {
     final ports = <ReceivePort>[];
     final acks = <Future<void>>[];
     for (final worker in _workers) {
+      // A worker that already died has no one to receive the request and no ack
+      // to give; waiting on it would burn the whole `grace + 5s` for nothing.
+      if (worker.dead) continue;
       final ack = ReceivePort();
       ports.add(ack);
       worker.control.send((ack.sendPort, grace.inMilliseconds));
       acks.add(ack.first.then((_) {}));
     }
-    await _transport.close(grace: grace);
-    if (_env is Disposable) await (_env as Disposable).close();
-    await _baseLog.flush();
-    if (_baseLog is StdoutLog) _baseLog.dispose();
-    await Future.wait(
-      acks,
-    ).timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
-    // Close every ack port whether or not the ack arrived — an un-closed
-    // ReceivePort keeps this isolate alive and hangs the process.
-    for (final port in ports) {
-      port.close();
-    }
-    for (final worker in _workers) {
-      worker.isolate.kill(priority: Isolate.immediate);
+    try {
+      await _transport.close(grace: grace);
+      await _teardown(_env, _baseLog);
+    } finally {
+      // Reached even if the env refused to close: the ports and the isolates
+      // below are what decide whether this process can exit at all, and a
+      // failed drain is no reason to strand them.
+      await Future.wait(
+        acks,
+      ).timeout(grace + const Duration(seconds: 5), onTimeout: () => const []);
+      // Close every ack port whether or not the ack arrived — an un-closed
+      // ReceivePort keeps this isolate alive and hangs the process.
+      for (final port in ports) {
+        port.close();
+      }
+      for (final worker in _workers) {
+        worker.kill();
+      }
     }
   }
 }
@@ -724,32 +787,69 @@ Future<_Worker> _spawnWorker<E>(
   Future<E> Function() boot,
   int port,
   int maxBodyBytes,
+  Log log,
 ) async {
   final ready = ReceivePort();
-  final errors = ReceivePort();
+  final worker = _Worker(ReceivePort());
+  final failed = Completer<Object?>();
+  var bound = false;
+  // One listener for the isolate's whole life, rather than a `first` that
+  // consumes the port: before it binds, a message means the spawn failed;
+  // after, it means the worker died and the process is now serving on one
+  // fewer isolate. Reporting that is the framework's part — restarting is the
+  // supervisor's, which is why nothing here tries to.
+  worker.events.listen((message) {
+    if (!bound) {
+      if (!failed.isCompleted) failed.complete(message);
+      return;
+    }
+    if (worker.dead) return;
+    worker.dead = true;
+    // `onError` sends [error, stackTraceString]; `onExit` sends null.
+    final payload = message is List && message.isNotEmpty
+        ? message.first
+        : null;
+    log.error(
+      'worker isolate died; serving continues with one fewer listener',
+      payload,
+      null,
+      {
+        if (message is List && message.length > 1)
+          'workerStack': '${message[1]}',
+      },
+    );
+  });
   try {
     final isolate = await Isolate.spawn(
       _workerEntry<E>,
       (app, boot, port, maxBodyBytes, ready.sendPort),
-      onError: errors.sendPort,
+      onError: worker.events.sendPort,
+      onExit: worker.events.sendPort,
       errorsAreFatal: true,
     );
     // Whichever comes first: the child's control port (bound) or an error.
     final control = await Future.any([
       ready.first,
-      errors.first.then<Object?>(
+      failed.future.then<Object?>(
         (e) => throw StateError('worker failed to start: $e'),
       ),
     ]);
-    return _Worker(isolate, control as SendPort);
+    worker
+      ..isolate = isolate
+      ..control = control as SendPort;
+    bound = true;
+    return worker;
     // ignore: avoid_catching_errors
   } on ArgumentError catch (e) {
+    worker.events.close();
     throw StateError(
       'serve(isolates > 1) requires a sendable boot and handlers: $e',
     );
+  } catch (_) {
+    worker.events.close();
+    rethrow;
   } finally {
     ready.close();
-    errors.close();
   }
 }
 
@@ -767,12 +867,16 @@ Future<void> _workerEntry<E>(
   final control = ReceivePort();
   ready.send(control.sendPort);
   final (SendPort ack, int graceMs) = await control.first as (SendPort, int);
-  await transport.close(grace: Duration(milliseconds: graceMs));
-  if (env is Disposable) await (env as Disposable).close();
-  await router.baseLog.flush();
-  if (router.baseLog is StdoutLog) (router.baseLog as StdoutLog).dispose();
-  control.close();
-  ack.send(null);
+  try {
+    await transport.close(grace: Duration(milliseconds: graceMs));
+    await _teardown(env, router.baseLog);
+  } finally {
+    // The parent is waiting on this ack with a bounded timeout; a worker whose
+    // env refused to close must still say so, or it costs the whole grace
+    // window before the parent gives up on it.
+    control.close();
+    ack.send(null);
+  }
 }
 
 /// An environment that exposes a [Log]. When `E` implements this, per-request
