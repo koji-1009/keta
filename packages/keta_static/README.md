@@ -30,7 +30,11 @@ Bytes arrive through one interface, so where they live is not this package's bus
 | Source | For |
 |---|---|
 | `DirectoryAssets(Directory)` | files on disk |
-| `MemoryAssets({path: bytes})` | assets compiled into the binary, and tests |
+| `MemoryAssets.ofText({path: string})` | text held in hand, and tests |
+| `MemoryAssets.ofBytes({path: bytes})` | assets compiled into the binary |
+| `MemoryAssets({path: Asset})` | full control of each `Asset` (its own `etag`, an explicit content type) |
+
+`MemoryAssets` also takes `indexFile` (default `index.html`), served for a request that names a directory.
 
 Implement `AssetSource` for anything else (an object store, an embedded archive). `resolve(path)` returns an `Asset` — bytes, content type, length, `etag` — or `null` for a miss.
 

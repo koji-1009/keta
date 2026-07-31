@@ -284,10 +284,10 @@ class Response {
 /// user-facing text; [detail] is optional structured context (such as a
 /// validation violation list) that a boundary may include or withhold.
 ///
-/// A `switch` over the named subtypes is NOT exhaustive on its own, and this
-/// doc used to claim otherwise. [KetaException.status] builds an
-/// arbitrary-status member whose type is deliberately not public — there is no
-/// name to write a case for — so a total `switch` needs a wildcard:
+/// A `switch` over the named subtypes is NOT exhaustive on its own.
+/// [KetaException.status] builds an arbitrary-status member whose type is
+/// deliberately not public — there is no name to write a case for — so a
+/// total `switch` needs a wildcard:
 ///
 /// ```dart
 /// final label = switch (e) {
@@ -386,8 +386,9 @@ final class Unavailable extends KetaException {
 /// reasonable next move (a serialization failure or a deadlock the engine broke
 /// by aborting this transaction). The retryability is the type: there is no
 /// `retryable` flag and no `Retryable` marker — a caller keys off `is
-/// TransientFailure`, and the exhaustive `switch` over [KetaException] makes the
-/// case impossible to forget.
+/// TransientFailure`, and a `switch` over [KetaException] that names its cases
+/// makes this one hard to forget (see [KetaException] for why such a switch
+/// still needs a wildcard).
 ///
 /// keta deliberately does NOT retry for you. Whether replaying the request is
 /// safe depends on its idempotency, which is unknowable at this layer (the same

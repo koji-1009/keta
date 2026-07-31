@@ -10,9 +10,6 @@
 @TestOn('vm')
 library;
 
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:keta/keta.dart';
 import 'package:keta/test.dart';
 import 'package:keta_static/keta_static.dart';
@@ -21,15 +18,11 @@ import 'package:test/test.dart';
 App<Object?> appWith(Map<String, String> assets) => App<Object?>()
   ..use(recover())
   ..use(
+    // `ofText` is the constructor the README's table names first, so the
+    // documented ergonomic path is the one under test.
     staticFiles<Object?>(
       prefix: '/assets',
-      source: MemoryAssets({
-        for (final e in assets.entries)
-          e.key: Asset(
-            bytes: Uint8List.fromList(utf8.encode(e.value)),
-            contentType: 'text/plain',
-          ),
-      }),
+      source: MemoryAssets.ofText(assets),
     ),
   )
   ..get('/assets/dynamic', (c) => c.text('a route under the same prefix'))

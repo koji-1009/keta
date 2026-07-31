@@ -1,10 +1,10 @@
 # keta (桁)
 
-keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK `^3.12`): routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values, and the user code that results reads as plain Dart. The name keta (桁) is the load-bearing girder in traditional Japanese joinery — a member that carries load through its shape, without nails — and is also the Japanese word for "digit".
+keta is a reflection-free, build-step-free HTTP server framework for Dart (SDK `^3.12`): routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values, and the user code that results reads as plain Dart. The name keta (桁) is the load-bearing girder in traditional Japanese joinery — a member that carries load through its shape, without nails — and is also the Japanese word for "digit".
 
 ## The thesis
 
-Structure bears the load, not machinery. There is no reflection, no DI container, no `build_runner`, and nothing is generated at build time — no `.g.dart`, no generated sources on the build path, nothing to regenerate before the code compiles. Two optional tools do write Dart, and both write it into your own files rather than beside them: keta_lints' `fix` materializes a DTO's canonical form (`fromJson`/`toJson`/`Schema`) once and transfers ownership, and keta_files' `sync` maintains a marked route-manifest region (`keta_files:check` gates it). What they produce is checked-in, diffable source you own and edit; the canonical DTO form is otherwise hand-written, kept honest by keta_lints' check/fix loop, which makes drift between a class and its mappers a loud failure rather than a runtime surprise. Derived artifacts flow one way: the declarations (`RouteDoc`/`Schema`, owned by core) are the source that both the runtime security gate and the OpenAPI emitter read, and the OpenAPI document keta_openapi produces is the one-way derived shadow — never a source that drives them. The whole surface is small enough that both humans and AI agents can write conforming code from a single short [guide](llms.txt).
+Structure bears the load, not machinery. There is no reflection, no DI container, no `build_runner`, and nothing is generated at build time — no `.g.dart`, no generated sources on the build path, nothing to regenerate before the code compiles. Two optional tools do write Dart, and both write it into your own files rather than beside them: keta_lints' `fix` materializes a DTO's canonical form (`fromJson`/`toJson`/`Schema`) once and transfers ownership, and keta_files' `sync` maintains a marked route-manifest region (`keta_files:check` gates it). What they produce is checked-in, diffable source rather than a build artifact — the DTO members become yours to edit, while the manifest region stays machine-owned (you edit the tree, and re-run `sync`); the canonical DTO form is otherwise hand-written, kept honest by keta_lints' check/fix loop, which makes drift between a class and its mappers a loud failure rather than a runtime surprise. Derived artifacts flow one way: the declarations (`RouteDoc`/`Schema`, owned by core) are the source that both the runtime security gate and the OpenAPI emitter read, and the OpenAPI document keta_openapi produces is the one-way derived shadow — never a source that drives them. The whole surface is small enough that both humans and AI agents can write conforming code from a single short [guide](llms.txt).
 
 ## A route, three ways
 
@@ -54,12 +54,12 @@ A streaming response lives on the isolate that produced it. To reach subscribers
 
 ## Packages
 
-Two axes, deliberately separate. **Ring** is measured: a package's ring is its production-dependency depth inside the workspace (dev_dependencies do not count — keta_oidc dev-depends on `keta_native` so its middleware tests verify against a real BoringSSL-backed key, without that dependency counting toward its ring) — `keta` is 0, a package whose only workspace dependency is `keta` is 1, an adapter over a ring-1 abstraction is 2 — so the column is derivable from the pubspecs and verifiable by grep, never by decree. Two packages depend on nothing in the workspace at all, not even `keta`: they carry no ring (—, *standalone*) because they are not layers of the onion but independent parts the rings pull in, exactly like a third-party package. **Tier** is judged: Core/Recommended/Optional says how much of keta's story a package carries, and it does not correlate with ring — `keta_sqlite` is ring 2 yet Core, `keta_bus` is standalone yet Optional. Dependencies flow inward only (a package may depend only on strictly lower rings, plus standalone packages), and peeling off any package nothing else depends on never breaks the rest. `keta`'s server depends on nothing beyond the SDK; the package deliberately ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
+Two axes, deliberately separate. **Ring** is measured: a package's ring is its production-dependency depth inside the workspace (dev_dependencies do not count — keta_oidc dev-depends on the standalone `keta_native` so one interaction test can prove a real native key cannot cross an isolate boundary, and deliberately never on `keta_oidc_boringssl`, the package that depends on *it*) — `keta` is 0, a package whose only workspace dependency is `keta` is 1, an adapter over a ring-1 abstraction is 2 — so the column is derivable from the pubspecs and verifiable by grep, never by decree. Two packages depend on nothing in the workspace at all, not even `keta`: they carry no ring (—, *standalone*) because they are not layers of the onion but independent parts the rings pull in, exactly like a third-party package. **Tier** is judged: Core/Recommended/Optional says how much of keta's story a package carries, and it does not correlate with ring — `keta_sqlite` is ring 2 yet Core, `keta_bus` is standalone yet Optional. Dependencies flow inward only (a package may depend only on strictly lower rings, plus standalone packages), and peeling off any package nothing else depends on never breaks the rest. `keta`'s server depends on nothing beyond the SDK; the package deliberately ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
 
 | Package | Ring | Tier | What it is |
 |---|---|---|---|
 | `keta` | 0 | Core | Router, Context, middleware and their ordering ranks, server, Log, the declaration contract — `Schema` validation, `RouteDoc`, and the `enforceSecurity` gate — and the in-package test-support library (`package:keta/test.dart`, the `TestClient` harness). The server itself depends on nothing beyond the SDK. |
-| `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `HasDb` environment contract, the migration runner, `DbCapabilities` and the row accessors that read what engines spell differently, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
+| `keta_db` | 1 | Core | The `Db` abstraction (`reader`/`writer`), the `tx()` vessel, the `Env` contract, the migration runner, `DbCapabilities` and the row accessors that read what engines spell differently, and the shared adapter conformance suite (`package:keta_db/test.dart`). |
 | `keta_openapi` | 1 | Recommended | The route-table walk that emits an OpenAPI 3.1 document from `RouteDoc`/`Schema` (owned by `keta`). Pure derivation — runtime assembly, no code generation — so removing it changes no runtime behavior. |
 | `keta_lints` | 1 | Recommended | Stable-ID diagnostics plus the materializing `check`/`fix` loop; the drift it catches spans canonical DTO forms, schema/contract, field types, and middleware ordering (reading `keta`'s own ranks, so the lint and the runtime cannot disagree). |
 | `keta_files` | 1 | Optional | File-based routing: a file's location under `lib/routes/` is its URL, and its directory is its middleware scope. |
@@ -79,7 +79,7 @@ These absences were judged, not overlooked — do not read them as gaps to fill:
 
 ## Status
 
-v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are 1,497 tests across the workspace (+1 that runs only against a live PostgreSQL), which the loop under Quick start reproduces; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
+v0.1.0, under active development. Not yet on pub.dev (`publish_to: none`), and the APIs may still change. There are roughly 1,500 tests across the workspace (plus one that runs only against a live PostgreSQL), which the loop under Quick start counts; the `examples/` directory is the living demonstration, exercised by those tests rather than described in prose. Licensed under [MIT](LICENSE).
 
 ## Quick start
 
@@ -92,9 +92,7 @@ cd examples/register            # a real CRUD app over SQLite, in both syntaxes
 dart run bin/main.dart          # migrate, then serve on :8080
 dart test                       # this example's tests
 
-# every suite, per package and example (CI runs these same suites, plus
-# libsqlite3, a PostgreSQL container for keta_rds' contract tests, and a
-# BoringSSL source cache — so this is the suites, not the whole CI job):
+# tests run per package/example, as CI does:
 for d in packages/*/ examples/*/; do [ -d "$d/test" ] && (cd "$d" && dart test); done
 ```
 
