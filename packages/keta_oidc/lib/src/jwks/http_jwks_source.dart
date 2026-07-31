@@ -41,6 +41,15 @@ typedef JwksFetch = Future<String> Function(Uri url);
 ///   loopback host (`localhost`, `127.0.0.0/8`, `::1`), where there is no
 ///   on-path attacker to defend against — this keeps local development against a
 ///   dev IdP possible without a global "trust plaintext" escape hatch.
+/// * **Redirects are not followed.** The scheme check above vets the URL that
+///   was configured or discovered; it says nothing about where a `3xx` would
+///   send the next hop. Following one would let a single redirect from the
+///   issuer's own endpoint hand the key set to a plaintext or attacker-chosen
+///   host — and, since discovery rides the same fetch, let a redirect supply
+///   the very document whose `issuer` is then compared. A JWKS URI is
+///   configuration an issuer publishes about itself, not a resource that moves,
+///   so a redirect is reported as a failed fetch. An issuer that does redirect
+///   is served by configuring the resolved URL.
 /// * **Response size is capped.** Every fetch (discovery and JWKS) is bounded to
 ///   [_maxResponseBytes]; a body that exceeds it aborts the read and is treated
 ///   as a failed refresh (serve-stale if warm, [JwksUnavailable] if cold), so a
@@ -451,7 +460,26 @@ final class HttpJwksSource implements JwksSource {
     final client = HttpClient()..connectionTimeout = connectTimeout;
     try {
       final request = await client.getUrl(url).timeout(totalTimeout);
+      // Redirects are not followed. `_isSecureTransport` vets the configured
+      // (or discovered) URL once; dart:io's default would then chase up to five
+      // hops with NO further check of scheme OR host, so a single `302` from
+      // the issuer's endpoint to a plaintext or attacker-controlled host hands
+      // the key set — and therefore token validation — to whoever answers
+      // there. The same fetch serves the discovery document, so following would
+      // also let a redirect supply the very document whose `issuer` is then
+      // checked. A JWKS URI is configuration the issuer publishes about itself,
+      // not a resource that moves; an issuer that does redirect is served by
+      // configuring the resolved URL directly.
+      request.followRedirects = false;
       final response = await request.close().timeout(totalTimeout);
+      if (response.isRedirect) {
+        await response.drain<void>();
+        throw HttpException(
+          'JWKS endpoint answered with a redirect (HTTP '
+          '${response.statusCode}); redirects are not followed',
+          uri: url,
+        );
+      }
       if (response.statusCode != HttpStatus.ok) {
         // Drain so the connection can be reused/closed cleanly, then fail.
         await response.drain<void>();

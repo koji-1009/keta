@@ -723,5 +723,85 @@ void main() {
         ),
       );
     });
+
+    group('redirects', () {
+      // The transport check vets the URL that was configured or discovered and
+      // says nothing about where a 3xx points. dart:io's default would chase up
+      // to five hops without re-checking scheme OR host, so one redirect from
+      // the issuer's own endpoint substitutes the signing keys — the exact
+      // attack the "HTTPS is required" paragraph claims to prevent. These need
+      // real sockets: the redirect is followed (or not) inside the default
+      // HttpClient fetch, which a `fetch` hook bypasses entirely.
+      late HttpServer elsewhere;
+      var elsewhereHits = 0;
+
+      Future<Uri> startElsewhere(String body) async {
+        elsewhere = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        elsewhere.listen((req) {
+          elsewhereHits++;
+          req.response
+            ..statusCode = HttpStatus.ok
+            ..write(body);
+          req.response.close();
+        });
+        return Uri.parse('http://127.0.0.1:${elsewhere.port}/elsewhere');
+      }
+
+      setUp(() => elsewhereHits = 0);
+      tearDown(() async => elsewhere.close(force: true));
+
+      test('a redirected JWKS fetch fails instead of taking the keys the '
+          'redirect target offers', () async {
+        final target = await startElsewhere(
+          jwksJson([rsaJwkJson(kid: 'attacker')]),
+        );
+        await start((req) {
+          req.response
+            ..statusCode = HttpStatus.found
+            ..headers.set(HttpHeaders.locationHeader, target.toString());
+          req.response.close();
+        });
+        final source = HttpJwksSource.fromJwksUri(url);
+        await expectLater(
+          source.resolve(headerWith(kid: 'attacker')),
+          throwsA(
+            isA<JwksUnavailable>().having(
+              (e) => e.cause,
+              'cause',
+              isA<HttpException>(),
+            ),
+          ),
+        );
+        expect(
+          elsewhereHits,
+          0,
+          reason: 'the redirect target must never be contacted at all',
+        );
+      });
+
+      test('a redirected discovery fetch fails, so a redirect cannot supply '
+          'the document whose issuer is then checked', () async {
+        // Discovery rides the same fetch. Were it followed, the `issuer` match
+        // would be run against a document the redirect target wrote — checking
+        // the attacker's claim against itself.
+        final target = await startElsewhere(
+          '{"issuer":"http://127.0.0.1","jwks_uri":"http://127.0.0.1/j"}',
+        );
+        await start((req) {
+          req.response
+            ..statusCode = HttpStatus.movedPermanently
+            ..headers.set(HttpHeaders.locationHeader, target.toString());
+          req.response.close();
+        });
+        final source = HttpJwksSource.discover(
+          issuer: 'http://127.0.0.1:${server.port}',
+        );
+        await expectLater(
+          source.resolve(headerWith(kid: 'k1')),
+          throwsA(isA<Object>()),
+        );
+        expect(elsewhereHits, 0);
+      });
+    });
   });
 }
