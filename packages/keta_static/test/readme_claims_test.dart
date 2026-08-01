@@ -119,14 +119,27 @@ void main() {
       expect(res.text(), isNot(contains('S')));
     });
 
-    test('WARNED: dotfiles are served', () async {
-      // The README tells a user not to point DirectoryAssets at a directory
-      // that also holds secrets or a repository. This is why.
-      final client = TestClient(appWith({'.env': 'SECRET_KEY=hunter2'}), null);
-      final res = await client.get('/assets/.env');
-      expect(res.status, 200);
-      expect(res.text(), contains('hunter2'));
-    }, skip: null);
+    test('a dotfile is refused, whatever the directory holds', () async {
+      // These answered 200 before: a directory-layout accident deciding what is
+      // disclosed. A mount serves what is meant to be public, and a dotfile in
+      // that directory is there for the toolchain.
+      final client = TestClient(
+        appWith({'.env': 'SECRET_KEY=hunter2', 'app.js': 'JS'}),
+        null,
+      );
+      expect((await client.get('/assets/.env')).status, 404);
+      // Nested, too — /assets/.git/config was the other one.
+      final nested = TestClient(appWith({'.git/config': '[core]'}), null);
+      expect((await nested.get('/assets/.git/config')).status, 404);
+      // And an ordinary asset beside it is unaffected.
+      expect((await client.get('/assets/app.js')).status, 200);
+    });
+
+    test('a dot inside a name is not a dotfile', () async {
+      // Only a leading dot on a segment. `app.min.js` must still serve.
+      final client = TestClient(appWith({'app.min.js': 'JS'}), null);
+      expect((await client.get('/assets/app.min.js')).status, 200);
+    });
 
     test('WARNED: a percent-encoded name does not resolve', () async {
       // The asset exists under its decoded name and is still unreachable.
