@@ -95,16 +95,27 @@ void register(App<Env> app) {
 
 ## The CI gate
 
-`dart run keta_files:check` exits non-zero when the manifest and the tree disagree. This repo's own CI runs it for the `examples/files` tree (`.github/workflows/ci.yml`), so drift there fails CI; a consuming project must wire the same command into its own CI for the guarantee to hold on its tree:
+Two commands exit non-zero when the manifest and the tree disagree, and they ask different questions. This repo's own CI runs both for the `examples/files` tree (`.github/workflows/ci.yml`); a consuming project must wire them into its own CI for the guarantee to hold on its tree.
+
+`dart run keta_files:check` names *which file* is wrong — the actionable diagnostic:
 
 - **not served** — a route file the manifest does not bind. Its URL would 404 despite the file compiling and the tests passing. `dart run keta_files:sync` to bind it.
 - **scopes no route** — a `_middleware.dart` guarding nothing beneath it.
 
+`dart run keta_files:sync --check` asks whether the manifest already **is** what the generator would write — `syncManifest(source) == source`, the verify mode of the writer, in the shape `dart format --set-exit-if-changed` uses. That is the invariant this design rests on (see the note above the format fence), and it is strictly the stronger of the two: it catches drift no single file can be blamed for, which the per-file check is structurally unable to see.
+
+- a **binding no file denotes** — a URL served that the tree does not contain, which breaks the package's central claim outright
+- a **reordered region** — every file still bound, and the next sync rewrites the file
+- a **lost `dart format off` fence** — after which the formatter reflows a long binding, the next sync writes it back, and the file oscillates forever
+
+`check` runs the same comparison, so the two can never disagree; a difference it cannot attribute to a file is reported as what it is.
+
 ## Commands
 
 ```bash
-dart run keta_files:sync [routesDir] [manifest]   # materialize the tree into the manifest
-dart run keta_files:check [routesDir] [manifest]  # CI gate: fail on drift
+dart run keta_files:sync [routesDir] [manifest]           # materialize the tree into the manifest
+dart run keta_files:sync --check [routesDir] [manifest]  # CI gate: fail if a sync would change it
+dart run keta_files:check [routesDir] [manifest]         # CI gate: name the route file that is wrong
 ```
 
 Defaults: `routesDir` `lib/routes`, `manifest` `lib/routes.dart`. The manifest must already contain the `// keta_files:imports` / `// keta_files:routes` markers, each closed by `// keta_files:end`.

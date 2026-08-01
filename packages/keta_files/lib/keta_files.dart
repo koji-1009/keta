@@ -26,5 +26,6 @@ export 'src/export.dart'
         Serve,
         exportedDeclaration,
         scopedDeclaration;
-export 'src/manifest.dart' show registrationFor, syncManifest, unregistered;
+export 'src/manifest.dart'
+    show manifestIsSynced, registrationFor, syncManifest, unregistered;
 export 'src/route_path.dart' show routeSegments;
