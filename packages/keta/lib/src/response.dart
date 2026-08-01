@@ -23,11 +23,12 @@ class Response {
     this.upgrade,
   }) : headers = _normalize(headers) {
     _checkBody(status, body, upgrade);
-    // Reject CR/LF and other control characters in header names/values here, at
-    // the semantic layer — not every Transport rejects them, and a value built
-    // from user input must not carry a header-injection (response-splitting)
-    // primitive past this boundary.
-    _rejectControlChars(this.headers);
+    // Reject header names and values the wire cannot carry, here at the
+    // semantic layer: a value built from user input must not carry a
+    // header-injection (response-splitting) primitive past this boundary, and
+    // must not be accepted only for the transport to refuse it and empty the
+    // response. See [_rejectUnwritableHeaders].
+    _rejectUnwritableHeaders(this.headers);
   }
 
   /// A copy over already-normalized, already-validated header state. The header
@@ -160,12 +161,12 @@ class Response {
     if (headers != null) {
       // Replace: a full new header state of unknown provenance — full gate.
       nextHeaders = _normalize(headers);
-      _rejectControlChars(nextHeaders);
+      _rejectUnwritableHeaders(nextHeaders);
     } else if (addHeaders != null) {
       // Merge: only the additions pass the header gate; they then merge over
       // the trusted existing map (a supplied name wins).
       final additions = _normalize(addHeaders);
-      _rejectControlChars(additions);
+      _rejectUnwritableHeaders(additions);
       nextHeaders = this.headers.isEmpty
           ? additions
           : {...this.headers, ...additions};
@@ -231,37 +232,74 @@ class Response {
     }
   }
 
-  /// Rejects CR/LF and other control characters in the names/values of an
-  /// already-normalized header map — the response-splitting gate. A field value
-  /// may carry HTAB (RFC 9110 §5.5: field-value allows HTAB alongside VCHAR/SP);
-  /// only CR/LF and the other controls are the injection primitive to reject.
-  static void _rejectControlChars(Map<String, List<String>> headers) {
+  /// Rejects header names and values a wire cannot carry, on an
+  /// already-normalized header map.
+  ///
+  /// This gate used to reject control characters only, on the reasoning that
+  /// they alone are the response-splitting primitive. They alone are — but the
+  /// bundled transport is stricter, and the gap between "the semantic layer
+  /// accepts it" and "the wire accepts it" was not a harmless difference of
+  /// opinion. dart:io admits only `%x21-7E` in a field value (plus HTAB) and
+  /// only a token in a name; anything else makes the response write throw, the
+  /// transport's defensive catch turns that into a bare 500 frame, and the
+  /// client receives `200 OK` with `content-length: 0`. The body vanishes with
+  /// no error visible to the handler that produced it.
+  ///
+  /// That is reachable from ordinary data: echoing a display name into a header
+  /// empties the response for every user whose name is not ASCII. Accepting a
+  /// value only to have the wire refuse it is not permissiveness, it is a
+  /// silent data-loss path, so the gate now matches what a wire will actually
+  /// carry. Callers with non-ASCII to send must encode it (RFC 8187) — which is
+  /// what they had to do anyway for the byte to arrive intact.
+  static void _rejectUnwritableHeaders(Map<String, List<String>> headers) {
     for (final e in headers.entries) {
-      if (_hasControlChar(e.key)) {
+      if (e.key.isEmpty || !_isToken(e.key)) {
         throw ArgumentError.value(
           e.key,
           'headers',
-          'header name must not contain control characters',
+          'header name must be a non-empty RFC 9110 token (no control '
+              'characters, spaces, separators, or non-ASCII)',
         );
       }
       for (final value in e.value) {
-        if (_hasControlChar(value, allowTab: true)) {
+        if (!_isFieldValue(value)) {
           throw ArgumentError.value(
             value,
             'headers',
-            'header value must not contain control characters',
+            'header value must be printable US-ASCII or HTAB (no control '
+                'characters and no non-ASCII; encode per RFC 8187)',
           );
         }
       }
     }
   }
 
-  static bool _hasControlChar(String s, {bool allowTab = false}) {
+  /// RFC 9110 §5.6.2 token: `%x21-7E` minus the separators. Matches what
+  /// dart:io's own `_isTokenChar` admits in a field name.
+  static bool _isToken(String s) {
     for (final u in s.codeUnits) {
-      if (allowTab && u == 0x09) continue; // HTAB is legal in a field value
-      if (u < 0x20 || u == 0x7f) return true;
+      if (u <= 0x20 || u >= 0x7f) return false;
+      if (_separators.contains(u)) return false;
     }
-    return false;
+    return true;
+  }
+
+  static const _separators = {
+    0x28, 0x29, 0x3c, 0x3e, 0x40, // ( ) < > @
+    0x2c, 0x3b, 0x3a, 0x5c, 0x22, // , ; : \ "
+    0x2f, 0x5b, 0x5d, 0x3f, 0x3d, // / [ ] ? =
+    0x7b, 0x7d, // { }
+  };
+
+  /// RFC 9110 §5.5 field-value: VCHAR or SP, plus HTAB. Obs-text (`%x80-FF`) is
+  /// deprecated by the RFC and refused by the bundled transport, so it is
+  /// refused here rather than accepted and dropped later.
+  static bool _isFieldValue(String s) {
+    for (final u in s.codeUnits) {
+      if (u == 0x09) continue; // HTAB
+      if (u < 0x20 || u > 0x7e) return false;
+    }
+    return true;
   }
 
   static Map<String, List<String>> _normalize(

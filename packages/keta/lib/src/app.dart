@@ -502,7 +502,24 @@ class Router<E> {
   late final Handler<E> _appHandler;
 
   FutureOr<Response> dispatch(TransportRequest request) {
-    final segments = _decodedSegments(request.uri);
+    final List<String> segments;
+    try {
+      segments = _decodedSegments(request.uri);
+    } on FormatException {
+      // `uri.pathSegments` decodes lazily, so a percent-escape that is not
+      // valid UTF-8 (`/%c0%af`) throws here — before the guard below, and
+      // before any middleware exists to see it. It used to escape dispatch
+      // entirely: `recover()` never ran, the core's own last-resort fallback
+      // never ran, and the request that a client got wrong came back as a 500
+      // with a stack trace on every hit, which is both the wrong status and a
+      // free way to flood the log ring with attacker-chosen noise.
+      //
+      // Answered here rather than inside the guard because there is no Context
+      // yet — building one needs the segments this just failed to produce.
+      return Response.json(const {
+        'error': 'malformed percent-encoding in request path',
+      }, status: 400);
+    }
     final captured = <String>[];
     final (compiled, allowed) = _walk(
       _root,
