@@ -475,6 +475,74 @@ void main() {
     });
   });
 
+  group('manifestIsSynced sees the drift unregistered cannot', () {
+    // `unregistered` asks one direction: is every route file bound? Three ways
+    // the tree and the routes disagree leave every file bound and still ship a
+    // manifest the generator would rewrite — and the comment at the top of
+    // manifest.dart says syncing-is-a-no-op is the only thing standing between
+    // the tree and the routes. This is that assertion, asked directly.
+    final a = file(
+      importPath: 'routes/health.dart',
+      prefix: r'$health',
+      template: ['health'],
+    );
+    final b = file(
+      importPath: 'routes/metrics.dart',
+      prefix: r'$metrics',
+      template: ['metrics'],
+    );
+
+    test('a settled manifest is synced', () {
+      final synced = syncManifest(_imports, [a, b]);
+      expect(manifestIsSynced(synced, [a, b]), isTrue);
+    });
+
+    test('a binding no file denotes — invisible to unregistered', () {
+      // The package's central claim is that the tree IS the routing table. A
+      // phantom binding serves a URL no file denotes, and breaks it.
+      final synced = syncManifest(_imports, [a, b]);
+      final phantom = synced.replaceFirst(
+        registrationFor(a),
+        '${registrationFor(a)}\n'
+        "  \$health.exported.bind(app, const ['legacy', 'healthz']);",
+      );
+      expect(
+        unregistered(phantom, [a, b]),
+        isEmpty,
+        reason: 'both still bound',
+      );
+      expect(manifestIsSynced(phantom, [a, b]), isFalse);
+    });
+
+    test('reordered bindings — invisible to unregistered', () {
+      final synced = syncManifest(_imports, [a, b]);
+      final swapped = synced
+          .replaceFirst(registrationFor(a), '@@A@@')
+          .replaceFirst(registrationFor(b), registrationFor(a))
+          .replaceFirst('@@A@@', registrationFor(b));
+      expect(unregistered(swapped, [a, b]), isEmpty);
+      expect(manifestIsSynced(swapped, [a, b]), isFalse);
+    });
+
+    test('a lost format fence — invisible to unregistered', () {
+      // Without the fence the formatter reflows a long binding, the next sync
+      // writes it back, and the file oscillates — taking the no-op assertion
+      // with it.
+      final synced = syncManifest(_imports, [a, b]);
+      final unfenced = synced.replaceFirst('// dart format off\n', '');
+      expect(unregistered(unfenced, [a, b]), isEmpty);
+      expect(manifestIsSynced(unfenced, [a, b]), isFalse);
+    });
+
+    test('a missing file is caught by both, and named by one', () {
+      // Where the narrow check applies, it stays the one that can say which
+      // file — which is what makes a diagnostic actionable.
+      final onlyA = syncManifest(_imports, [a]);
+      expect(unregistered(onlyA, [a, b]), [b]);
+      expect(manifestIsSynced(onlyA, [a, b]), isFalse);
+    });
+  });
+
   // `routeSegments` unit tests moved to export_test.dart: it is `bind`'s own
   // template-to-path translation (export.dart's only caller), not a
   // manifest-emission concern.

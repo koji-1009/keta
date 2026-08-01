@@ -36,8 +36,14 @@ jobs:
       # keta_files' own CI gate: fails when examples/files' lib/routes/ tree
       # and its generated manifest (lib/routes.dart) disagree, e.g. a route
       # file added but never synced — see packages/keta_files/README.md.
+      # Two questions, both gating. `check` names which route file is unbound;
+      # `sync --check` asks whether the manifest already IS what the generator
+      # would write, which is the invariant the design rests on and the one that
+      # catches drift no single file can be blamed for.
       - name: keta_files:check (examples/files)
         run: (cd examples/files && dart run keta_files:check)
+      - name: keta_files:sync --check (examples/files)
+        run: (cd examples/files && dart run keta_files:sync --check)
       # keta_lints over the examples: they are the user-code surface its rules
       # are written for, so this is the framework eating its own lint. The
       # cross-file `drift` check needs an external contract document and no

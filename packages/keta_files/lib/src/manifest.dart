@@ -181,9 +181,31 @@ String syncManifest(String source, List<RouteFile> files) {
   return crlf ? joined.replaceAll('\n', '\r\n') : joined;
 }
 
+/// Whether [source]'s managed regions already say what [syncManifest] would
+/// write — the idempotence this design rests on, asked directly.
+///
+/// [unregistered] answers a narrower question (which route files are missing a
+/// binding) and cannot see the other direction: a binding no file denotes, a
+/// region whose lines drifted out of order, a lost `dart format off` fence. Each
+/// of those leaves the tree and the routes disagreeing while every route file is
+/// still "registered", which is exactly the disagreement the marker comment at
+/// the top of this file says syncing-is-a-no-op is the only thing standing
+/// between.
+///
+/// Comparing against the generator's own output closes all of them at once,
+/// because it is the same computation the writer performs: anything a sync
+/// would change is, by construction, a difference.
+bool manifestIsSynced(String source, List<RouteFile> files) =>
+    syncManifest(source, files) == source;
+
 /// The route files whose bindings are absent from [source]'s managed regions —
 /// a file under routes/ that the app does not serve. Forgetting is otherwise
 /// silent: the file compiles, the tests pass, and the URL 404s.
+///
+/// Narrower than [manifestIsSynced] on purpose: it names *which* files are
+/// unbound, which is what a diagnostic needs to be actionable. The two are used
+/// together — this one to say what is wrong, that one to decide whether
+/// anything is.
 ///
 /// Matching is exact and region-scoped, so a mention in a comment, a string
 /// literal, or a coincidental substring never counts as registered.
