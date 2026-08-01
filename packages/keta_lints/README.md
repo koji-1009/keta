@@ -16,7 +16,7 @@ dart run keta_lints:fix canonical lib/     # materialize / reconcile, in place
 dart run keta_lints:check canonical lib/   # converged: exits 0
 ```
 
-`check` covers seven subcommands, each over files or directories (except `drift`, which takes two documents):
+`check` covers eight subcommands, each over files or directories (except `drift`, which takes two documents):
 
 ```
 dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
@@ -26,7 +26,10 @@ dart run keta_lints:check query <file-or-dir> ...
 dart run keta_lints:check internal-await <file-or-dir> ...
 dart run keta_lints:check key <file-or-dir> ...
 dart run keta_lints:check tx <file-or-dir> ...
+dart run keta_lints:check order <file-or-dir> ...
 ```
+
+Every subcommand that takes files exits `64` when its arguments name nothing it can read — a path that does not exist, a file that is not Dart, or arguments that resolve to zero Dart files. A gate that examined nothing must not be able to report success, which is what a silently-skipped bad path used to do.
 
 `fix canonical` is the materializing half: for every DTO-shaped class it regenerates the drifted canonical members — `fromJson`, `toJson`, and the matching `Schema` constant — **whole**, from the field set, and rewrites the file in place. The generated code is ordinary Dart in the user's own file; ownership transfers on write, and a second run is a no-op. Whole-member regeneration makes the edits non-overlapping by construction, and only the member that actually drifted is touched: a schema-only drift never rewrites a mapper, a non-drifted member stays byte-for-byte identical (inline comments included), and a leading `///` doc comment on a regenerated member is preserved.
 
@@ -46,6 +49,7 @@ Check and fix consult the *same* recognizer, so they never disagree. A class is 
 | `keta_query_drift` | a query param declared `required: true` but read with `tryQuery` | `query` |
 | `keta_key_inline` | a `Key(...)` constructed inline at a `get`/`tryGet`/`set` call — identity keys make the value unreachable | `key` |
 | `keta_tx_outside_recover` | `use(tx())` registered before `use(recover())`, so the transaction commits a failed request | `tx` |
+| `keta_middleware_order` | a `use()` run whose middleware ranks descend, so an outer middleware is registered inside an inner one | `order` |
 | `keta_internal_await` | `await` in framework composition code (framework-development only); opt out per line with `// keta:allow-await` | `internal-await` |
 | `keta_contract_drift` | an endpoint, schema, or field present on only one side of the contract diff | `drift` |
 | `keta_contract_type_drift` | a field present on both sides whose type differs | `drift` |
@@ -72,11 +76,11 @@ plugins:
   keta_lints: ^0.1.0
 ```
 
-The five route/query/canonical/tx/key rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; `// ignore:` / `// ignore_for_file:` comments suppress them, written in the plugin-qualified form the analyzer requires for a plugin diagnostic — `// ignore_for_file: keta_lints/keta_capture_unused`, not the bare code. `keta_internal_await` is an opt-in lint (`diagnostics: keta_internal_await: true`), meaningful only over keta's own source. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
+The six route/query/canonical/tx/key/order rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; `// ignore:` / `// ignore_for_file:` comments suppress them, written in the plugin-qualified form the analyzer requires for a plugin diagnostic — `// ignore_for_file: keta_lints/keta_capture_unused`, not the bare code. `keta_internal_await` is an opt-in lint (`diagnostics: keta_internal_await: true`), meaningful only over keta's own source. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
 
 ## Deliberately not attempted
 
-Documented non-goals, not gaps: the `key` rule does not chase a `Key` built inline and bound to a local before use — that would need data-flow analysis this syntactic rule deliberately avoids. The `query` rule skips a `doc:` that is not an inspectable inline `RouteDoc` rather than risk a false positive. All source rules are single-file and syntactic — no resolution — which is what lets the CLI run over bare files and the plugin reuse the analyzer's parse.
+Documented non-goals, not gaps: the `key` rule does not chase a `Key` built inline and bound to a local before use — that would need data-flow analysis this syntactic rule deliberately avoids. The `query` rule skips a `doc:` that is not an inspectable inline `RouteDoc` rather than risk a false positive. The route rules read a group prefix bound in the same file (`final api = app.group('/api')`, a cascade off a `group(...)`, and nested groups compose), which is what makes a capture declared on the prefix readable via `c.param`; a group arriving from outside the file — a `RouteGroup` parameter — is treated as prefix-less, so a capture declared on that prefix reads as unknown. All source rules are single-file and syntactic — no resolution — which is what lets the CLI run over bare files and the plugin reuse the analyzer's parse.
 
 ## Every claim here is tested
 

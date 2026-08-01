@@ -16,7 +16,7 @@ void main(List<String> args) {
     exit(64);
   }
   var changed = 0;
-  for (final path in _dartFiles(args.sublist(1))) {
+  for (final path in resolveDartFiles(args.sublist(1))) {
     final file = File(path);
     final source = file.readAsStringSync();
     final fixed = applyCanonicalFix(source);
@@ -27,18 +27,4 @@ void main(List<String> args) {
     }
   }
   stdout.writeln(changed == 0 ? 'nothing to fix' : 'fixed $changed file(s)');
-}
-
-Iterable<String> _dartFiles(List<String> paths) sync* {
-  for (final path in paths) {
-    if (FileSystemEntity.typeSync(path) == FileSystemEntityType.directory) {
-      yield* Directory(path)
-          .listSync(recursive: true)
-          .whereType<File>()
-          .map((f) => f.path)
-          .where((p) => p.endsWith('.dart'));
-    } else if (path.endsWith('.dart')) {
-      yield path;
-    }
-  }
 }
