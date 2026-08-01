@@ -313,13 +313,32 @@ class Response {
 }
 
 /// keta's exception hierarchy — everything a user throws or receives, as one
-/// sealed set so an exhaustive `switch` works and there is nothing to guess.
+/// sealed set, so the compiler can tell you when a `switch` over it misses a
+/// case instead of leaving you to guess.
 ///
 /// The rule is one sentence: throw a [KetaException] subtype and the response
 /// carries its [status]; every other exception (ArgumentError, StateError,
 /// FormatException, …) is a defect that becomes a 500. [message] is the safe
 /// user-facing text; [detail] is optional structured context (such as a
 /// validation violation list) that a boundary may include or withhold.
+///
+/// A `switch` over the named subtypes is NOT exhaustive on its own.
+/// [KetaException.status] builds an arbitrary-status member whose type is
+/// deliberately not public — there is no name to write a case for — so a
+/// total `switch` needs a wildcard:
+///
+/// ```dart
+/// final label = switch (e) {
+///   BadRequest() => 'bad request',
+///   NotFound() => 'not found',
+///   // …the other named subtypes…
+///   _ => 'status ${e.status}',   // KetaException.status(...) lands here
+/// };
+/// ```
+///
+/// The wildcard is not a gap to be tolerated silently: an arbitrary-status
+/// exception carries a [status] and nothing more specific to match on, which is
+/// exactly what the wildcard branch should key on.
 sealed class KetaException implements Exception {
   const KetaException(this.message, [this.detail]);
 
@@ -405,8 +424,9 @@ final class Unavailable extends KetaException {
 /// reasonable next move (a serialization failure or a deadlock the engine broke
 /// by aborting this transaction). The retryability is the type: there is no
 /// `retryable` flag and no `Retryable` marker — a caller keys off `is
-/// TransientFailure`, and the exhaustive `switch` over [KetaException] makes the
-/// case impossible to forget.
+/// TransientFailure`, and a `switch` over [KetaException] that names its cases
+/// makes this one hard to forget (see [KetaException] for why such a switch
+/// still needs a wildcard).
 ///
 /// keta deliberately does NOT retry for you. Whether replaying the request is
 /// safe depends on its idempotency, which is unknowable at this layer (the same
