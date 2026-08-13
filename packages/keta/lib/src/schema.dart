@@ -36,12 +36,9 @@ import 'response.dart';
 ///     adds a violation message to the returned list, which [require] turns
 ///     into a [BadRequest] (400).
 ///
-/// A prior version of this validator applied three different postures
-/// (violation, a bare `as` cast that crashed with a raw `TypeError`, or a
-/// silent pass) to what was really the same class of mistake — schema
-/// authoring damage — depending on which line happened to notice it. That
-/// inconsistency is the bug this class now forecloses: every code path below
-/// is one of the two postures above, never a third.
+/// Every code path below is one of those two postures, never a third: no bare
+/// `as` cast that would surface authoring damage as a raw `TypeError`, and no
+/// silent pass that would hide it entirely.
 ///
 /// ## Validation keywords are enforced, not decoration
 ///
@@ -96,6 +93,13 @@ import 'response.dart';
 ///    reporting an over-ceiling array as a violation instead of scanning it. An
 ///    endpoint that legitimately needs uniqueness over more items declares an
 ///    explicit `maxItems` rather than leaning on the backstop.
+///
+/// Nesting is bounded the same way, and for the same reason. [validate]
+/// descends recursively, so the depth of the body is the depth of the stack —
+/// and against a recursive schema (a `$ref` back to itself: a comment thread, a
+/// category tree) that depth is the *client's* to choose. A body nested past
+/// [_nestingCeiling] levels is reported as a violation instead of being
+/// descended into, so a few tens of KB of `{"next":` cannot overflow the stack.
 ///
 /// A violated value keyword is instance data — posture (2), a violation. A
 /// malformed keyword *value* (a `minLength` that isn't a non-negative integer,
@@ -209,7 +213,7 @@ final class const Schema(
   /// list — that defect is never the client's to be told about.
   List<String> validate(Object? value) {
     final errors = <String>[];
-    _validate(json, value, _Path.root, errors, _refIndex(), name);
+    _validate(json, value, _Path.root, errors, _refIndex(), name, 0);
     return errors;
   }
 
@@ -369,16 +373,14 @@ Schema listSchema(Schema itemSchema) => Schema(
 /// A node in the JSON path to the value currently being validated, carried as a
 /// cheap parent-linked chain instead of an eagerly-built `$.a.b[0]` string.
 ///
-/// Every recursion step used to concatenate `'$path.$key'` / `'$path[$i]'` to
-/// descend, materializing a path string for *every* node even when the body is
-/// fully valid and no violation ever cites it — O(depth²) characters of pure
-/// waste on the common path. Descending now allocates one small [_Path] node
-/// (O(1), no character copying), and the dotted/indexed string is built by
-/// [toString] only where a message is actually emitted (`errors.add`, an
-/// authoring [StateError]) — the error path, which is rare. The rendered string
-/// is byte-identical to the old concatenation: [root] renders `$`, [key]
-/// prepends `.` to its segment, [index] wraps it in `[...]`, so a chain
-/// stringifies to exactly the `$.a.b[0]` the old code spelled out.
+/// Concatenating `'$path.$key'` / `'$path[$i]'` at each step would materialize a
+/// path string for *every* node even when the body is fully valid and no
+/// violation ever cites it — O(depth²) characters on the common path. Descending
+/// allocates one small [_Path] node instead, and the dotted/indexed string is
+/// built by [toString] only where a message is actually emitted (`errors.add`,
+/// an authoring [StateError]). [root] renders `$`, [key] prepends `.` to its
+/// segment, [index] wraps it in `[...]`, so a chain stringifies to exactly
+/// `$.a.b[0]`.
 final class const _Path._(
   final _Path? parent,
 
@@ -432,7 +434,15 @@ void _validate(
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
+  int depth,
 ) {
+  if (depth > _nestingCeiling) {
+    errors.add(
+      '$path: exceeds the nesting-validation ceiling of $_nestingCeiling '
+      'levels',
+    );
+    return;
+  }
   _rejectUnenforcedKeywords(schema, path, schemaName);
   if (schema.containsKey(r'$ref')) {
     final ref = schema[r'$ref'];
@@ -456,7 +466,7 @@ void _validate(
     // The fragment being read from here on is `target`'s, not the one that
     // held the `$ref` — a defect found beneath it must name its own schema,
     // not the referrer's.
-    _validate(target.json, value, path, errors, refs, target.name);
+    _validate(target.json, value, path, errors, refs, target.name, depth + 1);
     return;
   }
 
@@ -470,7 +480,7 @@ void _validate(
         'must be a list, got ${_typeName(oneOf)}',
       );
     }
-    _validateOneOf(schema, value, path, errors, refs, schemaName);
+    _validateOneOf(schema, value, path, errors, refs, schemaName, depth);
     return;
   }
 
@@ -491,9 +501,9 @@ void _validate(
           _arrayKeywords(schema, value, path, errors, schemaName);
       }
     case 'object':
-      _validateObject(schema, value, path, errors, refs, schemaName);
+      _validateObject(schema, value, path, errors, refs, schemaName, depth);
     case 'array':
-      _validateArray(schema, value, path, errors, refs, schemaName);
+      _validateArray(schema, value, path, errors, refs, schemaName, depth);
     case 'string':
       if (value is! String) {
         errors.add('$path: expected string, got ${_typeName(value)}');
@@ -503,14 +513,10 @@ void _validate(
     case 'integer':
       // Deliberately narrower than JSON Schema 2020-12, which admits a
       // zero-fraction number (`1.0`) as a valid `integer` instance — this
-      // validator does not, because `value is! int` rejects it outright.
-      // This is not an oversight; it is a deliberate agreement with the
-      // canonical mapper, which reads `json['x'] as int`. If `1.0` passed
-      // validation here, it would sail through as "valid" and then crash
-      // that cast (a 500) on exactly the payload validation exists to gate
-      // — the boundary would have lied about what it let through.
-      // Predictability between the two beats spec purity: what counts as an
-      // integer is decided once, and validation and mapping agree on it.
+      // validator does not, because `value is! int` rejects it outright. That
+      // agrees with the canonical mapper, which reads `json['x'] as int`: if
+      // `1.0` passed here it would sail through as "valid" and then crash that
+      // cast (a 500) on exactly the payload validation exists to gate.
       if (value is! int) {
         errors.add('$path: expected integer, got ${_typeName(value)}');
       } else {
@@ -552,6 +558,7 @@ void _validateObject(
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
+  int depth,
 ) {
   if (value is! Map) {
     errors.add('$path: expected object, got ${_typeName(value)}');
@@ -619,7 +626,15 @@ void _validateObject(
           'must be an object schema fragment, got ${_typeName(sub)}',
         );
       }
-      _validate(sub, v, path.key(entry.key), errors, refs, schemaName);
+      _validate(
+        sub,
+        v,
+        path.key(entry.key),
+        errors,
+        refs,
+        schemaName,
+        depth + 1,
+      );
     }
   }
   // additionalProperties governs undeclared keys: absent leaves them
@@ -648,6 +663,7 @@ void _validateObject(
           errors,
           refs,
           schemaName,
+          depth + 1,
         );
       }
     }
@@ -668,6 +684,7 @@ void _validateArray(
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
+  int depth,
 ) {
   if (value is! List) {
     errors.add('$path: expected array, got ${_typeName(value)}');
@@ -689,7 +706,15 @@ void _validateArray(
   }
   final items = itemsRaw.cast<String, Object?>();
   for (var i = 0; i < value.length; i++) {
-    _validate(items, value[i], path.index(i), errors, refs, schemaName);
+    _validate(
+      items,
+      value[i],
+      path.index(i),
+      errors,
+      refs,
+      schemaName,
+      depth + 1,
+    );
   }
 }
 
@@ -725,6 +750,7 @@ void _validateOneOf(
   List<String> errors,
   Map<String, Schema> refs,
   String schemaName,
+  int depth,
 ) {
   if (value is! Map) {
     errors.add('$path: expected object, got ${_typeName(value)}');
@@ -808,7 +834,7 @@ void _validateOneOf(
     errors.add('$path.$propertyName: "$tag" has no variant');
     return;
   }
-  _validate(target.json, value, path, errors, refs, target.name);
+  _validate(target.json, value, path, errors, refs, target.name, depth + 1);
 }
 
 /// Recognized JSON Schema validation keywords that keta deliberately does not
@@ -1156,6 +1182,25 @@ void _arrayKeywords(
 /// endpoint needing uniqueness over more items declares an explicit `maxItems`
 /// (which gates the scan on its own) rather than leaning on this backstop.
 const _uniqueItemsCeiling = 8192;
+
+/// The hard ceiling on how deep [_validate] will descend — every nested
+/// property, array element, and `$ref` hop counts as one level.
+///
+/// The validator is recursive, so descent depth is stack depth, and the depth is
+/// the *client's* to choose the moment a schema is recursive (`$ref` back to
+/// itself: a comment thread, a category tree, a nested filter). Without this,
+/// `{"next":` repeated a few thousand times — well under 40 KB, so far inside
+/// the 1 MiB request cap — overflows the stack. That surfaces as a 500 on an
+/// unauthenticated request, from a body a `maxLength`-style bound cannot
+/// describe, which is why the bound belongs here rather than in a schema.
+///
+/// A body deeper than this is reported as a violation instead of being
+/// descended into — the same posture [_patternInputCeiling] and
+/// [_uniqueItemsCeiling] take. Because a `$ref` hop costs a level of its own,
+/// a `$ref`-recursive schema reaches the ceiling at roughly half this many
+/// levels of actual JSON; both figures sit far above any real payload, which
+/// nests in the tens.
+const _nestingCeiling = 512;
 
 /// Reads [key] from [schema] as a non-negative integer, or throws the authoring
 /// [StateError] a malformed length/count bound gets (posture (1)).

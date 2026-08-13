@@ -789,4 +789,61 @@ void main() {
       ]);
     });
   });
+
+  group('nesting has an absolute ceiling', () {
+    /// A recursive schema — the shape any app with self-nesting data writes (a
+    /// comment thread, a category tree). The `$ref` cycle closes through a
+    /// `deps` list filled after construction, which is the only way to spell a
+    /// self-reference.
+    Schema recursive() {
+      final deps = <Schema>[];
+      final node = Schema('Node', {
+        'type': 'object',
+        'properties': {
+          'next': {r'$ref': '#/components/schemas/Node'},
+        },
+      }, deps: deps);
+      deps.add(node);
+      return node;
+    }
+
+    /// `{"next":{"next":…{}…}}`, nested [depth] levels deep.
+    Object? nest(int depth) {
+      Object? value = <String, Object?>{};
+      for (var i = 0; i < depth; i++) {
+        value = <String, Object?>{'next': value};
+      }
+      return value;
+    }
+
+    test('an ordinary depth validates normally', () {
+      expect(recursive().validate(nest(50)), isEmpty);
+    });
+
+    test(
+      'a body deeper than the ceiling is a violation, not a StackOverflowError',
+      () {
+        // ~5000 levels is under 40 KB on the wire — far inside the 1 MiB
+        // request cap — and without the ceiling this blows the stack, which
+        // surfaces as a 500 on an unauthenticated request. The expectation is
+        // that it comes back as instance data (a violation → 400) instead.
+        final errors = recursive().validate(nest(5000));
+        expect(errors, hasLength(1));
+        expect(errors.single, contains('nesting-validation ceiling'));
+      },
+    );
+
+    test('a self-referential schema with no value to descend terminates', () {
+      // `$ref` straight back to itself consumes stack without consuming any
+      // body, so the ceiling has to count the hop, not just the descent.
+      final deps = <Schema>[];
+      final loop = Schema('Loop', {
+        r'$ref': '#/components/schemas/Loop',
+      }, deps: deps);
+      deps.add(loop);
+      final errors = loop.validate(<String, Object?>{});
+      expect(errors, hasLength(1));
+      expect(errors.single, contains('nesting-validation ceiling'));
+    });
+  });
 }
