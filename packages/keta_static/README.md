@@ -46,11 +46,11 @@ It deliberately carries **no `MiddlewareOrder`**. Whether assets sit inside or o
 
 ## Path handling, exactly
 
-`Uri.path` has already been percent-decoded and dot-segment-normalized by the time a handler sees it, so `/assets/%2e%2e/secret` arrives as `/secret` and never matches this mount at all. The `..` and `\` guards in `_relativePath` are a second line for a caller that hands in a path some other way; over HTTP they are unreachable.
+The request path is read as `Uri.pathSegments` — the decoded segment list — not as `uri.path`, which keeps every escape the URI form requires. Dart has already dot-segment-normalized the URI by the time a handler sees it, so `/assets/%2e%2e/secret` arrives as `/secret` and never matches this mount at all; the `..` and `.` guards in `_relativePath` are a second line for a caller that hands in a path some other way. Because the segments are decoded, the guard also refuses a segment containing `/` or `\` (a `%2F` or `%5C` that would otherwise rejoin into a path the URL never named) and any segment holding a control character (`%00` and friends).
 
 **Dotfiles are refused.** A segment beginning with `.` is a 404, so `/assets/.env` and `/assets/.git/config` are not answered even when the mounted directory holds them. A mount points at a directory of things meant to be public, and a dotfile in it is there for the toolchain; serving it lets the directory layout decide what is disclosed. There is no opt-out — an asset a client is meant to fetch can be named without a leading dot.
 
-**Percent-encoded names do not resolve.** The relative path is matched against `Uri.path` without decoding the characters the URI form keeps escaped, so an asset whose name contains a space, a non-ASCII character, or `%` is unreachable (`/assets/a%20b.js` → 404 even though `a b.js` exists). Stated here rather than left to be discovered.
+**Percent-encoded names resolve under their decoded name.** An asset whose name contains a space, a non-ASCII character, or a literal `%` is fetched with that name escaped on the wire and looked up decoded: `/assets/a%20b.js` serves `a b.js`, `/assets/caf%C3%A9.txt` serves `café.txt`, `/assets/100%25.txt` serves `100%.txt`.
 
 ## Scope
 

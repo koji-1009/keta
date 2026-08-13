@@ -1,12 +1,9 @@
-/// Pins the claims this package's README makes, including the two it warns
-/// about.
+/// Pins the claims this package's README makes.
 ///
-/// The README is the only description of keta_static a user gets, and this
-/// package shipped without one — so the first version of it says what the code
-/// does today, including the parts that are inconvenient. A warning nobody
-/// tests is a warning that goes stale silently, which is worse than no warning:
-/// a reader who checks it and finds it fixed learns nothing, and a reader who
-/// trusts it after it changes is misled.
+/// The README is the only description of keta_static a user gets, so every
+/// sentence in it that describes behaviour has a test here — including the
+/// inconvenient parts. A claim nobody tests goes stale silently, and a reader
+/// who trusts it after it has changed is misled.
 @TestOn('vm')
 library;
 
@@ -141,10 +138,26 @@ void main() {
       expect((await client.get('/assets/app.min.js')).status, 200);
     });
 
-    test('WARNED: a percent-encoded name does not resolve', () async {
-      // The asset exists under its decoded name and is still unreachable.
-      final client = TestClient(appWith({'a b.js': 'JS'}), null);
-      expect((await client.get('/assets/a%20b.js')).status, 404);
+    test('a percent-encoded name resolves under its decoded name', () async {
+      final client = TestClient(
+        appWith({'a b.js': 'JS', 'café.txt': 'CAFE', '100%.txt': 'PCT'}),
+        null,
+      );
+      expect((await client.get('/assets/a%20b.js')).status, 200);
+      expect((await client.get('/assets/caf%C3%A9.txt')).text(), 'CAFE');
+      expect((await client.get('/assets/100%25.txt')).text(), 'PCT');
+    });
+
+    test('a %2F inside a segment does not forge a path separator', () async {
+      // `Uri.pathSegments` decodes `%2F` to a `/` *inside* one segment; joining
+      // it back would name a path the URL never did.
+      final client = TestClient(appWith({'a/b.js': 'JS'}), null);
+      expect((await client.get('/assets/a%2Fb.js')).status, 404);
+    });
+
+    test('a NUL in a segment is refused, not passed downstream', () async {
+      final client = TestClient(appWith({'a.txt': 'A'}), null);
+      expect((await client.get('/assets/a.txt%00.png')).status, 404);
     });
   });
 }
