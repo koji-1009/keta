@@ -175,17 +175,13 @@ void main() {
       expect(s.validate('ab'), [r'$: "ab" does not match pattern \d{3}']);
     });
 
-    test(
-      'a pattern with no maxLength is backstopped by the hard ceiling',
-      () {
-        const s = Schema('Unbounded', {'type': 'string', 'pattern': redos});
-        // 5001 code points, over the 4096 ceiling and with no maxLength to gate
-        // it: the regex is skipped and the over-length string is a violation. If
-        // the ceiling regressed, `redos` would run over 5000 'a's and hang.
-        expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
-      },
-      timeout: const Timeout(Duration(seconds: 5)),
-    );
+    test('a pattern with no maxLength is backstopped by the hard ceiling', () {
+      const s = Schema('Unbounded', {'type': 'string', 'pattern': redos});
+      // 5001 code points, over the 4096 ceiling and with no maxLength to gate
+      // it: the regex is skipped and the over-length string is a violation. If
+      // the ceiling regressed, `redos` would run over 5000 'a's and hang.
+      expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
+    }, timeout: const Timeout(Duration(seconds: 5)));
 
     test('the ceiling fires even for a value that would match (over-ceiling is '
         'condemned before the regex, not after)', () {
@@ -198,21 +194,17 @@ void main() {
       expect(s.validate('a' * 4096), isEmpty);
     });
 
-    test(
-      'a maxLength above the ceiling does not lift the ceiling',
-      () {
-        const s = Schema('Loose', {
-          'type': 'string',
-          'maxLength': 1000000,
-          'pattern': redos,
-        });
-        // The value satisfies the author's (huge) maxLength, but the absolute
-        // ceiling still gates the regex — a maxLength larger than the ceiling
-        // cannot re-expose the unguarded regex.
-        expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
-      },
-      timeout: const Timeout(Duration(seconds: 5)),
-    );
+    test('a maxLength above the ceiling does not lift the ceiling', () {
+      const s = Schema('Loose', {
+        'type': 'string',
+        'maxLength': 1000000,
+        'pattern': redos,
+      });
+      // The value satisfies the author's (huge) maxLength, but the absolute
+      // ceiling still gates the regex — a maxLength larger than the ceiling
+      // cannot re-expose the unguarded regex.
+      expect(s.validate(hostile(5000)), [ceilingViolation(5001)]);
+    }, timeout: const Timeout(Duration(seconds: 5)));
 
     test('an uncompilable pattern is authoring damage even when the value is '
         'over-length', () {
@@ -559,24 +551,20 @@ void main() {
       ]);
     });
 
-    test(
-      'a large over-maxItems array does not pay the quadratic scan',
-      () {
-        const s = Schema('Gated', {
-          'type': 'array',
-          'items': {'type': 'integer'},
-          'maxItems': 3,
-          'uniqueItems': true,
-        });
-        // 50k distinct elements over maxItems: if the O(n²) scan ran it would
-        // burn seconds (2.5e9 comparisons); the gate skips it, so this returns
-        // immediately with only the maxItems violation. The timeout is the
-        // backstop that fails fast if the gate regressed.
-        final big = List<Object?>.generate(50000, (i) => i);
-        expect(s.validate(big), [r'$: array length 50000 exceeds maxItems 3']);
-      },
-      timeout: const Timeout(Duration(seconds: 5)),
-    );
+    test('a large over-maxItems array does not pay the quadratic scan', () {
+      const s = Schema('Gated', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'maxItems': 3,
+        'uniqueItems': true,
+      });
+      // 50k distinct elements over maxItems: if the O(n²) scan ran it would
+      // burn seconds (2.5e9 comparisons); the gate skips it, so this returns
+      // immediately with only the maxItems violation. The timeout is the
+      // backstop that fails fast if the gate regressed.
+      final big = List<Object?>.generate(50000, (i) => i);
+      expect(s.validate(big), [r'$: array length 50000 exceeds maxItems 3']);
+    }, timeout: const Timeout(Duration(seconds: 5)));
   });
 
   group('array — uniqueItems has an absolute ceiling when maxItems is omitted', () {
@@ -624,26 +612,23 @@ void main() {
       expect(s.validate(big), [ceilingViolation(big.length)]);
     });
 
-    test(
-      'the ceiling boundary is exact: 8192 scanned, 8193 reported by length',
-      () {
-        const s = Schema('Unbounded', {
-          'type': 'array',
-          'items': {'type': 'integer'},
-          'uniqueItems': true,
-        });
-        // Exactly 8192 distinct elements: at the ceiling, so the scan still runs
-        // and finds no collision. One more element is over the ceiling and is
-        // reported by length without being scanned. This adjacent pair pins the
-        // exact `> ceiling` boundary (not `>=`), mirroring the pattern ceiling's
-        // 4096/4097 pin — a regression that shifted the ceiling anywhere in
-        // [8193, ...] would otherwise pass silently.
-        final atCeiling = List<Object?>.generate(8192, (i) => i);
-        expect(s.validate(atCeiling), isEmpty);
-        final overByOne = List<Object?>.generate(8193, (i) => i);
-        expect(s.validate(overByOne), [ceilingViolation(8193)]);
-      },
-    );
+    test('the ceiling boundary is exact: 8192 scanned, 8193 reported by length', () {
+      const s = Schema('Unbounded', {
+        'type': 'array',
+        'items': {'type': 'integer'},
+        'uniqueItems': true,
+      });
+      // Exactly 8192 distinct elements: at the ceiling, so the scan still runs
+      // and finds no collision. One more element is over the ceiling and is
+      // reported by length without being scanned. This adjacent pair pins the
+      // exact `> ceiling` boundary (not `>=`), mirroring the pattern ceiling's
+      // 4096/4097 pin — a regression that shifted the ceiling anywhere in
+      // [8193, ...] would otherwise pass silently.
+      final atCeiling = List<Object?>.generate(8192, (i) => i);
+      expect(s.validate(atCeiling), isEmpty);
+      final overByOne = List<Object?>.generate(8193, (i) => i);
+      expect(s.validate(overByOne), [ceilingViolation(8193)]);
+    });
 
     test('a maxItems below the ceiling still governs (the ceiling is only a '
         'backstop for the omitted-maxItems case)', () {

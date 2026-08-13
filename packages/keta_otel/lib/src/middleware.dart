@@ -61,15 +61,13 @@ String _foldMethod(String method) {
 /// which no incoming header contains and which becomes the parent of anything
 /// this request calls out to. Read `traceKey` for "who called me"; read
 /// [otelSpanKey] for "what span am I".
-class OtelSpanContext {
-  const OtelSpanContext({required this.traceId, required this.spanId});
-
+class const OtelSpanContext({
   /// The 32-hex trace id shared by every span in this trace.
-  final String traceId;
+  required final String traceId,
 
   /// The 16-hex id of the span `otel()` recorded for this request.
-  final String spanId;
-}
+  required final String spanId,
+});
 
 /// The key under which [otel] exposes the current request's [OtelSpanContext].
 /// See [OtelSpanContext] for how it relates to core's `traceKey`.

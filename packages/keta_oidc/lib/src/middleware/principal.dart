@@ -13,33 +13,27 @@ import '../jwt/claims.dart';
 /// expiry have all passed. It carries the identity ([subject]), the whole
 /// [claims] set for anything else a handler needs, and the [scopes] parsed for
 /// authorization.
-final class OidcPrincipal {
-  const OidcPrincipal({
-    required this.subject,
-    required this.claims,
-    required this.scopes,
-  });
-
-  /// Builds a principal from validated [claims], parsing its scopes.
-  factory OidcPrincipal.fromClaims(JwtClaims claims) => OidcPrincipal(
-    subject: claims.subject,
-    claims: claims,
-    scopes: parseScopes(claims),
-  );
-
+final class const OidcPrincipal({
   /// The subject (`sub`) — the stable identifier of the caller — or `null` if
   /// the token carried none. Surfaced, never required: a token without a `sub`
   /// still authenticates (the JWT layer does not demand one), and whether a
   /// missing `sub` matters is the application's call.
-  final String? subject;
+  required final String? subject,
 
   /// The full validated claim set, for anything beyond [subject] and [scopes]
   /// (tenant, roles, email, custom claims). Read application claims from
   /// [JwtClaims.raw].
-  final JwtClaims claims;
+  required final JwtClaims claims,
 
   /// The caller's granted scopes, parsed from the token (see [parseScopes]).
-  final Set<String> scopes;
+  required final Set<String> scopes,
+}) {
+  /// Builds a principal from validated [claims], parsing its scopes.
+  factory fromClaims(JwtClaims claims) => OidcPrincipal(
+    subject: claims.subject,
+    claims: claims,
+    scopes: parseScopes(claims),
+  );
 }
 
 /// The [Key] under which `oidc()` binds the [OidcPrincipal] into a request

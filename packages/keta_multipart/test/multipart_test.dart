@@ -283,9 +283,8 @@ void main() {
 
     test('a missing boundary is a BadRequest', () {
       expect(
-        parts(
-          ctx(utf8.encode('x'), contentType: 'multipart/form-data'),
-        ).toList(),
+        parts(ctx(utf8.encode('x'), contentType: 'multipart/form-data'))
+            .toList(),
         throwsA(isA<BadRequest>()),
       );
     });
@@ -430,76 +429,73 @@ void main() {
       expect(got, [('a', 'hello'), ('b', 'world')]);
     });
 
-    group('a frame the parser rejects is a BadRequest, not an escaped error', () {
-      // package:mime reports an unparseable frame by throwing SYNCHRONOUSLY
-      // from the source subscription's onData, so the throw lands in the zone
-      // that registered the callback rather than on the stream `parts()`
-      // returns. Unguarded that zone is the root zone, where the throw is an
-      // unhandled error that ends the isolate — one unauthenticated POST was
-      // enough to take a server down, and neither `recover()` nor the
-      // transport's defensive catch could see it. Each case below rides that
-      // exact path, so a regression is a dead test process, not a red
-      // assertion.
-      final rejected = {
-        'a space inside a header field name':
-            '--B\r\nContent Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
-        'a boundary terminated by something other than CRLF':
-            '--B\tX\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
-        'a bare CR inside a header value':
-            '--B\r\nContent-Disposition: form-data;\rname="a"\r\n\r\nv\r\n--B--\r\n',
-        'an empty body': '',
-        'a body with no boundary in it at all': 'not multipart at all',
-      };
-      for (final entry in rejected.entries) {
-        test(entry.key, () {
-          expect(
-            parts(ctx(utf8.encode(entry.value))).toList(),
-            throwsA(isA<BadRequest>()),
-          );
-        });
-      }
-    });
-
-    test(
-      'a body that stops arriving ends the read instead of hanging',
-      () async {
-        // A truncated upload produces NO event: the parser never advances and
-        // never fails, and dart:io leaves the request body stalled rather than
-        // erroring it, so an unguarded `await part.text()` waits forever and
-        // holds its request slot. `c.aborted` — completed here by `abort()`, in
-        // production by a disconnect, a `timeout()`, or a graceful shutdown — is
-        // the only signal that arrives, so it must terminate both the part
-        // stream and the body being read.
-        final peerGone = Completer<void>();
-        final c = testContext<Object?>(
-          null,
-          method: 'POST',
-          headers: {'content-type': 'multipart/form-data; boundary=B'},
-          // A part header and the start of its body, with no closing boundary.
-          rawBody: utf8.encode(
-            '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\npar',
-          ),
-          closed: peerGone.future,
-        );
-        final reads = <Object>[];
-        final loop = () async {
-          await for (final p in parts(c)) {
-            try {
-              reads.add(await p.text());
-            } on KetaException catch (e) {
-              reads.add(e);
-            }
-          }
-        }();
-        // The read is outstanding; nothing has failed on its own.
-        await Future<void>.delayed(Duration.zero);
-        expect(reads, isEmpty);
-
-        peerGone.complete();
-        await expectLater(loop, throwsA(isA<BadRequest>()));
-        expect(reads.single, isA<BadRequest>());
+    group(
+      'a frame the parser rejects is a BadRequest, not an escaped error',
+      () {
+        // package:mime reports an unparseable frame by throwing SYNCHRONOUSLY
+        // from the source subscription's onData, so the throw lands in the zone
+        // that registered the callback rather than on the stream `parts()`
+        // returns. Unguarded that zone is the root zone, where the throw is an
+        // unhandled error that ends the isolate — one unauthenticated POST was
+        // enough to take a server down, and neither `recover()` nor the
+        // transport's defensive catch could see it. Each case below rides that
+        // exact path, so a regression is a dead test process, not a red
+        // assertion.
+        final rejected = {
+          'a space inside a header field name': '--B\r\nContent Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
+          'a boundary terminated by something other than CRLF': '--B\tX\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
+          'a bare CR inside a header value': '--B\r\nContent-Disposition: form-data;\rname="a"\r\n\r\nv\r\n--B--\r\n',
+          'an empty body': '',
+          'a body with no boundary in it at all': 'not multipart at all',
+        };
+        for (final entry in rejected.entries) {
+          test(entry.key, () {
+            expect(
+              parts(ctx(utf8.encode(entry.value))).toList(),
+              throwsA(isA<BadRequest>()),
+            );
+          });
+        }
       },
     );
+
+    test('a body that stops arriving ends the read instead of hanging', () async {
+      // A truncated upload produces NO event: the parser never advances and
+      // never fails, and dart:io leaves the request body stalled rather than
+      // erroring it, so an unguarded `await part.text()` waits forever and
+      // holds its request slot. `c.aborted` — completed here by `abort()`, in
+      // production by a disconnect, a `timeout()`, or a graceful shutdown — is
+      // the only signal that arrives, so it must terminate both the part
+      // stream and the body being read.
+      final peerGone = Completer<void>();
+      final c = testContext<Object?>(
+        null,
+        method: 'POST',
+        headers: {'content-type': 'multipart/form-data; boundary=B'},
+        // A part header and the start of its body, with no closing boundary.
+        rawBody: utf8.encode(
+          '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\npar',
+        ),
+        closed: peerGone.future,
+      );
+      final reads = <Object>[];
+      final loop = () async {
+        await for (final p in parts(c)) {
+          try {
+            reads.add(await p.text());
+          } on KetaException catch (e) {
+            reads.add(e);
+          }
+        }
+      }();
+      // The read is outstanding; nothing has failed on its own.
+      await Future<void>.delayed(Duration.zero);
+      expect(reads, isEmpty);
+
+      peerGone.complete();
+      await expectLater(loop, throwsA(isA<BadRequest>()));
+      expect(reads.single, isA<BadRequest>());
+    });
 
     group('over a real socket', () {
       // This package had no wire-level test at all, and it is the one that

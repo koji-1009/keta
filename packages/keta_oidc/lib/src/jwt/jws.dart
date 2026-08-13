@@ -9,31 +9,24 @@ import 'rejection.dart';
 
 /// The decoded JOSE header of a JWS (RFC 7515 §4) — the parameters keta_oidc
 /// reads, plus the [raw] header for the rest.
-final class JoseHeader {
-  const JoseHeader._({
-    required this.algorithm,
-    required this.kid,
-    required this.type,
-    required this.raw,
-  });
-
+final class const JoseHeader._({
   /// The signature algorithm (`alg`). Always a value in keta_oidc's allowlist:
   /// a header whose `alg` is `none`, an `HS*`, a `PS*`, or unrecognised never
   /// produces a [JoseHeader] — [Jws.parse] rejects it as [JwtMalformed] first.
-  final JwsAlgorithm algorithm;
+  required final JwsAlgorithm algorithm,
 
   /// The key id (`kid`), or `null`. The JWKS wave matches this against the keys
   /// it holds to resolve the verification key.
-  final String? kid;
+  required final String? kid,
 
   /// The media type (`typ`), or `null`. Surfaced, not enforced: RFC 9068's
   /// `at+jwt` typing is a policy a later wave can add; this layer does not
   /// presume it.
-  final String? type;
+  required final String? type,
 
   /// The full decoded header object.
-  final Map<String, Object?> raw;
-}
+  required final Map<String, Object?> raw,
+});
 
 /// A parsed JWS in compact serialization (RFC 7515 §3.1) — the three
 /// dot-separated base64url segments of a signed JWT, decoded into a header, a
@@ -46,14 +39,22 @@ final class JoseHeader {
 /// validator's job. Splitting it this way is what lets the caller read the
 /// header's `kid` to resolve a key *before* verifying, which is the exact order
 /// JWKS-based verification requires.
-final class Jws {
-  const Jws._({
-    required this.header,
-    required this.payload,
-    required this.signingInput,
-    required this.signature,
-  });
+final class const Jws._({
+  /// The decoded JOSE header.
+  required final JoseHeader header,
 
+  /// The decoded claims payload, raw. Registered claims are typed by [JwtClaims]
+  /// (which the validator applies); this map is the whole payload.
+  required final Map<String, Object?> payload,
+
+  /// The ASCII bytes of `"<header>.<payload>"` — exactly what the signature is
+  /// computed over, handed unchanged to the [SignatureVerifier].
+  required final Uint8List signingInput,
+
+  /// The raw signature bytes, decoded from the third segment. For `ES*` this is
+  /// the JOSE `r ‖ s` form (see [SignatureVerifier]).
+  required final Uint8List signature,
+}) {
   /// Parses a compact-serialization JWS from [token].
   ///
   /// Enforces, each failure as [JwtMalformed]:
@@ -145,21 +146,6 @@ final class Jws {
       signature: signature,
     );
   }
-
-  /// The decoded JOSE header.
-  final JoseHeader header;
-
-  /// The decoded claims payload, raw. Registered claims are typed by [JwtClaims]
-  /// (which the validator applies); this map is the whole payload.
-  final Map<String, Object?> payload;
-
-  /// The ASCII bytes of `"<header>.<payload>"` — exactly what the signature is
-  /// computed over, handed unchanged to the [SignatureVerifier].
-  final Uint8List signingInput;
-
-  /// The raw signature bytes, decoded from the third segment. For `ES*` this is
-  /// the JOSE `r ‖ s` form (see [SignatureVerifier]).
-  final Uint8List signature;
 
   static Map<String, Object?> _decodeJsonObject(String segment, String what) {
     final bytes = decodeBase64Url(segment, what);

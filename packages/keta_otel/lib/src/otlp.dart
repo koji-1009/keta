@@ -49,7 +49,7 @@ class OtlpExporter implements Disposable {
   /// request. [exportInterval]: how often the queue is drained absent a
   /// manual [flush] (`Duration.zero` disables the timer — draining then
   /// happens only via explicit [flush] calls). [onWarn]: see [OtlpWarn].
-  OtlpExporter(
+  new(
     OtlpSender send, {
     String serviceName = 'keta',
     int maxQueueSize = defaultMaxQueueSize,
@@ -66,7 +66,7 @@ class OtlpExporter implements Disposable {
          onWarn: onWarn,
        );
 
-  OtlpExporter._(
+  new _(
     this._send,
     this.serviceName,
     this._releaseResources, {
@@ -115,7 +115,7 @@ class OtlpExporter implements Disposable {
   /// remaining delay. Together these keep the whole retry loop — attempts and
   /// sleeps alike — bounded in wall-clock time regardless of collector
   /// behavior.
-  factory OtlpExporter.http(
+  factory http(
     Uri endpoint, {
     String serviceName = 'keta',
     Map<String, String> headers = const {},
@@ -525,11 +525,8 @@ Future<bool> _sleepUnless(
 /// the timer AND resolve the still-pending sleep as aborted. [Timer.cancel]
 /// alone would only do the former, leaving the `await` on [done] hanging
 /// forever, since nothing else would ever complete it.
-class _RetryTimer implements Timer {
-  _RetryTimer(this._real, this._done);
-  final Timer _real;
-  final Completer<bool> _done;
-
+class _RetryTimer(final Timer _real, final Completer<bool> _done)
+    implements Timer {
   @override
   void cancel() {
     _real.cancel();

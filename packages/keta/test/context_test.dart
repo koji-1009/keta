@@ -14,14 +14,11 @@ import 'support/harness.dart';
 
 /// A request whose connection close can be triggered, to exercise the
 /// transport `closed` → `ctx.abort()` wiring.
-class _CloseableRequest implements TransportRequest {
-  _CloseableRequest(this.method, this.uri, this.headers);
-  @override
-  final String method;
-  @override
-  final Uri uri;
-  @override
-  final Map<String, List<String>> headers;
+class _CloseableRequest(
+  @override final String method,
+  @override final Uri uri,
+  @override final Map<String, List<String>> headers,
+) implements TransportRequest {
   @override
   final String remoteAddress = 'test';
   final Completer<void> _closed = Completer<void>();
@@ -36,14 +33,11 @@ class _CloseableRequest implements TransportRequest {
 /// A request whose `remoteAddress` counts every resolve and returns a value that
 /// *changes* per call, so a test can prove dispatch never eagerly resolves it and
 /// that a handler reading it twice caches the first value.
-class _CountingRemoteRequest implements TransportRequest {
-  _CountingRemoteRequest(this.method, this.uri, this.headers);
-  @override
-  final String method;
-  @override
-  final Uri uri;
-  @override
-  final Map<String, List<String>> headers;
+class _CountingRemoteRequest(
+  @override final String method,
+  @override final Uri uri,
+  @override final Map<String, List<String>> headers,
+) implements TransportRequest {
   int reads = 0;
   @override
   String get remoteAddress {
@@ -115,29 +109,26 @@ void main() {
       expect(req.reads, 0);
     });
 
-    test(
-      'reading it twice resolves once and returns a consistent value',
-      () async {
-        final app = App<Env>();
-        late String first;
-        late String second;
-        app.get('/x', (c) {
-          first = c.remoteAddress;
-          second = c.remoteAddress;
-          return c.text('ok');
-        });
-        final router = app.compile(newEnv());
+    test('reading it twice resolves once and returns a consistent value', () async {
+      final app = App<Env>();
+      late String first;
+      late String second;
+      app.get('/x', (c) {
+        first = c.remoteAddress;
+        second = c.remoteAddress;
+        return c.text('ok');
+      });
+      final router = app.compile(newEnv());
 
-        final req = _CountingRemoteRequest('GET', Uri.parse('/x'), const {});
-        await router.dispatch(req);
+      final req = _CountingRemoteRequest('GET', Uri.parse('/x'), const {});
+      await router.dispatch(req);
 
-        // Cached after the first resolve: both reads see 'ip-1', not the changing
-        // 'ip-2' a re-resolve would produce, and the source was touched once.
-        expect(first, 'ip-1');
-        expect(second, 'ip-1');
-        expect(req.reads, 1);
-      },
-    );
+      // Cached after the first resolve: both reads see 'ip-1', not the changing
+      // 'ip-2' a re-resolve would produce, and the source was touched once.
+      expect(first, 'ip-1');
+      expect(second, 'ip-1');
+      expect(req.reads, 1);
+    });
   });
 
   test('a transport disconnect (closed) fires c.aborted', () async {

@@ -1,6 +1,6 @@
 # keta — agent guide
 
-keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK ^3.12). Routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values. User code reads as plain Dart. This file is enough to write handlers, DTOs, mappers, schema constants, and tests by hand.
+keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK ^3.13). Routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values. User code reads as plain Dart. This file is enough to write handlers, DTOs, mappers, schema constants, and tests by hand.
 
 Dependencies flow inward. `keta`'s server depends on nothing beyond the SDK, and the package ships its own test-support library (`package:keta/test.dart`, backed by `package:test`) as a separate import for test code.
 
@@ -80,10 +80,8 @@ Two optional env contracts change the framework's default behavior. `HasLog` (`L
 `Log` is a structured logger: `debug(msg, [fields])`, `info(msg, [fields])`, `warn(msg, [fields])`, `error(msg, [error, st, fields])`, `flush()`, and `withFields(fields)` for a view that adds `fields` to every subsequent line. `StdoutLog` writes one JSON line per event (`{"ts","level","msg", ...fields}`) through a non-blocking sink with a bounded backlog (default 8 MiB): a stalled log collector costs the oldest lines — dropped and honestly reported in-band on the next successful drain — never the server. Every isolate flushes on a timer and on shutdown.
 
 ```dart
-class MyEnv implements HasLog, Disposable {
-  MyEnv(this.db, this.log);
-  final Db db;
-  @override final Log log;
+class MyEnv(final Db db, @override final Log log)
+    implements HasLog, Disposable {
   @override Future<void> close() => db.close();
 }
 
@@ -125,16 +123,14 @@ The complete DTO shape — hand-written, agent-written, and lint-materialized co
 ```dart
 enum Role { admin, member }
 
-class UserDto {
-  final String id;
-  final String name;
-  final int? age;
-  final Role role;
-  final List<String> tags;
-  UserDto({required this.id, required this.name, this.age,
-      required this.role, required this.tags});
-
-  factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
+class const UserDto({
+  required final String id,
+  required final String name,
+  final int? age,
+  required final Role role,
+  required final List<String> tags,
+}) {
+  factory fromJson(Map<String, Object?> json) => UserDto(
         id: json['id'] as String,
         name: json['name'] as String,
         age: json['age'] as int?,
@@ -166,13 +162,13 @@ const userDtoSchema = Schema('UserDto', {
 
 Nested DTO: in `fromJson`, `Other.fromJson(json['x'] as Map<String, Object?>)`; in the schema, `'x': {'\$ref': '#/components/schemas/Other'}` and `deps: [otherSchema]`.
 
-Optional `factory X.fromRow(Map<String, Object?> row)` builds from a DB row — same shape as `fromJson`, but numeric-origin values are converted explicitly.
+Optional `factory fromRow(Map<String, Object?> row)` builds from a DB row — same shape as `fromJson`, but numeric-origin values are converted explicitly. Inside the class the constructor needs no class name (Dart 3.13); `factory X.fromRow(...)` still compiles but `unnecessary_type_name_in_constructor` flags it.
 
 Sealed with a discriminator — `switch` on the `type` field (lowerCamel variant names); schema is `oneOf` + `discriminator`, each variant an ordinary DTO:
 
 ```dart
 sealed class Event {
-  factory Event.fromJson(Map<String, Object?> json) => switch (json['type']) {
+  factory fromJson(Map<String, Object?> json) => switch (json['type']) {
         'created' => Created.fromJson(json),
         'deleted' => Deleted.fromJson(json),
         _ => throw const BadRequest('unknown event type'),
@@ -184,11 +180,9 @@ sealed class Event {
 Enhanced enum — when a wire value is not a plain Dart identifier (a hyphen, a leading digit) or is a reserved word, the enum carries the wire string. The Dart name is derived deterministically (already-valid → verbatim; else split on non-alphanumerics and camel-join, `super-user`→`superUser`; leading digit → `$2fa`; reserved word → `default_`). The Schema lists the WIRE strings, never the Dart names. A plain enum (all wire values already identifiers) stays `enum Role { admin, member }` with `Role.values.byName(...)`/`.name`:
 
 ```dart
-enum Role {
+enum Role(final String wire) {
   admin('admin'),
   superUser('super-user');
-  const Role(this.wire);
-  final String wire;
   static Role fromWire(String wire) => values.firstWhere(
         (v) => v.wire == wire,
         orElse: () => throw BadRequest('unknown Role wire value: $wire'),

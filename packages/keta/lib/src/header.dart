@@ -27,25 +27,21 @@ import 'response.dart';
 /// [encode] is the inverse, for writing the header onto a response. A codec
 /// that only ever reads still has to provide it; a type that cannot be written
 /// is a sign the value is a parse result rather than a header.
-final class HeaderCodec<T extends Object> {
-  const HeaderCodec({required this.decode, required this.encode});
-  final T Function(List<String> values) decode;
-  final List<String> Function(T value) encode;
-}
+final class const HeaderCodec<T extends Object>({
+  required final T Function(List<String> values) decode,
+  required final List<String> Function(T value) encode,
+});
 
 /// A header name bound to the codec that gives its values a type.
 ///
 /// Const, so an accessor is a value an application can declare beside its
 /// routes: `const requestId = HeaderAccessor('x-request-id', …)`. keta's own
 /// are below.
-final class HeaderAccessor<T extends Object> {
-  const HeaderAccessor(this.name, this.codec);
-
+final class const HeaderAccessor<T extends Object>(
   /// The header's name, lower-cased — the form request headers are keyed by.
-  final String name;
-
-  final HeaderCodec<T> codec;
-
+  final String name,
+  final HeaderCodec<T> codec,
+) {
   /// Renders [value] as the single-entry header map a response takes, so a
   /// typed value reaches the wire without the call site re-spelling the name:
   /// `c.json(body, headers: cacheControl.write(CacheControl.noStore))`.
@@ -66,11 +62,7 @@ final class HeaderAccessor<T extends Object> {
 /// lower case here; [credentials] is kept verbatim, because its shape depends
 /// entirely on the scheme (base64 for Basic, a token for Bearer) and this type
 /// has no business guessing which.
-final class Authorization {
-  const Authorization(this.scheme, this.credentials);
-  final String scheme;
-  final String credentials;
-
+final class const Authorization(final String scheme, final String credentials) {
   /// True when this is the named scheme, compared case-insensitively.
   bool isScheme(String name) => scheme == name.toLowerCase();
 
@@ -109,27 +101,16 @@ List<String> _encodeAuthorization(Authorization value) => [
 /// modelled. An unrecognized directive on the way in is dropped rather than
 /// rejected: a proxy may add its own, and refusing the request over a directive
 /// this server does not act on would fail a well-formed message.
-final class CacheControl {
-  const CacheControl({
-    this.noStore = false,
-    this.noCache = false,
-    this.mustRevalidate = false,
-    this.isPublic = false,
-    this.isPrivate = false,
-    this.immutable = false,
-    this.maxAge,
-    this.sMaxAge,
-  });
-
-  final bool noStore;
-  final bool noCache;
-  final bool mustRevalidate;
-  final bool isPublic;
-  final bool isPrivate;
-  final bool immutable;
-  final Duration? maxAge;
-  final Duration? sMaxAge;
-
+final class const CacheControl({
+  final bool noStore = false,
+  final bool noCache = false,
+  final bool mustRevalidate = false,
+  final bool isPublic = false,
+  final bool isPrivate = false,
+  final bool immutable = false,
+  final Duration? maxAge,
+  final Duration? sMaxAge,
+}) {
   @override
   String toString() => 'CacheControl(${_encodeCacheControl(this).first})';
 }
@@ -215,12 +196,10 @@ List<String> _encodeCacheControl(CacheControl value) {
 /// This is the parse `gzip()` used to carry inline. `q=0` means *refused*, not
 /// merely unpreferred, which is the part an ad hoc `contains('gzip')` check
 /// gets wrong.
-final class AcceptEncoding {
-  const AcceptEncoding(this.qualities);
-
+final class const AcceptEncoding(
   /// Coding (lower-case, `*` included) to its q-value.
-  final Map<String, double> qualities;
-
+  final Map<String, double> qualities,
+) {
   /// The q-value [coding] was *explicitly* named with, or null when it was not
   /// named at all. Distinct from [wildcard] on purpose: RFC 9110 §12.5.3 gives
   /// a named coding precedence over `*`, so `gzip;q=0, *` refuses gzip, and a
@@ -286,24 +265,18 @@ List<String> _encodeAcceptEncoding(AcceptEncoding value) => [
 // --- If-None-Match / ETag --------------------------------------------------
 
 /// One entity tag: its opaque value and whether it is weak (`W/`).
-final class EntityTag {
-  const EntityTag(this.value, {this.weak = false});
-  final String value;
-  final bool weak;
-
+final class const EntityTag(final String value, {final bool weak = false}) {
   @override
   String toString() => weak ? 'W/"$value"' : '"$value"';
 }
 
 /// An `If-None-Match` condition: `*`, or a list of entity tags.
-final class EntityTagCondition {
-  const EntityTagCondition(this.tags, {this.any = false});
-
+final class const EntityTagCondition(
+  final List<EntityTag> tags, {
+  final bool any = false,
+}) {
   /// `*` — matches whatever representation exists.
   static const EntityTagCondition star = EntityTagCondition([], any: true);
-
-  final List<EntityTag> tags;
-  final bool any;
 
   /// Weak comparison (RFC 9110 §8.8.3.2), which is what `If-None-Match`
   /// prescribes: the opaque values are compared and the weakness flags ignored.
@@ -352,19 +325,19 @@ List<String> _encodeEntityTags(EntityTagCondition value) => [
 /// `multipart/byteranges` response, which is a body format rather than a header
 /// concern; a server that does not produce one answers the whole
 /// representation, which is always allowed.
-final class ByteRange {
-  const ByteRange({this.first, this.last, this.suffixLength})
+final class const ByteRange({
+  /// `bytes=<first>-<last>` — [last] null means "to the end".
+  final int? first,
+  final int? last,
+
+  /// `bytes=-<suffixLength>` — the final [suffixLength] bytes.
+  final int? suffixLength,
+}) {
+  this
     : assert(
         (suffixLength == null) != (first == null),
         'a byte range is either first[-last] or -suffix, never both or neither',
       );
-
-  /// `bytes=<first>-<last>` — [last] null means "to the end".
-  final int? first;
-  final int? last;
-
-  /// `bytes=-<suffixLength>` — the final [suffixLength] bytes.
-  final int? suffixLength;
 
   /// Resolves against a representation of [totalLength], or null when the
   /// range is unsatisfiable (a 416).
@@ -430,7 +403,7 @@ List<String> _encodeRange(ByteRange value) => [value.toString()];
 /// Thrown by the `Range` codec and swallowed by the Context accessors, so an
 /// unreadable Range reads as absent (RFC 9110: ignore it) instead of 400.
 class _UnusableRange implements Exception {
-  const _UnusableRange();
+  const new();
 }
 
 /// Whether [error] is the sentinel meaning "this header is to be ignored".

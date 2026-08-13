@@ -58,29 +58,7 @@ abstract interface class UpgradedChannel {
 /// actually switch protocols decides to act on it. A transport that cannot
 /// (`TestClient`) sees an ordinary value and fails, or adapts, loudly and
 /// predictably.
-final class Upgrade {
-  /// Constructs and validates the declaration. Throws [ArgumentError] when
-  /// [maxIdle] or [maxLifetime] is given and is not positive — a non-positive
-  /// bound is an authoring defect, the same posture keta takes for a malformed
-  /// [SseEvent] field or a non-positive SSE `maxIdle`/`maxLifetime`.
-  Upgrade(
-    this.onConnected, {
-    this.subprotocol,
-    this.maxIdle,
-    this.maxLifetime,
-  }) {
-    if (maxIdle != null && maxIdle! <= Duration.zero) {
-      throw ArgumentError.value(maxIdle, 'maxIdle', 'maxIdle must be positive');
-    }
-    if (maxLifetime != null && maxLifetime! <= Duration.zero) {
-      throw ArgumentError.value(
-        maxLifetime,
-        'maxLifetime',
-        'maxLifetime must be positive',
-      );
-    }
-  }
-
+final class Upgrade(
   /// Invoked once, by the realizing transport, with the switched channel. It may
   /// return a `Future` that lives for the whole connection (the ergonomic echo
   /// loop `await for (m in channel.messages) channel.send(m)`); the transport
@@ -93,12 +71,12 @@ final class Upgrade {
   /// first. The handler cannot tell the difference — both are just
   /// [UpgradedChannel] — which is the point: the bound is enforced without the
   /// handler opting into anything beyond passing [maxIdle]/[maxLifetime] here.
-  final FutureOr<void> Function(UpgradedChannel channel) onConnected;
+  final FutureOr<void> Function(UpgradedChannel channel) onConnected, {
 
   /// The WebSocket subprotocol to select during the handshake, or null to select
   /// none. When set, the client must have offered it, otherwise the handshake
   /// fails — a declared subprotocol is a contract, not a hint.
-  final String? subprotocol;
+  final String? subprotocol,
 
   /// Opt-in idle-close bound (E-21a), null by default (no bound — current
   /// behavior unchanged; keta never starts a timer the caller did not ask for).
@@ -120,7 +98,7 @@ final class Upgrade {
   /// open socket (see `H1Transport`'s `close`), chosen for consistency: from
   /// the peer's perspective both are "the server is ending this connection",
   /// not a protocol fault of the peer's.
-  final Duration? maxIdle;
+  final Duration? maxIdle,
 
   /// Opt-in absolute lifetime cap (E-21a), null by default. Added for symmetry
   /// with SSE's `maxLifetime` because it falls out of the same timer
@@ -129,7 +107,24 @@ final class Upgrade {
   /// wall-clock deadline from the moment the channel is realized, regardless of
   /// activity in either direction. Fires even if frames are flowing right up to
   /// the deadline. Closes with the same 1001 code as [maxIdle]'s expiry.
-  final Duration? maxLifetime;
+  final Duration? maxLifetime,
+}) {
+  /// Constructs and validates the declaration. Throws [ArgumentError] when
+  /// [maxIdle] or [maxLifetime] is given and is not positive — a non-positive
+  /// bound is an authoring defect, the same posture keta takes for a malformed
+  /// [SseEvent] field or a non-positive SSE `maxIdle`/`maxLifetime`.
+  this {
+    if (maxIdle != null && maxIdle! <= Duration.zero) {
+      throw ArgumentError.value(maxIdle, 'maxIdle', 'maxIdle must be positive');
+    }
+    if (maxLifetime != null && maxLifetime! <= Duration.zero) {
+      throw ArgumentError.value(
+        maxLifetime,
+        'maxLifetime',
+        'maxLifetime must be positive',
+      );
+    }
+  }
 }
 
 /// The close code sent when a bounded channel expires ([Upgrade.maxIdle] or
@@ -181,8 +176,14 @@ FutureOr<void> realizeUpgrade(Upgrade upgrade, UpgradedChannel raw) {
 /// forward-or-drop design (`h1_transport.dart`) without disturbing it — this
 /// wrapper never becomes a second subscriber and never changes when a frame is
 /// forwarded vs. dropped, only what happens to an already-forwarded frame.
-class _BoundedChannel implements UpgradedChannel {
-  _BoundedChannel(this._inner, {this.idle, Duration? lifetime}) {
+class _BoundedChannel(
+  final UpgradedChannel _inner, {
+
+  /// This wrapper's [Upgrade.maxIdle] value, under a shorter field name.
+  final Duration? idle,
+  Duration? lifetime,
+}) implements UpgradedChannel {
+  this {
     if (lifetime != null) {
       _lifetimeTimer = Timer(lifetime, () => _expire('lifetime exceeded'));
     }
@@ -195,10 +196,6 @@ class _BoundedChannel implements UpgradedChannel {
     unawaited(_inner.done.whenComplete(_cancelAll));
   }
 
-  final UpgradedChannel _inner;
-
-  /// This wrapper's [Upgrade.maxIdle] value, under a shorter field name.
-  final Duration? idle;
   Timer? _idleTimer;
   Timer? _lifetimeTimer;
 

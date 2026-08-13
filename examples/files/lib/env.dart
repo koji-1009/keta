@@ -7,13 +7,8 @@ import 'package:keta_sqlite/keta_sqlite.dart';
 /// The application environment: the constructor graph that carries the app's
 /// dependencies. keta reaches [log] and [close] structurally; keta_db reaches
 /// [db].
-class Env implements HasLog, HasDb, Disposable {
-  Env(this.db, this.log);
-  @override
-  final Db db;
-  @override
-  final Log log;
-
+class Env(@override final Db db, @override final Log log)
+    implements HasLog, HasDb, Disposable {
   /// The database path comes from the environment (§9: env vars only, no config
   /// files at runtime), defaulting to `app.db`.
   static Future<Env> boot() async {

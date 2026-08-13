@@ -245,7 +245,7 @@ const okSchema = Schema('Ok', {'type': 'object', 'required': ['id'], 'properties
       expect(d.single.message, contains('run keta_lints:fix'));
       // And the fix genuinely materializes BOTH mappers (not a no-op).
       final fixed = applyCanonicalFix(source);
-      expect(fixed, contains('factory Ok.fromJson(Map<String, Object?> json)'));
+      expect(fixed, contains('factory fromJson(Map<String, Object?> json)'));
       expect(fixed, contains('Map<String, Object?> toJson()'));
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed); // idempotent
@@ -301,13 +301,11 @@ class Bad {
     );
   });
 
-  group(
-    'canonicalDiagnostics — inheritance is a safe refusal, never destructive',
-    () {
-      test('a DTO subclass with an inherited key in toJson is neither flagged '
-          'nor rewritten (regression: extends was ignored, so the inherited key '
-          'was a false drift and the fix regenerated toJson dropping it)', () {
-        const source = '''
+  group('canonicalDiagnostics — inheritance is a safe refusal, never destructive', () {
+    test('a DTO subclass with an inherited key in toJson is neither flagged '
+        'nor rewritten (regression: extends was ignored, so the inherited key '
+        'was a false drift and the fix regenerated toJson dropping it)', () {
+      const source = '''
 class Base {
   final String id;
   Base({required this.id});
@@ -322,14 +320,13 @@ class Child extends Base {
   Map<String, Object?> toJson() => {'id': id, 'name': name};
 }
 ''';
-        // Child declares only `name`, but its toJson carries the inherited `id`;
-        // without skipping subclasses that reads as `toJson keys not fields: id`.
-        expect(canonicalDiagnostics(source), isEmpty);
-        // The fix must not regenerate Child.toJson (which would drop 'id').
-        expect(applyCanonicalFix(source), source);
-      });
-    },
-  );
+      // Child declares only `name`, but its toJson carries the inherited `id`;
+      // without skipping subclasses that reads as `toJson keys not fields: id`.
+      expect(canonicalDiagnostics(source), isEmpty);
+      // The fix must not regenerate Child.toJson (which would drop 'id').
+      expect(applyCanonicalFix(source), source);
+    });
+  });
 
   group(
     'canonicalDiagnostics — spread/for/computed-key literals are hand-authored',
@@ -793,11 +790,9 @@ const pSchema = Schema('P', {'type': 'object', 'required': ['a', 'b'], 'properti
       expect(applyCanonicalFix(fixed), fixed);
     });
 
-    test(
-      'an unresolvable field type still blocks the Schema repair (negative: '
-      'isSchemaFixable is not a blanket yes) — the advice names the blocker',
-      () {
-        const source = '''
+    test('an unresolvable field type still blocks the Schema repair (negative: '
+        'isSchemaFixable is not a blanket yes) — the advice names the blocker', () {
+      const source = '''
 import 'package:keta/keta.dart';
 class D {
   final DateTime when;
@@ -809,23 +804,19 @@ class D {
 }
 const dSchema = Schema('D', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
 ''';
-        final d = canonicalDiagnostics(source);
-        final schemaDrift = d.where((e) => e.rule == 'keta_schema_drift');
-        expect(schemaDrift, hasLength(1));
-        expect(
-          schemaDrift.single.message,
-          contains('field type outside the canonical subset'),
-        );
-        expect(
-          schemaDrift.single.message,
-          isNot(contains('run keta_lints:fix')),
-        );
-        // And the fix must not touch the Schema (regenerating from the resolvable
-        // subset would drop the `when` property).
-        final fixed = applyCanonicalFix(source);
-        expect(fixed, isNot(contains("'when': {")));
-      },
-    );
+      final d = canonicalDiagnostics(source);
+      final schemaDrift = d.where((e) => e.rule == 'keta_schema_drift');
+      expect(schemaDrift, hasLength(1));
+      expect(
+        schemaDrift.single.message,
+        contains('field type outside the canonical subset'),
+      );
+      expect(schemaDrift.single.message, isNot(contains('run keta_lints:fix')));
+      // And the fix must not touch the Schema (regenerating from the resolvable
+      // subset would drop the `when` property).
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, isNot(contains("'when': {")));
+    });
   });
 
   group('inline fallback fromJson', () {
@@ -942,5 +933,97 @@ class In {
         expect(applyCanonicalFix(fixed), fixed); // idempotent
       },
     );
+
+    group('primary constructors', () {
+      // A DTO that declares its fields in the class header has no field block
+      // at all: the declaring parameters ARE the field set. Every axis below
+      // is the same axis tested above, restated against that shape — the
+      // recognizer must read one field model from either spelling.
+      test('a well-formed primary-constructor DTO is clean', () {
+        const source = '''
+class const UserDto({required final String id, final int? age}) {
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, age: json['age'] as int?);
+  Map<String, Object?> toJson() => {'id': id, if (age != null) 'age': age};
+}
+''';
+        expect(canonicalDiagnostics(source), isEmpty);
+      });
+
+      test(
+        'a declaring parameter the mappers miss is keta_canonical_drift',
+        () {
+          const source = '''
+class const Bad({required final String id, required final String name}) {
+  factory Bad.fromJson(Map<String, Object?> j) =>
+      Bad(id: j['id'] as String, name: j['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+          final d = canonicalDiagnostics(source);
+          expect(d, hasLength(1));
+          expect(d.single.rule, 'keta_canonical_drift');
+          expect(d.single.message, contains('name'));
+        },
+      );
+
+      test('a stale cast against a declaring parameter is keta_type_drift', () {
+        const source = '''
+class const In({required final String id}) {
+  factory In.fromJson(Map<String, Object?> json) => In(id: json['id'] as int);
+}
+''';
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_type_drift');
+        expect(
+          d.single.message,
+          contains('fromJson casts as int but the field is String'),
+        );
+      });
+
+      test('a positional primary constructor is refused, not mis-fixed', () {
+        // The generated fromJson calls the constructor with named arguments,
+        // so a positional header is out of reach exactly as a positional body
+        // constructor is — and the message must name that blocker.
+        const source = '''
+import 'package:keta/keta.dart';
+class const Point(final int x, final int y);
+const pointSchema = Schema('Point', {'type': 'object', 'required': ['x', 'y'], 'properties': {'x': {'type': 'integer'}, 'y': {'type': 'integer'}}});
+''';
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_canonical_missing');
+        expect(d.single.message, contains('a positional constructor'));
+      });
+
+      test('an enhanced enum declaring `wire` in its header is read as '
+          'wire-mapped', () {
+        const source = '''
+import 'package:keta/keta.dart';
+enum Role(final String wire) {
+  admin('admin'),
+  superUser('super-user');
+  static Role fromWire(String wire) =>
+      values.firstWhere((v) => v.wire == wire);
+}
+class const UserDto({required final Role role}) {
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(role: Role.values.byName(json['role'] as String));
+  Map<String, Object?> toJson() => {'role': role.wire};
+}
+''';
+        // Reading an enhanced enum through `values.byName` is the enum-accessor
+        // drift — it only fires if the enum's header-declared `wire` was seen.
+        final d = canonicalDiagnostics(source);
+        expect(d, hasLength(1));
+        expect(d.single.rule, 'keta_type_drift');
+        expect(d.single.message, contains('role'));
+        final fixed = applyCanonicalFix(source);
+        expect(fixed, contains('role: Role.fromWire('));
+        expect(fixed, isNot(contains('values.byName')));
+        expect(canonicalDiagnostics(fixed), isEmpty);
+      });
+    });
   });
 }

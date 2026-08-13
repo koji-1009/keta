@@ -15,10 +15,7 @@ import 'support.dart';
 
 /// A fetch hook that records every call and delegates to [handler] (given the
 /// URL and the zero-based call index).
-class Fetcher {
-  Fetcher(this.handler);
-
-  final Future<String> Function(Uri url, int index) handler;
+class Fetcher(final Future<String> Function(Uri url, int index) handler) {
   final List<Uri> calls = [];
 
   int get count => calls.length;
@@ -655,7 +652,7 @@ void main() {
       url = Uri.parse('http://127.0.0.1:${server.port}/jwks');
     }
 
-    tearDown(() async => server.close(force: true));
+    tearDown(() => server.close(force: true));
 
     test(
       'a valid JWKS under the cap resolves end-to-end over loopback',
@@ -748,7 +745,7 @@ void main() {
       }
 
       setUp(() => elsewhereHits = 0);
-      tearDown(() async => elsewhere.close(force: true));
+      tearDown(() => elsewhere.close(force: true));
 
       test('a redirected JWKS fetch fails instead of taking the keys the '
           'redirect target offers', () async {

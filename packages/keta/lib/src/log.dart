@@ -31,12 +31,11 @@ abstract interface class Log {
 /// without limit. Bounded by size rather than by line count: the flood that
 /// fills it is usually stack traces, and counting those as one line each budgets
 /// nothing.
-class _Backlog {
-  _Backlog(this.maxBytes);
-
+class _Backlog(
   /// Measured as string length. That is what the retained memory tracks, and
   /// for the ASCII-dominant JSON emitted here it tracks the bytes written too.
-  final int maxBytes;
+  final int maxBytes,
+) {
   final ListQueue<String> _lines = ListQueue<String>();
   int _bytes = 0;
 
@@ -101,7 +100,7 @@ class StdoutLog implements Log {
   /// not on the menu. The line being added is never the one dropped, so the
   /// backlog can exceed the bound by one line (a lone stack trace bigger than
   /// the whole budget still gets through, rather than vanishing).
-  StdoutLog({
+  new({
     IOSink? sink,
     Duration flushInterval = const Duration(seconds: 1),
     int maxBufferedBytes = defaultMaxBufferedBytes,
@@ -114,7 +113,7 @@ class StdoutLog implements Log {
     }
   }
 
-  StdoutLog._view(this._sink, this._buffer, this._baked, this._timer)
+  new _view(this._sink, this._buffer, this._baked, this._timer)
     : _ownsTimer = false;
 
   /// Headroom for a stalled sink, per isolate.

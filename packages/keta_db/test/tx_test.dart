@@ -56,11 +56,7 @@ class _RecordingConn implements DbConn {
   }
 }
 
-class _Env implements HasDb {
-  _Env(this.db);
-  @override
-  final Db db;
-}
+class _Env(@override final Db db) implements HasDb;
 
 /// Matches the guard's refusal — a StateError naming the completed transaction —
 /// so it is never confused with an unrelated StateError (e.g. one a handler

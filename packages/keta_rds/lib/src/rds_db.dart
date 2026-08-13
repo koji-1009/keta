@@ -48,9 +48,10 @@ import 'values.dart';
 /// desugars them to PostgreSQL's `$1` form. A parameterless statement is sent
 /// via the simple query protocol, which is what lets a migration file carry
 /// several `;`-separated statements in one `execute`.
-class RdsDb implements Db {
-  RdsDb._(this._writerPool, this._readerPool);
-
+class RdsDb._(
+  final Pool<Connection> _writerPool,
+  final Pool<Connection> _readerPool,
+) implements Db {
   /// Connects to the primary at [endpoint] (and, if given, reads from a replica
   /// at [readerEndpoint]). [settings] is passed to every connection the pools
   /// open — set `sslMode` there. [maxConnections] and [acquireTimeout] bound
@@ -61,7 +62,7 @@ class RdsDb implements Db {
   /// [statementTimeout], when given, caps how long any single statement may run
   /// on a pooled connection (see the class doc and [openWithTimeout]); a
   /// non-positive or sub-millisecond value is rejected here at construction.
-  factory RdsDb(
+  factory(
     Endpoint endpoint, {
     Endpoint? readerEndpoint,
     ConnectionSettings? settings,
@@ -94,7 +95,7 @@ class RdsDb implements Db {
   /// options such as `sslmode` ride as URL query parameters. [readerUrl], when
   /// given, points reads at a replica. See [RdsDb] for [maxConnections],
   /// [acquireTimeout], and [statementTimeout].
-  factory RdsDb.url(
+  factory url(
     String url, {
     String? readerUrl,
     int maxConnections = 10,
@@ -141,9 +142,6 @@ class RdsDb implements Db {
       );
     }
   }
-
-  final Pool<Connection> _writerPool;
-  final Pool<Connection> _readerPool;
 
   // Stamped into the transaction's zone so a nested transaction() call is
   // caught as a StateError instead of silently pinning a second connection and
@@ -245,18 +243,16 @@ class RdsDb implements Db {
 /// pretending there is only one pool to ask about. See [PoolStats] for what
 /// each field means and its staleness caveat; this type adds nothing beyond
 /// pairing the two snapshots.
-class RdsPoolStats {
-  const RdsPoolStats({required this.writer, required this.reader});
-
+class const RdsPoolStats({
   /// The writer pool's snapshot — every [transaction] and every `writer`
   /// query/execute checks out from this pool.
-  final PoolStats writer;
+  required final PoolStats writer,
 
   /// The reader pool's snapshot — every `reader` query checks out from this
   /// pool. Identical to [writer] when no separate reader endpoint was
   /// configured.
-  final PoolStats reader;
-
+  required final PoolStats reader,
+}) {
   @override
   String toString() => 'RdsPoolStats(writer: $writer, reader: $reader)';
 
@@ -270,11 +266,7 @@ class RdsPoolStats {
 
 /// A [DbConn] over a [Pool]: each call checks out a connection, runs, and
 /// returns it. Errors are translated and rows mapped on the way out.
-class _PoolConn implements DbConn {
-  _PoolConn(this._pool);
-
-  final Pool<Connection> _pool;
-
+class _PoolConn(final Pool<Connection> _pool) implements DbConn {
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [
@@ -297,11 +289,7 @@ class _PoolConn implements DbConn {
 
 /// A [DbConn] bound to a live [TxSession] for the body of [RdsDb.transaction].
 /// It runs on the pinned connection; commit/rollback is `runTx`'s job.
-class _TxConn implements DbConn {
-  _TxConn(this._session);
-
-  final TxSession _session;
-
+class _TxConn(final TxSession _session) implements DbConn {
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [

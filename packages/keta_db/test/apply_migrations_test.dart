@@ -222,32 +222,29 @@ void main() {
       });
     });
 
-    test(
-      'upgrades a legacy ledger with ALTER TABLE, keeping old rows NULL',
-      () async {
-        // A ledger written before the checksum column existed, with 0001 already
-        // applied (NULL checksum).
-        final db = FakeDb(legacyLedger: ['0001']);
-        m('0001_one.sql', 'create table one (id integer);');
-        m('0002_two.sql', 'create table two (id integer);');
+    test('upgrades a legacy ledger with ALTER TABLE, keeping old rows NULL', () async {
+      // A ledger written before the checksum column existed, with 0001 already
+      // applied (NULL checksum).
+      final db = FakeDb(legacyLedger: ['0001']);
+      m('0001_one.sql', 'create table one (id integer);');
+      m('0002_two.sql', 'create table two (id integer);');
 
-        final result = await applyMigrations(db, directory: dir.path);
+      final result = await applyMigrations(db, directory: dir.path);
 
-        expect(result.applied, ['0002']);
-        expect(result.alreadyApplied, ['0001']);
-        // The column was added in place.
-        expect(
-          db.committed,
-          contains('alter table _keta_migrations add column checksum text'),
-        );
-        // The pre-existing row keeps its NULL; the newly-applied one is hashed.
-        final byVersion = {
-          for (final r in db.ledger) r['version']: r['checksum'],
-        };
-        expect(byVersion['0001'], isNull);
-        expect(byVersion['0002'], matches(RegExp(r'^[0-9a-f]{16}$')));
-      },
-    );
+      expect(result.applied, ['0002']);
+      expect(result.alreadyApplied, ['0001']);
+      // The column was added in place.
+      expect(
+        db.committed,
+        contains('alter table _keta_migrations add column checksum text'),
+      );
+      // The pre-existing row keeps its NULL; the newly-applied one is hashed.
+      final byVersion = {
+        for (final r in db.ledger) r['version']: r['checksum'],
+      };
+      expect(byVersion['0001'], isNull);
+      expect(byVersion['0002'], matches(RegExp(r'^[0-9a-f]{16}$')));
+    });
 
     test('a connectivity failure during the ledger read surfaces itself, not '
         "the ALTER TABLE fallback's error", () async {

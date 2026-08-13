@@ -12,27 +12,21 @@ import 'package:mime/mime.dart';
 /// apply here — reception rides the deliberate `c.bodyStream()` escape, so this
 /// layer owns the limits. An oversized body or part raises [PayloadTooLarge]
 /// (413); a part-count flood raises [BadRequest] (400, see [maxParts]).
-class MultipartLimits {
-  const MultipartLimits({
-    this.maxTotalBytes = 8 * 1024 * 1024,
-    this.maxPartBytes = 1024 * 1024,
-    this.maxParts = 64,
-  });
-
+class const MultipartLimits({
   /// Cap on the whole request body, enforced while streaming. Bytes in parts
   /// the consumer skips still count here — they are drained through the same
   /// meter (see [parts]) — so an attacker cannot hide payload in unread parts.
-  final int maxTotalBytes;
+  final int maxTotalBytes = 8 * 1024 * 1024,
 
   /// Cap on a single part, enforced on every read path — [Part.bytes],
   /// [Part.text], AND the unbuffered [Part.stream] — as [PayloadTooLarge].
-  final int maxPartBytes;
+  final int maxPartBytes = 1024 * 1024,
 
   /// Cap on the number of parts, a flood-DoS guard. A part-count flood is a
   /// malformed/abusive request rather than an oversized payload, so exceeding
   /// this raises [BadRequest] (400), not [PayloadTooLarge] (413).
-  final int maxParts;
-}
+  final int maxParts = 64,
+});
 
 /// One part of a multipart body. The [stream] is the deliberate unbuffered path
 /// (persist a large upload without holding it in memory); [bytes]/[text] are the
@@ -56,11 +50,7 @@ class MultipartLimits {
 /// as an error event, followed by done. Either way, consumption (in order,
 /// out of order, or skipped outright) can neither deadlock nor smuggle
 /// uncounted bytes.
-class Part {
-  Part._(this._raw, this._maxBytes);
-  final _RawPart _raw;
-  final int _maxBytes;
-
+class Part._(final _RawPart _raw, final int _maxBytes) {
   /// Whether the body has been claimed — requested via [stream]/[bytes]/[text],
   /// or already drained by [parts]. Guards against a second request; does NOT
   /// by itself mean the body was actually consumed (see [_listened]).
@@ -257,11 +247,7 @@ Stream<Part> parts<E>(
 /// One part as it leaves the parser: the headers it carried, and a body stream
 /// that a fatal parse failure can terminate (which the parser's own per-part
 /// stream cannot — see [_GuardedMultipart]).
-class _RawPart {
-  _RawPart(this.headers, this.body);
-  final Map<String, String> headers;
-  final Stream<List<int>> body;
-}
+class _RawPart(final Map<String, String> headers, final Stream<List<int>> body);
 
 /// Runs package:mime's multipart parser with its failures contained.
 ///
@@ -295,12 +281,12 @@ class _RawPart {
 /// wired in as a failure like any other. This is the cooperative-cancellation
 /// contract, honoured on the framework's side of the seam rather than left to
 /// every upload handler to remember.
-class _GuardedMultipart {
-  _GuardedMultipart(
-    Stream<List<int>> source,
-    String boundary,
-    Future<void> aborted,
-  ) {
+class _GuardedMultipart(
+  Stream<List<int>> source,
+  String boundary,
+  Future<void> aborted,
+) {
+  this {
     _out = StreamController<_RawPart>(
       onListen: () => _start(source, boundary),
       onPause: () => _sub?.pause(),

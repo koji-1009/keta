@@ -39,11 +39,8 @@ List<Diagnostic> queryDiagnosticsUnit(
 
 const _accessors = {'query', 'tryQuery', 'queryAll'};
 
-class _QueryVisitor extends RecursiveAstVisitor<void> {
-  _QueryVisitor(this.file, this.diagnostics);
-  final String file;
-  final List<Diagnostic> diagnostics;
-
+class _QueryVisitor(final String file, final List<Diagnostic> diagnostics)
+    extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (httpMethods.contains(node.methodName.name) && node.target != null) {
@@ -173,10 +170,9 @@ Expression? _namedArg(ArgumentList args, String name) {
   return null;
 }
 
-class _QueryAccessCollector extends RecursiveAstVisitor<void> {
-  _QueryAccessCollector(this.accesses);
-  final List<(String, String, SimpleStringLiteral)> accesses;
-
+class _QueryAccessCollector(
+  final List<(String, String, SimpleStringLiteral)> accesses,
+) extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     final args = node.argumentList.arguments;

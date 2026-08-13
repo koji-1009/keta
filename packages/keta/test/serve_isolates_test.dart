@@ -12,11 +12,7 @@ import 'dart:isolate';
 import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 
-class IsoEnv implements HasLog, Disposable {
-  IsoEnv(this.log);
-  @override
-  final Log log;
-
+class IsoEnv(@override final Log log) implements HasLog, Disposable {
   @override
   Future<void> close() async {}
 }
@@ -67,29 +63,26 @@ void main() {
     },
   );
 
-  test(
-    'a failed worker spawn tears down worker 0 (no leaked socket/env)',
-    () async {
-      const port = 8096;
-      // Capturing a ReceivePort makes this boot non-sendable, so worker 0 boots
-      // on this isolate but spawning worker 1 fails.
-      final trap = ReceivePort();
-      Future<IsoEnv> unsendableBoot() async {
-        trap.sendPort; // captured -> closure is not sendable across isolates
-        return IsoEnv(StdoutLog(flushInterval: Duration.zero));
-      }
+  test('a failed worker spawn tears down worker 0 (no leaked socket/env)', () async {
+    const port = 8096;
+    // Capturing a ReceivePort makes this boot non-sendable, so worker 0 boots
+    // on this isolate but spawning worker 1 fails.
+    final trap = ReceivePort();
+    Future<IsoEnv> unsendableBoot() async {
+      trap.sendPort; // captured -> closure is not sendable across isolates
+      return IsoEnv(StdoutLog(flushInterval: Duration.zero));
+    }
 
-      await expectLater(
-        buildIsoApp().serve(unsendableBoot, isolates: 2, port: port),
-        throwsA(isA<StateError>()),
-      );
-      trap.close();
+    await expectLater(
+      buildIsoApp().serve(unsendableBoot, isolates: 2, port: port),
+      throwsA(isA<StateError>()),
+    );
+    trap.close();
 
-      // Worker 0's listener must have been torn down: the port is bindable again.
-      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-      await probe.close();
-    },
-  );
+    // Worker 0's listener must have been torn down: the port is bindable again.
+    final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+    await probe.close();
+  });
 
   group('transportFactory', () {
     test('a configured transport reaches every worker', () async {

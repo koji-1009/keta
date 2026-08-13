@@ -16,21 +16,19 @@ import 'jwks_source.dart';
 /// call, for the life of this object. [resolve] never throws [JwksUnavailable]
 /// (there is nothing to be unavailable); a header with no matching key is a
 /// [JwtUnknownKey].
-final class StaticJwks implements JwksSource {
+final class StaticJwks(final JwkSet _set) implements JwksSource {
   /// Wraps an already-parsed [JwkSet].
-  StaticJwks(this._set);
+  this;
 
   /// Builds from a decoded-JSON JWKS document (`{"keys": [...]}`). Throws
   /// [JwksMalformed] if the document shape is wrong; unusable individual keys
   /// are skipped (see [JwkSet]).
-  factory StaticJwks.fromJson(Map<String, Object?> json) =>
+  factory fromJson(Map<String, Object?> json) =>
       StaticJwks(JwkSet.fromJson(json));
 
   /// Builds from a JWKS JSON string. Throws [JwksMalformed] on a malformed
   /// document.
-  factory StaticJwks.parse(String text) => StaticJwks(JwkSet.parse(text));
-
-  final JwkSet _set;
+  factory parse(String text) => StaticJwks(JwkSet.parse(text));
 
   /// The parsed key set, exposed so a caller can inspect which entries were
   /// [JwkSet.skipped].

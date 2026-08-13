@@ -117,9 +117,11 @@ import 'response.dart';
 /// the document (`description`, `title`, `example`, `examples`, `default`,
 /// `deprecated`, `readOnly`, `writeOnly`, …) are not validation keywords and
 /// pass through untouched.
-final class Schema {
-  const Schema(this.name, this.json, {this.deps = const []});
-
+final class const Schema(
+  final String name,
+  final Map<String, Object?> json, {
+  final List<Schema> deps = const [],
+}) {
   /// Builds the schema of a sealed type: an `oneOf` over [variants], keyed by
   /// an explicit `discriminator` mapping from wire tag to variant.
   ///
@@ -142,7 +144,7 @@ final class Schema {
   /// Unlike a hand-written `const Schema(...)`, the result is not `const` — it
   /// composes [variants] into new maps — so a `RouteDoc` embedding it cannot be
   /// `const` either, exactly as with [listSchema].
-  factory Schema.sealed(
+  factory sealed(
     String name, {
     required String discriminator,
     required Map<String, Schema> variants,
@@ -198,10 +200,6 @@ final class Schema {
       'discriminator': {'propertyName': discriminator, 'mapping': mapping},
     }, deps: deps);
   }
-
-  final String name;
-  final Map<String, Object?> json;
-  final List<Schema> deps;
 
   /// Validates [value] against this schema, returning a violation message per
   /// problem (each carrying a JSON path). An empty list means valid.
@@ -381,18 +379,16 @@ Schema listSchema(Schema itemSchema) => Schema(
 /// is byte-identical to the old concatenation: [root] renders `$`, [key]
 /// prepends `.` to its segment, [index] wraps it in `[...]`, so a chain
 /// stringifies to exactly the `$.a.b[0]` the old code spelled out.
-final class _Path {
-  const _Path._(this.parent, this.segment);
-
-  /// The document root, `$`.
-  static const _Path root = _Path._(null, r'$');
-
-  final _Path? parent;
+final class const _Path._(
+  final _Path? parent,
 
   /// This node's own text: `$` at the root, `.key` for a property step, `[i]`
   /// for an array-index step. The delimiter lives in the segment so [toString]
   /// is a plain parent-then-self concatenation.
-  final String segment;
+  final String segment,
+) {
+  /// The document root, `$`.
+  static const _Path root = _Path._(null, r'$');
 
   /// A property step: `path.key('city')` renders as `<path>.city`.
   _Path key(String name) => _Path._(this, '.$name');

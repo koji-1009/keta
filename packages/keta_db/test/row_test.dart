@@ -135,12 +135,7 @@ void main() {
   });
 }
 
-class _Caps implements Db {
-  _Caps(this.capabilities);
-
-  @override
-  final DbCapabilities capabilities;
-
+class _Caps(@override final DbCapabilities capabilities) implements Db {
   @override
   DbConn get reader => throw UnimplementedError();
 

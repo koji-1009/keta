@@ -7,11 +7,10 @@ import 'schema.dart';
 /// [Schema]). Referenced from [RouteDoc.security]; the walker collects it
 /// transitively into `components/securitySchemes` — the projection travels as
 /// data, never inferred from middleware.
-final class SecurityScheme {
-  const SecurityScheme(this.name, this.json);
-  final String name;
-  final Map<String, Object?> json;
-}
+final class const SecurityScheme(
+  final String name,
+  final Map<String, Object?> json,
+);
 
 /// HTTP bearer authentication (`Authorization: Bearer <token>`).
 const bearer = SecurityScheme('bearer', {'type': 'http', 'scheme': 'bearer'});
@@ -31,19 +30,9 @@ const apiKey = SecurityScheme('apiKey', {
 /// emitter used to fabricate a 200 whenever nothing was declared, and a guess is
 /// right only by luck: `POST /users` answers 201 and `DELETE /users/:id`
 /// answers 204, and both were documented as 200 with nothing to say so.
-final class Success {
-  const Success({
-    this.status = 200,
-    this.schema,
-    this.contentType = 'application/json',
-  }) : assert(status >= 200 && status < 400, 'a success is a 2xx or a 3xx'),
-       assert(
-         schema == null || (status != 204 && status != 304),
-         'a 204 or 304 has no body — schema must be null',
-       );
-
+final class const Success({
   /// The status this route answers with — 201 for a create, 204 for a delete.
-  final int status;
+  final int status = 200,
 
   /// The body's schema, or null when there is no body to document: a 204, or a
   /// `text/plain` liveness probe. Saying nothing is not a lie; a JSON schema
@@ -55,11 +44,18 @@ final class Success {
   /// carries no body at all. The constructor's `assert` catches it in debug
   /// builds; [OpenApi.fromRoutes] repeats the check as a hard error (asserts
   /// are off in release builds) so the lie can never reach a shipped document.
-  final Schema? schema;
+  final Schema? schema,
 
   /// The media type of [schema], projected as-is. Mirrors
   /// [RouteDoc.requestBodyType].
-  final String contentType;
+  final String contentType = 'application/json',
+}) {
+  this
+    : assert(status >= 200 && status < 400, 'a success is a 2xx or a 3xx'),
+      assert(
+        schema == null || (status != 204 && status != 304),
+        'a 204 or 304 has no body — schema must be null',
+      );
 }
 
 /// What an upgrade route answers with: 101 Switching Protocols, then another
@@ -74,20 +70,15 @@ final class Success {
 /// WebSocket session is not an HTTP response body), so the shadow documents the
 /// switch itself: a `101` response entry, plus the negotiated [subprotocol] when
 /// the route pins one.
-final class SwitchingProtocols {
-  const SwitchingProtocols({
-    this.subprotocol,
-    this.description = 'Switching Protocols',
-  });
-
+final class const SwitchingProtocols({
   /// The WebSocket subprotocol this endpoint negotiates, or null when it pins
   /// none. Projected onto the `101` entry's `Sec-WebSocket-Protocol` header so
   /// the contract names what the connection will speak.
-  final String? subprotocol;
+  final String? subprotocol,
 
   /// The human-readable description of the `101` response.
-  final String description;
-}
+  final String description = 'Switching Protocols',
+});
 
 /// A failure response that carries a non-JSON body. Mirrors [Success] on the
 /// error side: a [Success] declares its `contentType`, but a bare [Schema] in
@@ -102,22 +93,20 @@ final class SwitchingProtocols {
 /// naming the route — the same fail-fast posture the range and 2xx checks take,
 /// rather than a compile-time `Map<int, Schema | Failure>` the language cannot
 /// express.
-final class Failure {
-  const Failure(this.schema, {this.contentType = 'application/json'});
-
+final class const Failure(
   /// The error body's schema.
-  final Schema schema;
+  final Schema schema, {
 
   /// The media type of [schema], projected as-is onto the response's
   /// `content`. Mirrors [Success.contentType].
-  final String contentType;
-}
+  final String contentType = 'application/json',
+});
 
 /// Per-route documentation, passed to a route as its typed `doc`: the single
 /// declaration `enforceSecurity` reads at runtime and keta_openapi walks when
 /// emitting the OpenAPI shadow.
 class RouteDoc {
-  const RouteDoc({
+  const new({
     required Success this.success,
     this.requestBody,
     this.requestBodyType = 'application/json',
@@ -137,7 +126,7 @@ class RouteDoc {
   /// 401), and [query]. Kept a distinct constructor rather than a nullable
   /// [success] so the ordinary `RouteDoc(success: ...)` stays non-null and every
   /// existing caller is untouched.
-  const RouteDoc.upgrade({
+  const new upgrade({
     required SwitchingProtocols this.upgrade,
     this.requestBody,
     this.requestBodyType = 'application/json',
@@ -231,9 +220,8 @@ class RouteDoc {
 /// A query-parameter declaration. No new vocabulary — a [Capture] is reused for
 /// its `parse` (unused here) and its `schema` fragment, which projects onto the
 /// OpenAPI `in: query` parameter as-is.
-final class QueryParam {
-  const QueryParam(this.name, this.capture, {this.required = false});
-  final String name;
-  final Capture<Object?> capture;
-  final bool required;
-}
+final class const QueryParam(
+  final String name,
+  final Capture<Object?> capture, {
+  final bool required = false,
+});

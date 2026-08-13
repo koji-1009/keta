@@ -24,20 +24,17 @@ import 'package:keta_oidc/keta_oidc.dart';
 /// with the verifier itself. That is why, unlike
 /// `../register`'s or `../auth`'s `Env`, this one implements no `Disposable` —
 /// there is nothing here that outlives a request and needs an explicit close.
-class Env implements HasLog {
-  Env(this.log, this.jwks, this.validator);
-
-  @override
-  final Log log;
+class Env(
+  @override final Log log,
 
   /// The key source `oidc()` resolves a token's `kid` against.
-  final JwksSource jwks;
+  final JwksSource jwks,
 
   /// The signature/claims policy `oidc()` enforces — issuer, audience,
   /// algorithm allowlist, and the `BoringSslVerifier` (or, in tests, a
   /// [JwtValidator] over the same verifier against test keys).
-  final JwtValidator validator;
-
+  final JwtValidator validator,
+) implements HasLog {
   /// The tiny domain state `/api/reports` demonstrates: report names visible
   /// to any caller holding the `reports:read` scope. `requireScopes()` (see
   /// lib/app.dart) is the whole access-control story here — by the time a

@@ -11,12 +11,10 @@ import 'package:keta_oidc/keta_oidc.dart';
 /// A [SignatureVerifier] that records every call and returns a configured
 /// result — no real crypto. The recorded [signingInput] lets a test assert that
 /// the validator handed the verifier the exact bytes it was supposed to.
-class StubVerifier implements SignatureVerifier {
-  StubVerifier({this.result = true});
-
+class StubVerifier({
   /// The value every [verify] call returns.
-  bool result;
-
+  var bool result = true,
+}) implements SignatureVerifier {
   /// Every call, in order.
   final List<VerifyCall> calls = [];
 
@@ -40,19 +38,12 @@ class StubVerifier implements SignatureVerifier {
 }
 
 /// One recorded call to [StubVerifier.verify].
-class VerifyCall {
-  VerifyCall({
-    required this.key,
-    required this.algorithm,
-    required this.signingInput,
-    required this.signature,
-  });
-
-  final Jwk key;
-  final JwsAlgorithm algorithm;
-  final Uint8List signingInput;
-  final Uint8List signature;
-}
+class VerifyCall({
+  required final Jwk key,
+  required final JwsAlgorithm algorithm,
+  required final Uint8List signingInput,
+  required final Uint8List signature,
+});
 
 /// Encodes [bytes] as unpadded base64url — the JOSE segment encoding.
 String b64u(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');

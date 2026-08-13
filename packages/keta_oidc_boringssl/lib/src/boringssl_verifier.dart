@@ -48,7 +48,7 @@ final class BoringSslVerifier implements SignatureVerifier {
   /// meant to be shared (e.g. held by the app's `Env`); the caches then span the
   /// life of that instance, exactly matching the lifetime of the [Jwk] instances
   /// the JWKS cache reuses.
-  BoringSslVerifier();
+  new();
 
   final Expando<RsaPublicKey> _rsaKeys = Expando<RsaPublicKey>('keta_oidc.rsa');
   final Expando<EcPublicKey> _ecKeys = Expando<EcPublicKey>('keta_oidc.ec');

@@ -6,12 +6,12 @@ import 'dart:typed_data';
 
 /// One servable representation: its bytes, its media type, and the validator
 /// that identifies this version of it.
-final class Asset {
-  Asset({required this.bytes, required this.contentType, String? etag})
-    : etag = etag ?? fnv1a64Hex(bytes);
-
-  final Uint8List bytes;
-  final String contentType;
+final class Asset({
+  required final Uint8List bytes,
+  required final String contentType,
+  String? etag,
+}) {
+  this : etag = etag ?? fnv1a64Hex(bytes);
 
   /// The opaque entity-tag value, unquoted. Defaults to FNV-1a 64 over the
   /// bytes — a cache validator needs a fast fingerprint, not collision
@@ -48,20 +48,17 @@ abstract interface class AssetSource {
 /// development server wants none of it), and baking one in here would take
 /// that decision away. [MemoryAssets] is the caching implementation, built by
 /// the application from whatever it wants resident.
-final class DirectoryAssets implements AssetSource {
-  DirectoryAssets(
-    this.root, {
-    this.indexFile = 'index.html',
-    Map<String, String>? contentTypes,
-  }) : contentTypes = contentTypes ?? defaultContentTypes;
-
+final class DirectoryAssets(
   /// The directory assets are read from. Resolved once, so a later `cd` cannot
   /// move the root out from under the traversal guard.
-  final Directory root;
+  final Directory root, {
 
   /// The file served for a path that names a directory (`''` → `index.html`).
   /// Null serves nothing for such a path.
-  final String? indexFile;
+  final String? indexFile = 'index.html',
+  Map<String, String>? contentTypes,
+}) implements AssetSource {
+  this : contentTypes = contentTypes ?? defaultContentTypes;
 
   /// Extension (without the dot, lower-case) to media type.
   final Map<String, String> contentTypes;
@@ -91,12 +88,14 @@ final class DirectoryAssets implements AssetSource {
 /// The implementation an application reaches for when the bytes are already
 /// in hand — embedded by a build step, produced at boot, or read once from
 /// disk at startup.
-final class MemoryAssets implements AssetSource {
-  MemoryAssets(this.assets, {this.indexFile = 'index.html'});
-
+final class MemoryAssets(
+  /// Path (no leading slash) to asset.
+  final Map<String, Asset> assets, {
+  final String? indexFile = 'index.html',
+}) implements AssetSource {
   /// Builds a source from path → bytes, deriving each media type from its
   /// extension.
-  factory MemoryAssets.ofBytes(
+  factory ofBytes(
     Map<String, List<int>> files, {
     String? indexFile = 'index.html',
     Map<String, String>? contentTypes,
@@ -112,7 +111,7 @@ final class MemoryAssets implements AssetSource {
   }, indexFile: indexFile);
 
   /// Builds a source from path → text, encoded UTF-8.
-  factory MemoryAssets.ofText(
+  factory ofText(
     Map<String, String> files, {
     String? indexFile = 'index.html',
     Map<String, String>? contentTypes,
@@ -121,10 +120,6 @@ final class MemoryAssets implements AssetSource {
     indexFile: indexFile,
     contentTypes: contentTypes,
   );
-
-  /// Path (no leading slash) to asset.
-  final Map<String, Asset> assets;
-  final String? indexFile;
 
   @override
   Future<Asset?> resolve(String path) async {

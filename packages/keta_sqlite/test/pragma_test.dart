@@ -98,9 +98,10 @@ void main() {
         final db = SqliteDb.open('${dir.path}/app.db');
         addTearDown(db.close);
 
-        final mode = (await db.reader.query(
-          'PRAGMA journal_mode',
-        )).single.values.single;
+        final mode = (await db.reader.query('PRAGMA journal_mode'))
+            .single
+            .values
+            .single;
         // Whatever SQLite's file default is, it is not WAL unless asked for.
         expect(mode, isNot('wal'));
       },

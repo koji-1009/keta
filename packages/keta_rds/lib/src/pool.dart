@@ -20,15 +20,38 @@ import 'package:keta/keta.dart' show Unavailable;
 ///
 /// The pool owns nothing about the wire protocol: [_open] creates a resource
 /// and [_closeResource] disposes one, and everything in between is the caller's.
-class Pool<C> {
-  Pool(
-    this._open,
-    this._closeResource, {
-    this.maxConnections = 10,
-    this.acquireTimeout = const Duration(seconds: 30),
-    this.maxIdleTime = const Duration(minutes: 5),
-    this.validate,
-  }) {
+class Pool<C>(
+  final Future<C> Function() _open,
+  final Future<void> Function(C) _closeResource, {
+
+  /// The ceiling on live resources (idle plus checked out).
+  final int maxConnections = 10,
+
+  /// How long [acquire] waits for a free slot before giving up with a 503.
+  final Duration acquireTimeout = const Duration(seconds: 30),
+
+  /// How long a returned resource may sit idle before the reaper disposes it.
+  ///
+  /// A connection idle past a middlebox's own idle timeout — RDS Proxy, a NAT
+  /// gateway, an LB — is already dead on the wire; the middlebox tore it down
+  /// and the next `acquire` would otherwise pay one failed query to discover
+  /// that. Reaping ahead of that deadline keeps the idle pool warm-only, so a
+  /// caller is never handed a corpse. A non-positive duration disables the
+  /// reaper entirely (no periodic timer is ever armed). Default 5 minutes sits
+  /// under the common proxy/NAT idle timeouts (RDS Proxy's is minutes, many
+  /// NATs 350s) — but note the worst-case bound below is ~1.5x this value, not
+  /// this value itself.
+  final Duration maxIdleTime = const Duration(minutes: 5),
+
+  /// Predicate applied to an idle resource just before it is handed out: a
+  /// resource that fails it is disposed and skipped rather than returned to a
+  /// caller. Wired from the driver's own liveness check (a connection's
+  /// `isOpen`), it turns a connection the server or a proxy silently dropped
+  /// while it sat idle into a fresh open, instead of one failed query. Null
+  /// means "always valid" — the pool cannot second-guess an opaque resource.
+  final bool Function(C)? validate,
+}) {
+  this {
     if (maxConnections < 1) {
       throw ArgumentError.value(
         maxConnections,
@@ -67,36 +90,6 @@ class Pool<C> {
       );
     }
   }
-
-  final Future<C> Function() _open;
-  final Future<void> Function(C) _closeResource;
-
-  /// Predicate applied to an idle resource just before it is handed out: a
-  /// resource that fails it is disposed and skipped rather than returned to a
-  /// caller. Wired from the driver's own liveness check (a connection's
-  /// `isOpen`), it turns a connection the server or a proxy silently dropped
-  /// while it sat idle into a fresh open, instead of one failed query. Null
-  /// means "always valid" — the pool cannot second-guess an opaque resource.
-  final bool Function(C)? validate;
-
-  /// The ceiling on live resources (idle plus checked out).
-  final int maxConnections;
-
-  /// How long [acquire] waits for a free slot before giving up with a 503.
-  final Duration acquireTimeout;
-
-  /// How long a returned resource may sit idle before the reaper disposes it.
-  ///
-  /// A connection idle past a middlebox's own idle timeout — RDS Proxy, a NAT
-  /// gateway, an LB — is already dead on the wire; the middlebox tore it down
-  /// and the next `acquire` would otherwise pay one failed query to discover
-  /// that. Reaping ahead of that deadline keeps the idle pool warm-only, so a
-  /// caller is never handed a corpse. A non-positive duration disables the
-  /// reaper entirely (no periodic timer is ever armed). Default 5 minutes sits
-  /// under the common proxy/NAT idle timeouts (RDS Proxy's is minutes, many
-  /// NATs 350s) — but note the worst-case bound below is ~1.5x this value, not
-  /// this value itself.
-  final Duration maxIdleTime;
 
   final ListQueue<_Idle<C>> _idle = ListQueue<_Idle<C>>();
   // A doubly-linked queue rather than [ListQueue]: [_takePermit] keeps the
@@ -255,7 +248,7 @@ class Pool<C> {
   /// idle resource now, and completes once every checked-out resource has been
   /// returned (a checked-out call is never interrupted). Idempotent.
   Future<void> close() async {
-    if (_closed) return _drained?.future ?? Future<void>.value();
+    if (_closed) return await (_drained?.future ?? Future<void>.value());
     _closed = true;
     // Stop the reaper before anything can await: a periodic timer left armed
     // would keep the isolate alive past close(), and _syncReaper cancels it
@@ -274,7 +267,7 @@ class Pool<C> {
     if (_checkedOut == 0) return;
     // Wait for the in-flight checkouts to drain; each release() disposes its
     // resource (because _closed is set) and nudges this completer.
-    return (_drained = Completer<void>()).future;
+    return await (_drained = Completer<void>()).future;
   }
 
   Future<void> _takePermit() {
@@ -373,11 +366,7 @@ class Pool<C> {
 
 /// An idle resource paired with the instant it was returned, so the reaper can
 /// tell a warm resource from one that has outlived [Pool.maxIdleTime].
-class _Idle<C> {
-  _Idle(this.resource, this.returnedAt);
-  final C resource;
-  final DateTime returnedAt;
-}
+class _Idle<C>(final C resource, final DateTime returnedAt);
 
 /// A point-in-time snapshot of a [Pool]'s connection accounting.
 ///
@@ -390,31 +379,24 @@ class _Idle<C> {
 /// diagnostic log line — not as a live view, and not as a synchronization
 /// primitive. This type takes no position on what a readiness policy should
 /// do with these numbers; that judgment belongs to the application.
-class PoolStats {
-  const PoolStats({
-    required this.leased,
-    required this.idle,
-    required this.waiting,
-    required this.maxConnections,
-  });
-
+class const PoolStats({
   /// Resources currently checked out by a caller (in [Pool.acquire] and not
   /// yet [Pool.release]d).
-  final int leased;
+  required final int leased,
 
   /// Resources open and sitting idle — returned to the pool, validated (if
   /// [Pool.validate] is set) or not yet re-checked, and ready to be handed out
   /// again without opening a fresh one.
-  final int idle;
+  required final int idle,
 
   /// Callers currently parked in [Pool.acquire], waiting for a slot to free up
   /// because the pool already has [maxConnections] resources leased.
-  final int waiting;
+  required final int waiting,
 
   /// The configured ceiling on live resources ([leased] plus [idle]) — see
   /// [Pool.maxConnections].
-  final int maxConnections;
-
+  required final int maxConnections,
+}) {
   /// Resources currently open: [leased] plus [idle]. Never exceeds
   /// [maxConnections].
   int get open => leased + idle;

@@ -219,38 +219,35 @@ void main() {
       await server.shutdown(grace: const Duration(milliseconds: 200));
     });
 
-    test(
-      'shutdown with an open socket completes within grace + margin',
-      () async {
-        final app = App<Env>();
-        app.get(
-          '/ws',
-          (c) => Response.upgrade((channel) {
-            channel.messages.listen((_) {}); // idle, never closes on its own
-          }),
-        );
-        final server = await app.serve(boot, port: 8135);
+    test('shutdown with an open socket completes within grace + margin', () async {
+      final app = App<Env>();
+      app.get(
+        '/ws',
+        (c) => Response.upgrade((channel) {
+          channel.messages.listen((_) {}); // idle, never closes on its own
+        }),
+      );
+      final server = await app.serve(boot, port: 8135);
 
-        final ws = await WebSocket.connect('ws://127.0.0.1:8135/ws');
-        // The socket is idle and open. Shutdown must force it closed rather than
-        // wait on it forever.
-        final watch = Stopwatch()..start();
-        await server.shutdown(grace: const Duration(milliseconds: 500));
-        watch.stop();
-        expect(
-          watch.elapsed,
-          lessThan(const Duration(seconds: 3)),
-          reason: 'an open socket must not hang shutdown',
-        );
-        // The client observes the going-away close.
-        await ws.drain<void>().timeout(
-          const Duration(seconds: 2),
-          onTimeout: () {},
-        );
-        expect(ws.closeCode, isNotNull);
-        await ws.close();
-      },
-    );
+      final ws = await WebSocket.connect('ws://127.0.0.1:8135/ws');
+      // The socket is idle and open. Shutdown must force it closed rather than
+      // wait on it forever.
+      final watch = Stopwatch()..start();
+      await server.shutdown(grace: const Duration(milliseconds: 500));
+      watch.stop();
+      expect(
+        watch.elapsed,
+        lessThan(const Duration(seconds: 3)),
+        reason: 'an open socket must not hang shutdown',
+      );
+      // The client observes the going-away close.
+      await ws.drain<void>().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {},
+      );
+      expect(ws.closeCode, isNotNull);
+      await ws.close();
+    });
   });
 
   group('watch-only channel does not buffer without bound (item 1)', () {
@@ -444,28 +441,25 @@ void main() {
       },
     );
 
-    test(
-      'cors preflight is answered independently, untouched by upgrade',
-      () async {
-        // A preflight never reaches the handler, so there is no upgrade to carry;
-        // this pins that our change left the preflight branch (a fresh 204) alone.
-        final r = await runMw(
-          cors(allowOrigins: const ['*']),
-          testContext(
-            newEnv(),
-            method: 'OPTIONS',
-            headers: {
-              'origin': 'https://example.test',
-              'access-control-request-method': 'GET',
-            },
-          ),
-          // The next handler is never invoked on the preflight path.
-          upgradeResponse(),
-        );
-        expect(r.status, 204);
-        expect(r.upgrade, isNull);
-      },
-    );
+    test('cors preflight is answered independently, untouched by upgrade', () async {
+      // A preflight never reaches the handler, so there is no upgrade to carry;
+      // this pins that our change left the preflight branch (a fresh 204) alone.
+      final r = await runMw(
+        cors(allowOrigins: const ['*']),
+        testContext(
+          newEnv(),
+          method: 'OPTIONS',
+          headers: {
+            'origin': 'https://example.test',
+            'access-control-request-method': 'GET',
+          },
+        ),
+        // The next handler is never invoked on the preflight path.
+        upgradeResponse(),
+      );
+      expect(r.status, 204);
+      expect(r.upgrade, isNull);
+    });
 
     test('etag passes an upgrade through untouched (no tag, no 304)', () async {
       final r = await runMw(etag(), testContext(newEnv()), upgradeResponse());

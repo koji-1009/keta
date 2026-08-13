@@ -57,11 +57,8 @@ List<Diagnostic> keyDiagnosticsUnit(
 
 const _accessors = {'get', 'tryGet', 'set'};
 
-class _KeyVisitor extends RecursiveAstVisitor<void> {
-  _KeyVisitor(this.file, this.diagnostics);
-  final String file;
-  final List<Diagnostic> diagnostics;
-
+class _KeyVisitor(final String file, final List<Diagnostic> diagnostics)
+    extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (_accessors.contains(node.methodName.name) && node.target != null) {

@@ -3,11 +3,7 @@ import 'package:keta_bus/keta_bus.dart';
 
 /// This reference only needs a logger — no database — so Env implements just
 /// [HasLog]. Auth is orthogonal to persistence.
-class Env implements HasLog, Disposable {
-  Env(this.log);
-  @override
-  final Log log;
-
+class Env(@override final Log log) implements HasLog, Disposable {
   /// The cookie-session store: `sid -> role`. keta ships no session store by
   /// design (the same "keta ships no auth" rule that leaves the bearer token
   /// table to the app) — this in-memory `Map` is the app's own state, owned by

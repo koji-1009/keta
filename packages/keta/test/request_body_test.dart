@@ -13,39 +13,36 @@ import 'support/harness.dart';
 
 void main() {
   group('request body', () {
-    test(
-      'exceeding maxBodyBytes is a 413, the exact limit is allowed',
-      () async {
-        final under = testContext(
-          newEnv(),
-          method: 'POST',
-          rawBody: utf8.encode('12345678'),
-          maxBodyBytes: 8,
-        );
-        expect((await under.bodyBytes()).length, 8);
+    test('exceeding maxBodyBytes is a 413, the exact limit is allowed', () async {
+      final under = testContext(
+        newEnv(),
+        method: 'POST',
+        rawBody: utf8.encode('12345678'),
+        maxBodyBytes: 8,
+      );
+      expect((await under.bodyBytes()).length, 8);
 
-        final over = testContext(
-          newEnv(),
-          method: 'POST',
-          rawBody: utf8.encode('123456789'),
-          maxBodyBytes: 8,
-        );
-        await expectLater(
-          over.bodyBytes(),
-          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-        );
-        // A retry must re-throw the 413, not an opaque "stream already listened"
-        // StateError (which would escape as a 500).
-        await expectLater(
-          over.bodyBytes(),
-          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-        );
-        await expectLater(
-          over.body(),
-          throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
-        );
-      },
-    );
+      final over = testContext(
+        newEnv(),
+        method: 'POST',
+        rawBody: utf8.encode('123456789'),
+        maxBodyBytes: 8,
+      );
+      await expectLater(
+        over.bodyBytes(),
+        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+      );
+      // A retry must re-throw the 413, not an opaque "stream already listened"
+      // StateError (which would escape as a 500).
+      await expectLater(
+        over.bodyBytes(),
+        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+      );
+      await expectLater(
+        over.body(),
+        throwsA(isA<KetaException>().having((e) => e.status, 'status', 413)),
+      );
+    });
 
     test('invalid JSON is a 400, and a retry still throws', () async {
       final c = testContext(newEnv(), rawBody: utf8.encode('{not json'));

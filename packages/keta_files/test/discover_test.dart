@@ -191,10 +191,8 @@ void main() {
 
     test('a scope under a capture directory scopes the capture subtree', () {
       final found = discover(
-        tree({
-          'users/_id/_middleware.dart': _any,
-          'users/_id/posts.dart': _any,
-        }).path,
+        tree({'users/_id/_middleware.dart': _any, 'users/_id/posts.dart': _any})
+            .path,
       );
       final posts = found.routes.single;
       expect(posts.url, '/users/:id/posts');
@@ -214,11 +212,9 @@ void main() {
         }).path,
       );
       for (final r in found.routes) {
-        expect(
-          r.middleware.map((m) => m.url),
-          ['/'],
-          reason: '${r.url} falls under the root scope',
-        );
+        expect(r.middleware.map((m) => m.url), [
+          '/',
+        ], reason: '${r.url} falls under the root scope');
       }
     });
 

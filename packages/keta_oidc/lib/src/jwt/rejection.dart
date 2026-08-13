@@ -32,13 +32,11 @@ library;
 /// be parsed into a key the backend understands, a misuse of the API) surface as
 /// [StateError] / [ArgumentError], following keta's split of "input violation →
 /// typed rejection, author defect → thrown error".
-sealed class JwtRejection implements Exception {
-  const JwtRejection(this.message);
-
+sealed class const JwtRejection(
   /// A human-readable explanation, for logs and `error_description`. Never parse
   /// it — branch on the subtype instead.
-  final String message;
-
+  final String message,
+) implements Exception {
   @override
   String toString() => '$runtimeType: $message';
 }
@@ -51,9 +49,7 @@ sealed class JwtRejection implements Exception {
 /// never accepts (`none`, any `HS*`, any `PS*`, or an unrecognised value). Such
 /// an `alg` never resolves to a [JwsAlgorithm], so a token carrying it is
 /// rejected here, before any key is consulted.
-final class JwtMalformed extends JwtRejection {
-  const JwtMalformed(super.message);
-}
+final class const JwtMalformed(super.message) extends JwtRejection;
 
 /// The token's `alg` is a genuine, supported algorithm, but not one permitted
 /// for this validation: it is absent from the caller's allowlist, or it
@@ -61,17 +57,13 @@ final class JwtMalformed extends JwtRejection {
 /// wrong key type for the algorithm, or — for EC — is on the wrong curve).
 /// Distinct from [JwtMalformed], which covers algorithms this server never
 /// supports at all; this is a *policy* rejection of a supported algorithm.
-final class JwtAlgorithmNotAllowed extends JwtRejection {
-  const JwtAlgorithmNotAllowed(super.message);
-}
+final class const JwtAlgorithmNotAllowed(super.message) extends JwtRejection;
 
 /// The signature did not verify against the resolved key. The token is
 /// structurally sound and the algorithm is permitted, but the cryptographic
 /// check failed — the token was forged, tampered with, or signed by a key this
 /// server does not hold.
-final class JwtBadSignature extends JwtRejection {
-  const JwtBadSignature(super.message);
-}
+final class const JwtBadSignature(super.message) extends JwtRejection;
 
 /// The token carries no `exp` (expiration) claim at all.
 ///
@@ -87,33 +79,23 @@ final class JwtBadSignature extends JwtRejection {
 /// ruling, not a speculative option added now. It is a distinct sealed reason
 /// (not folded into [JwtExpired]) so a middleware's exhaustive `switch` is
 /// forced to map "no expiry" rather than silently defaulting it.
-final class JwtExpirationRequired extends JwtRejection {
-  const JwtExpirationRequired(super.message);
-}
+final class const JwtExpirationRequired(super.message) extends JwtRejection;
 
 /// The token is past its `exp` (expiration), accounting for the configured
 /// leeway.
-final class JwtExpired extends JwtRejection {
-  const JwtExpired(super.message);
-}
+final class const JwtExpired(super.message) extends JwtRejection;
 
 /// The token's `nbf` (not-before) is still in the future, accounting for the
 /// configured leeway — it is not yet valid.
-final class JwtNotYetValid extends JwtRejection {
-  const JwtNotYetValid(super.message);
-}
+final class const JwtNotYetValid(super.message) extends JwtRejection;
 
 /// The token's `iss` does not exactly equal the issuer this validation expects
 /// (or the token carries no `iss`).
-final class JwtIssuerMismatch extends JwtRejection {
-  const JwtIssuerMismatch(super.message);
-}
+final class const JwtIssuerMismatch(super.message) extends JwtRejection;
 
 /// The token's `aud` does not include the audience this validation expects (or
 /// the token carries no `aud`).
-final class JwtAudienceMismatch extends JwtRejection {
-  const JwtAudienceMismatch(super.message);
-}
+final class const JwtAudienceMismatch(super.message) extends JwtRejection;
 
 /// No key could be resolved for the token — the header names a `kid` the key
 /// source does not hold, or names none and the source is ambiguous.
@@ -122,6 +104,4 @@ final class JwtAudienceMismatch extends JwtRejection {
 /// this one's; [JwtUnknownKey] is defined here so the failure model is complete
 /// and enumerable now, and so the JWKS wave raises a reason that already lives
 /// in this sealed set rather than inventing its own.
-final class JwtUnknownKey extends JwtRejection {
-  const JwtUnknownKey(super.message);
-}
+final class const JwtUnknownKey(super.message) extends JwtRejection;

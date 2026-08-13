@@ -18,12 +18,11 @@ import 'response.dart';
 ///     (s) => Role.values.asNameMap()[s] ?? (throw BadRequest('unknown role: $s')),
 ///     schema: {'type': 'string', 'enum': ['admin', 'member']});
 /// ```
-class Capture<T> {
-  const Capture(this.parse, {this.name, required this.schema});
-  final T Function(String) parse;
-  final String? name;
-  final Map<String, Object?> schema;
-
+class const Capture<T>(
+  final T Function(String) parse, {
+  final String? name,
+  required final Map<String, Object?> schema,
+}) {
   /// A named copy, for OpenAPI parameter naming: `integer('id')`. Calling the
   /// capture is the one naming form — there is no separate `named()` helper.
   Capture<T> call(String name) => Capture<T>(parse, name: name, schema: schema);
@@ -52,31 +51,23 @@ const Capture<bool> boolean = Capture(_toBool, schema: {'type': 'boolean'});
 
 /// One path segment: a fixed literal or a capture.
 sealed class Segment {
-  const Segment();
+  const new();
 }
 
-class LiteralSegment extends Segment {
-  const LiteralSegment(this.value);
-  final String value;
-}
+class const LiteralSegment(final String value) extends Segment;
 
-class CaptureSegment extends Segment {
-  const CaptureSegment(this.capture);
-  final Capture<Object?> capture;
-}
+class const CaptureSegment(final Capture<Object?> capture) extends Segment;
 
 /// A path whose type parameter `T` is the tuple of its captures. Built by
 /// chaining [segments] and `capture` from [root]; only [root] is `const`.
-class Path<T> {
-  const Path._(this.parts, this.buildTuple);
-
+class const Path<T>._(
   /// The ordered path parts (literals and captures).
-  final List<Segment> parts;
+  final List<Segment> parts,
 
   /// Rebuilds the tuple `T` from the ordered, already-parsed capture values.
   /// Arity-specific; supplied by the `capture` extensions.
-  final T Function(List<Object?> parsed) buildTuple;
-
+  final T Function(List<Object?> parsed) buildTuple,
+) {
   /// Appends one or more literal segments from a `/`-separated [run]
   /// (`'api/v1/users'`). Arity-preserving, so one call may swallow any number of
   /// segments without touching the type machinery. An empty part (a leading,

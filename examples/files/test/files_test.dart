@@ -92,10 +92,9 @@ void main() {
       // Forgetting is otherwise invisible: the file compiles, the suite passes,
       // and the URL is simply not there.
       final files = discoverRouteFiles('lib/routes');
-      final withoutOne = File('lib/routes.dart').readAsStringSync().replaceAll(
-        "import 'routes/whoami.dart' as \$whoami;",
-        '',
-      );
+      final withoutOne = File('lib/routes.dart')
+          .readAsStringSync()
+          .replaceAll("import 'routes/whoami.dart' as \$whoami;", '');
       expect(unregistered(withoutOne, files).map((f) => f.url), ['/whoami']);
     });
   });
@@ -196,22 +195,19 @@ void main() {
   });
 
   group('the security declarations are enforced, not decorative', () {
-    test(
-      'directory-scoped middleware guards /admin, not just the security gate',
-      () async {
-        // routes/admin/_middleware.dart's ScopedMiddleware<Env>([requireAdmin()])
-        // now does what routes/admin/ping.dart used to inline: 401 says "who are
-        // you" (the security gate, enforceSecurity), 403 says "not you" (the
-        // admin-scope middleware) — the same split ../register makes with
-        // app.group('/admin').use(requireAdmin()).
-        final env = await bootTestEnv();
-        addTearDown(env.close);
-        final client = TestClient(buildApp(), env);
-        expect((await client.get('/admin/ping', headers: admin)).status, 200);
-        expect((await client.get('/admin/ping', headers: user)).status, 403);
-        expect((await client.get('/admin/ping')).status, 401);
-      },
-    );
+    test('directory-scoped middleware guards /admin, not just the security gate', () async {
+      // routes/admin/_middleware.dart's ScopedMiddleware<Env>([requireAdmin()])
+      // now does what routes/admin/ping.dart used to inline: 401 says "who are
+      // you" (the security gate, enforceSecurity), 403 says "not you" (the
+      // admin-scope middleware) — the same split ../register makes with
+      // app.group('/admin').use(requireAdmin()).
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+      expect((await client.get('/admin/ping', headers: admin)).status, 200);
+      expect((await client.get('/admin/ping', headers: user)).status, 403);
+      expect((await client.get('/admin/ping')).status, 401);
+    });
 
     test('the security declarations reach the file-routed app too', () async {
       final env = await bootTestEnv();
@@ -325,55 +321,51 @@ void main() {
       );
     });
 
-    test(
-      'pagination clamps bounds, pages with offset, and keeps ?role working',
-      () async {
-        final env = await bootTestEnv();
-        addTearDown(env.close);
-        final client = TestClient(buildApp(), env);
-        // ids 1..3, ordered by id; roles let ?role be exercised alongside paging.
-        for (final r in [('1', 'admin'), ('2', 'member'), ('3', 'member')]) {
-          await client.post(
-            '/users',
-            headers: admin,
-            json: {
-              'id': r.$1,
-              'name': 'U${r.$1}',
-              'role': r.$2,
-              'tags': <String>[],
-            },
-          );
-        }
-        Future<List<String>> page(String q) async {
-          final body =
-              (await client.get('/users$q', headers: admin)).json()! as Map;
-          return [
-            for (final u in body['items'] as List) (u as Map)['id'] as String,
-          ];
-        }
+    test('pagination clamps bounds, pages with offset, and keeps ?role working', () async {
+      final env = await bootTestEnv();
+      addTearDown(env.close);
+      final client = TestClient(buildApp(), env);
+      // ids 1..3, ordered by id; roles let ?role be exercised alongside paging.
+      for (final r in [('1', 'admin'), ('2', 'member'), ('3', 'member')]) {
+        await client.post(
+          '/users',
+          headers: admin,
+          json: {
+            'id': r.$1,
+            'name': 'U${r.$1}',
+            'role': r.$2,
+            'tags': <String>[],
+          },
+        );
+      }
+      Future<List<String>> page(String q) async {
+        final body =
+            (await client.get('/users$q', headers: admin)).json()! as Map;
+        return [
+          for (final u in body['items'] as List) (u as Map)['id'] as String,
+        ];
+      }
 
-        final all = (await client.get('/users', headers: admin)).json()! as Map;
-        expect(all['total'], 3);
-        expect(await page(''), ['1', '2', '3']);
-        // Offset windows the page; total stays the full count.
-        expect(await page('?limit=2&offset=1'), ['2', '3']);
-        // Out of range → empty page, total intact (not a 400).
-        final over =
-            (await client.get('/users?offset=99', headers: admin)).json()!
-                as Map;
-        expect(over['items'], isEmpty);
-        expect(over['total'], 3);
-        // Clamped bounds don't error.
-        expect(await page('?limit=9999'), ['1', '2', '3']);
-        expect(await page('?offset=-5'), ['1', '2', '3']);
-        // ?role still filters, with its own total.
-        final members =
-            (await client.get('/users?role=member', headers: admin)).json()!
-                as Map;
-        expect(members['total'], 2);
-        expect(await page('?role=member'), ['2', '3']);
-      },
-    );
+      final all = (await client.get('/users', headers: admin)).json()! as Map;
+      expect(all['total'], 3);
+      expect(await page(''), ['1', '2', '3']);
+      // Offset windows the page; total stays the full count.
+      expect(await page('?limit=2&offset=1'), ['2', '3']);
+      // Out of range → empty page, total intact (not a 400).
+      final over =
+          (await client.get('/users?offset=99', headers: admin)).json()! as Map;
+      expect(over['items'], isEmpty);
+      expect(over['total'], 3);
+      // Clamped bounds don't error.
+      expect(await page('?limit=9999'), ['1', '2', '3']);
+      expect(await page('?offset=-5'), ['1', '2', '3']);
+      // ?role still filters, with its own total.
+      final members =
+          (await client.get('/users?role=member', headers: admin)).json()!
+              as Map;
+      expect(members['total'], 2);
+      expect(await page('?role=member'), ['2', '3']);
+    });
 
     test('a comma in a tag is a 400 naming the CSV constraint', () async {
       final env = await bootTestEnv();
@@ -396,23 +388,20 @@ void main() {
     });
   });
 
-  test(
-    'the per-buildApp metrics registry is scraped through the store',
-    () async {
-      // routes/metrics.dart reads the registry provideMetrics put in the request
-      // store — the buildApp-scoped one otel records into. A broken wiring would
-      // be a 500 here (c.get on an absent key), so a green scrape proves the
-      // per-buildApp scoping actually reaches the file-routed handler.
-      final env = await bootTestEnv();
-      addTearDown(env.close);
-      final client = TestClient(buildApp(), env);
-      await client.get('/health'); // record a request into the registry
-      final scrape = await client.get(
-        '/metrics',
-        headers: const {'x-api-key': 'k-metrics'},
-      );
-      expect(scrape.status, 200);
-      expect(scrape.text(), contains('keta_requests_total'));
-    },
-  );
+  test('the per-buildApp metrics registry is scraped through the store', () async {
+    // routes/metrics.dart reads the registry provideMetrics put in the request
+    // store — the buildApp-scoped one otel records into. A broken wiring would
+    // be a 500 here (c.get on an absent key), so a green scrape proves the
+    // per-buildApp scoping actually reaches the file-routed handler.
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+    await client.get('/health'); // record a request into the registry
+    final scrape = await client.get(
+      '/metrics',
+      headers: const {'x-api-key': 'k-metrics'},
+    );
+    expect(scrape.status, 200);
+    expect(scrape.text(), contains('keta_requests_total'));
+  });
 }

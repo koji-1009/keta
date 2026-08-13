@@ -1,6 +1,6 @@
 # keta (桁)
 
-keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK `^3.12`): routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values, and the user code that results reads as plain Dart. The name keta (桁) is the load-bearing girder in traditional Japanese joinery — a member that carries load through its shape, without nails — and is also the Japanese word for "digit".
+keta is a reflection-free, codegen-free HTTP server framework for Dart (SDK `^3.13`): routing, middleware, transactions, lifecycle, and OpenAPI output are carried by a constructor graph and routes-as-values, and the user code that results reads as plain Dart. The name keta (桁) is the load-bearing girder in traditional Japanese joinery — a member that carries load through its shape, without nails — and is also the Japanese word for "digit".
 
 ## The thesis
 

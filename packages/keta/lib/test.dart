@@ -79,11 +79,10 @@ Context<E> testContext<E>(
 
 /// A socket-free client that runs the full pipeline — radix compilation,
 /// matching, middleware, and handlers — against an in-memory request.
-class TestClient<E> {
+class TestClient<E>(App<E> app, E env, {int maxBodyBytes = 1 << 20}) {
   /// [maxBodyBytes] is the same ceiling `serve()` takes, so the 413 boundary is
   /// reachable here rather than only through a real server.
-  TestClient(App<E> app, E env, {int maxBodyBytes = 1 << 20})
-    : _router = app.compile(env, maxBodyBytes: maxBodyBytes);
+  this : _router = app.compile(env, maxBodyBytes: maxBodyBytes);
   final Router<E> _router;
 
   Future<TestResponse> get(String path, {Map<String, String>? headers}) =>
@@ -161,9 +160,8 @@ class TestClient<E> {
     // it closes the link so the client's `done` still completes — an in-process
     // mirror of the transport closing a socket whose handler blew up.
     unawaited(
-      Future.sync(
-        () => realizeUpgrade(upgrade, _ServerChannel(link)),
-      ).then((_) {}, onError: (Object _) => link._close()),
+      Future.sync(() => realizeUpgrade(upgrade, _ServerChannel(link)))
+          .then((_) {}, onError: (Object _) => link._close()),
     );
     return TestUpgrade._(TestSocket._(link), null);
   }
@@ -175,35 +173,28 @@ class TestClient<E> {
     List<int>? body,
     Map<String, String>? headers,
   ) async {
-    final request = _TestRequest(
-      method,
-      Uri.parse(path),
-      {
-        for (final e in (headers ?? const {}).entries)
-          e.key.toLowerCase(): [e.value],
-      },
-      body ?? (json == null ? const [] : utf8.encode(jsonEncode(json))),
-    );
+    final request = _TestRequest(method, Uri.parse(path), {
+      for (final e in (headers ?? const {}).entries)
+        e.key.toLowerCase(): [e.value],
+    }, body ?? (json == null ? const [] : utf8.encode(jsonEncode(json))));
     final response = await _router.dispatch(request);
-    return TestResponse._from(response);
+    return await TestResponse._from(response);
   }
 }
 
 /// The materialized result of a [TestClient] request.
-class TestResponse {
-  TestResponse._(this.status, this.headers, this.headerValues, this._body);
-  final int status;
+class TestResponse._(
+  final int status,
 
   /// Each header flattened to its first value, for assertion convenience.
-  final Map<String, String> headers;
+  final Map<String, String> headers,
 
   /// Every value of every header, in order. [headers] cannot express a response
   /// that legitimately repeats one — `set-cookie` above all — so an assertion
   /// about "both cookies were set" had no way to be written.
-  final Map<String, List<String>> headerValues;
-
-  final String _body;
-
+  final Map<String, List<String>> headerValues,
+  final String _body,
+) {
   static Future<TestResponse> _from(Response response) async {
     final body = response.body;
     final text = switch (body) {
@@ -256,13 +247,12 @@ class TestResponse {
 /// whenever the thing under test is what happens when the bytes are hostile or
 /// the peer misbehaves; [TestClient] remains right for everything above the
 /// framing.
-class TestServer {
-  TestServer._(this._server, this.port);
-  final TransportServer _server;
+class TestServer._(
+  final TransportServer _server,
 
   /// The bound loopback port.
-  final int port;
-
+  final int port,
+) {
   /// Binds [app] with [env] on an ephemeral loopback port.
   ///
   /// [onError] receives what the transport reports; it defaults to swallowing,
@@ -279,9 +269,8 @@ class TestServer {
     final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = probe.port;
     await probe.close();
-    final server = await H1Transport(
-      onError: onError ?? (_, _) {},
-    ).bind(port, router.dispatch);
+    final server = await H1Transport(onError: onError ?? (_, _) {})
+        .bind(port, router.dispatch);
     return TestServer._(server, port);
   }
 
@@ -351,16 +340,12 @@ void testBothModes(
   }
 }
 
-class _TestRequest implements TransportRequest {
-  _TestRequest(this.method, this.uri, this.headers, this._body);
-  @override
-  final String method;
-  @override
-  final Uri uri;
-  @override
-  final Map<String, List<String>> headers;
-  final List<int> _body;
-
+class _TestRequest(
+  @override final String method,
+  @override final Uri uri,
+  @override final Map<String, List<String>> headers,
+  final List<int> _body,
+) implements TransportRequest {
   @override
   Stream<List<int>> get bodyStream =>
       _body.isEmpty ? const Stream.empty() : Stream.value(_body);
@@ -376,16 +361,14 @@ class _TestRequest implements TransportRequest {
 /// The outcome of [TestClient.connect]: either an upgraded [socket] or the
 /// [rejection] response the pipeline returned in its place. Exactly one is
 /// non-null.
-class TestUpgrade {
-  TestUpgrade._(this.socket, this.rejection);
-
+class TestUpgrade._(
   /// The connected in-process socket when the route upgraded, else null.
-  final TestSocket? socket;
+  final TestSocket? socket,
 
   /// The ordinary response when the pipeline answered instead of upgrading
   /// (e.g. a 401 from the security gate), else null.
-  final TestResponse? rejection;
-
+  final TestResponse? rejection,
+) {
   /// Whether the connection upgraded.
   bool get upgraded => socket != null;
 }
@@ -393,10 +376,7 @@ class TestUpgrade {
 /// The client end of an in-process upgraded connection, mirroring an
 /// [UpgradedChannel] from the test's side: send messages to the handler, read
 /// what it sends back, close, and observe closure — all without a socket.
-class TestSocket {
-  TestSocket._(this._link);
-  final _InProcessLink _link;
-
+class TestSocket._(final _InProcessLink _link) {
   /// Messages the handler sent, in order (a `String` text or `List<int>` binary
   /// frame).
   Stream<Object> get messages => _link.toClient.stream;
@@ -439,10 +419,7 @@ class _InProcessLink {
 
 /// The server (handler) end of an in-process upgraded connection — the
 /// [UpgradedChannel] the handler's `onConnected` receives from [TestClient].
-class _ServerChannel implements UpgradedChannel {
-  _ServerChannel(this._link);
-  final _InProcessLink _link;
-
+class _ServerChannel(final _InProcessLink _link) implements UpgradedChannel {
   @override
   Stream<Object> get messages => _link.toServer.stream;
 

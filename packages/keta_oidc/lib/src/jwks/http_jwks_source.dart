@@ -85,17 +85,30 @@ typedef JwksFetch = Future<String> Function(Uri url);
 ///   immediate.
 /// * **No retry loops.** One fetch per trigger; no automatic re-tries (the
 ///   idempotency of a retried operation is not knowable here).
-final class HttpJwksSource implements JwksSource {
-  HttpJwksSource._(
-    this._jwksUri, {
-    required this.issuer,
-    required JwksFetch? fetch,
-    required this.ttl,
-    required this.minRefreshInterval,
-    required this.connectTimeout,
-    required this.totalTimeout,
-    required DateTime Function()? now,
-  }) : _now = now ?? DateTime.now {
+final class HttpJwksSource._(
+  /// The `jwks_uri`: given up front, or discovered and cached on first fetch.
+  var Uri? _jwksUri, {
+
+  /// The configured issuer for OIDC Discovery, or `null` when the `jwks_uri` was
+  /// given directly.
+  required final String? issuer,
+  required JwksFetch? fetch,
+
+  /// The maximum age of a cached set before a read refreshes it lazily.
+  required final Duration ttl,
+
+  /// The minimum gap between refresh *attempts* (both miss-triggered and
+  /// TTL-triggered); the cold initial load is exempt.
+  required final Duration minRefreshInterval,
+
+  /// The per-connection timeout applied by the default fetch.
+  required final Duration connectTimeout,
+
+  /// The total per-request timeout applied by the default fetch.
+  required final Duration totalTimeout,
+  required DateTime Function()? now,
+}) implements JwksSource {
+  this : _now = now ?? DateTime.now {
     // Reject a plaintext transport up front, before any I/O: a configured
     // `jwks_uri`, or the issuer whose discovery URL is derived from it. A
     // `jwks_uri` learned later from discovery is checked in [_resolveJwksUri].
@@ -111,7 +124,7 @@ final class HttpJwksSource implements JwksSource {
   }
 
   /// A source whose `jwks_uri` is known directly (no discovery).
-  factory HttpJwksSource.fromJwksUri(
+  factory fromJwksUri(
     Uri jwksUri, {
     JwksFetch? fetch,
     Duration ttl = const Duration(minutes: 15),
@@ -132,7 +145,7 @@ final class HttpJwksSource implements JwksSource {
 
   /// A source that finds its `jwks_uri` via OIDC Discovery from [issuer]. The
   /// discovery document's `issuer` must equal [issuer] exactly.
-  factory HttpJwksSource.discover({
+  factory discover({
     required String issuer,
     JwksFetch? fetch,
     Duration ttl = const Duration(minutes: 15),
@@ -151,28 +164,8 @@ final class HttpJwksSource implements JwksSource {
     now: now,
   );
 
-  /// The configured issuer for OIDC Discovery, or `null` when the `jwks_uri` was
-  /// given directly.
-  final String? issuer;
-
-  /// The maximum age of a cached set before a read refreshes it lazily.
-  final Duration ttl;
-
-  /// The minimum gap between refresh *attempts* (both miss-triggered and
-  /// TTL-triggered); the cold initial load is exempt.
-  final Duration minRefreshInterval;
-
-  /// The per-connection timeout applied by the default fetch.
-  final Duration connectTimeout;
-
-  /// The total per-request timeout applied by the default fetch.
-  final Duration totalTimeout;
-
   final DateTime Function() _now;
   late final JwksFetch _fetch;
-
-  /// The `jwks_uri`: given up front, or discovered and cached on first fetch.
-  Uri? _jwksUri;
 
   /// The current cached set (`null` before any successful load).
   JwkSet? _set;
@@ -534,12 +527,10 @@ final class HttpJwksSource implements JwksSource {
 /// not the expected shape. A **trust/configuration** failure, kept distinct from
 /// [JwksUnavailable] (a transport outage) and never a [JwtRejection] (it is not
 /// about a token). It is never masked by serving stale keys.
-final class JwksDiscoveryException implements Exception {
-  const JwksDiscoveryException(this.message);
-
+final class const JwksDiscoveryException(
   /// A human-readable explanation.
-  final String message;
-
+  final String message,
+) implements Exception {
   @override
   String toString() => 'JwksDiscoveryException: $message';
 }

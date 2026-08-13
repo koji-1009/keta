@@ -10,9 +10,9 @@ void main() {
     // lie about which BoringSSL backs the build, so this test forces the two
     // back in sync.
     test('matches the pin in hook/boringssl_commit.txt', () {
-      final pinned = File(
-        'hook/boringssl_commit.txt',
-      ).readAsStringSync().trim();
+      final pinned = File('hook/boringssl_commit.txt')
+          .readAsStringSync()
+          .trim();
       expect(boringsslCommit, pinned);
     });
 

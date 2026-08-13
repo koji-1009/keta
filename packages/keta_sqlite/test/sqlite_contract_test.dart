@@ -182,26 +182,23 @@ void main() {
       expect(row['b'], isNull);
     });
 
-    test(
-      'decimal/numeric columns come back as double for fractional values',
-      () async {
-        final db = SqliteDb.memory();
-        addTearDown(db.close);
-        await db.writer.execute('create table d (v decimal(10, 2), n numeric)');
-        await db.writer.execute('insert into d values (?, ?)', [12.34, 0.5]);
-        final row = (await db.reader.query('select v, n from d')).single;
-        expect(row['v'], isA<double>());
-        expect(row['v'], 12.34);
-        expect(row['n'], isA<double>());
+    test('decimal/numeric columns come back as double for fractional values', () async {
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
+      await db.writer.execute('create table d (v decimal(10, 2), n numeric)');
+      await db.writer.execute('insert into d values (?, ?)', [12.34, 0.5]);
+      final row = (await db.reader.query('select v, n from d')).single;
+      expect(row['v'], isA<double>());
+      expect(row['v'], 12.34);
+      expect(row['n'], isA<double>());
 
-        // NUMERIC affinity collapses a lossless double to int — recorded as spec.
-        await db.writer.execute('insert into d values (?, ?)', [5.0, 5.0]);
-        expect(
-          (await db.reader.query('select v from d where v = 5')).single['v'],
-          isA<int>(),
-        );
-      },
-    );
+      // NUMERIC affinity collapses a lossless double to int — recorded as spec.
+      await db.writer.execute('insert into d values (?, ?)', [5.0, 5.0]);
+      expect(
+        (await db.reader.query('select v from d where v = 5')).single['v'],
+        isA<int>(),
+      );
+    });
 
     test('a duplicate column name collapses to its last occurrence', () async {
       final db = SqliteDb.memory();
@@ -309,32 +306,27 @@ void main() {
   });
 
   group('lock acquisition timeout', () {
-    test(
-      'a hung transaction makes a waiting statement 503, not deadlock',
-      () async {
-        final db = SqliteDb.memory(
-          lockTimeout: const Duration(milliseconds: 50),
-        );
-        await db.writer.execute('create table t (n integer)');
-        final gate = Completer<void>();
-        // A transaction that does not return holds the single-writer lock.
-        final hung = db.transaction<int>((c) async {
-          await c.execute('insert into t values (1)');
-          await gate.future;
-          return 0;
-        });
+    test('a hung transaction makes a waiting statement 503, not deadlock', () async {
+      final db = SqliteDb.memory(lockTimeout: const Duration(milliseconds: 50));
+      await db.writer.execute('create table t (n integer)');
+      final gate = Completer<void>();
+      // A transaction that does not return holds the single-writer lock.
+      final hung = db.transaction<int>((c) async {
+        await c.execute('insert into t values (1)');
+        await gate.future;
+        return 0;
+      });
 
-        // A statement that cannot acquire the lock within lockTimeout fails loud.
-        await expectLater(
-          db.reader.query('select 1'),
-          throwsA(isA<KetaException>().having((e) => e.status, 'status', 503)),
-        );
+      // A statement that cannot acquire the lock within lockTimeout fails loud.
+      await expectLater(
+        db.reader.query('select 1'),
+        throwsA(isA<KetaException>().having((e) => e.status, 'status', 503)),
+      );
 
-        gate.complete(); // release the hung tx so the test ends cleanly
-        await hung;
-        await db.close();
-      },
-    );
+      gate.complete(); // release the hung tx so the test ends cleanly
+      await hung;
+      await db.close();
+    });
   });
 
   group('close ordering', () {

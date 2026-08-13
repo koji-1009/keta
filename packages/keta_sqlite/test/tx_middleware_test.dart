@@ -9,13 +9,8 @@ import 'package:keta_db/keta_db.dart';
 import 'package:keta_sqlite/keta_sqlite.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog, HasDb, Disposable {
-  Env(this.log, this.db);
-  @override
-  final Log log;
-  @override
-  final Db db;
-
+class Env(@override final Log log, @override final Db db)
+    implements HasLog, HasDb, Disposable {
   @override
   Future<void> close() => db.close();
 }
@@ -58,9 +53,8 @@ void main() {
       expect((await client.post('/ok')).status, 201);
       expect((await client.post('/fail')).status, 400);
 
-      final n = (await env.db.reader.query(
-        'select count(*) n from users',
-      )).single['n'];
+      final n = (await env.db.reader.query('select count(*) n from users'))
+          .single['n'];
       expect(n, 1); // only the committed /ok insert survives
     });
   });

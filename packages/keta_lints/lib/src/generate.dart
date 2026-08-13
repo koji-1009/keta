@@ -4,18 +4,12 @@ import 'dart_literal.dart';
 import 'http_methods.dart';
 
 /// The files a scaffold run produces, all user-owned Dart source.
-class Scaffold {
-  const Scaffold({
-    required this.dtos,
-    required this.routes,
-    required this.openapiTool,
-    required this.contractTest,
-  });
-  final String dtos;
-  final String routes;
-  final String openapiTool;
-  final String contractTest;
-}
+class const Scaffold({
+  required final String dtos,
+  required final String routes,
+  required final String openapiTool,
+  required final String contractTest,
+});
 
 /// Materializes canonical Dart from an OpenAPI 3.1 [document]: DTOs with
 /// fromJson/toJson, Schema constants, typed route skeletons that throw 501, a
@@ -37,9 +31,7 @@ Scaffold generateScaffold(Map<String, Object?> document) {
 }
 
 /// Raised when a schema uses a construct outside the canonical subset.
-class ScaffoldError implements Exception {
-  const ScaffoldError(this.message);
-  final String message;
+class const ScaffoldError(final String message) implements Exception {
   @override
   String toString() => 'ScaffoldError: $message';
 }
@@ -169,7 +161,7 @@ void _writeSealed(
       .toString();
   buffer
     ..writeln('sealed class $name {')
-    ..writeln('  factory $name.fromJson(Map<String, Object?> json) =>')
+    ..writeln('  factory fromJson(Map<String, Object?> json) =>')
     ..writeln('      switch (json[${dartStringLiteral(discriminator)}]) {');
   for (final entry in _variants(schema).entries) {
     buffer.writeln(
@@ -235,7 +227,7 @@ void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
     producedBy[ident] = wire;
     idents.add(ident);
   }
-  buffer.writeln('enum $name {');
+  buffer.writeln('enum $name(final String wire) {');
   for (var i = 0; i < values.length; i++) {
     final terminator = i == values.length - 1 ? ';' : ',';
     buffer.writeln(
@@ -243,8 +235,6 @@ void _writeEnum(StringBuffer buffer, String name, Map<String, Object?> schema) {
     );
   }
   buffer
-    ..writeln('  const $name(this.wire);')
-    ..writeln('  final String wire;')
     // The lookup is over the enum's own values; an unknown wire string is a
     // client error (400), matching the sealed-variant fromJson's stance. The
     // received value is interpolated at runtime (`\$wire` in the emitted source)
@@ -331,27 +321,24 @@ void _writeClass(
   ];
 
   final clause = implementsType == null ? '' : ' implements $implementsType';
-  buffer.writeln('class $name$clause {');
-  // Constructors first (sort_constructors_first). Every field is final with
-  // initializing formals only, so the DTO is const-eligible.
+  // A primary constructor: every field is declared in the header, as a `final`
+  // declaring parameter, so the field set and the constructor signature cannot
+  // drift apart. `const` makes the DTO const-eligible.
   if (fields.isEmpty) {
-    buffer.writeln('  const $name();');
+    buffer.writeln('class const $name()$clause {');
   } else {
-    buffer.writeln('  const $name({');
+    buffer.writeln('class const $name({');
     for (final f in fields) {
       buffer.writeln(
         f.required
-            ? '    required this.${f.dartName},'
-            : '    this.${f.dartName},',
+            ? '  required final ${f.dartType} ${f.dartName},'
+            : '  final ${f.dartType} ${f.dartName},',
       );
     }
-    buffer.writeln('  });');
+    buffer.writeln('})$clause {');
   }
-  buffer.writeln();
 
-  buffer.writeln(
-    '  factory $name.fromJson(Map<String, Object?> json) => $name(',
-  );
+  buffer.writeln('  factory fromJson(Map<String, Object?> json) => $name(');
   for (final f in fields) {
     buffer.writeln(
       '        ${f.dartName}: ${f.fromJson("json['${f.jsonKey}']")},',
@@ -359,11 +346,6 @@ void _writeClass(
   }
   buffer.writeln('      );');
   buffer.writeln();
-
-  for (final f in fields) {
-    buffer.writeln('  final ${f.dartType} ${f.dartName};');
-  }
-  if (fields.isNotEmpty) buffer.writeln();
 
   // A sealed variant's toJson overrides the parent's abstract method.
   if (implementsType != null) buffer.writeln('  @override');
@@ -398,32 +380,22 @@ void _writeSchemaConstant(
 // --- type model -----------------------------------------------------------
 
 sealed class _Type {
-  const _Type();
+  const new();
 }
 
-class _Prim extends _Type {
-  const _Prim(this.dart);
-  final String dart;
-}
+class const _Prim(final String dart) extends _Type;
 
-class _Enum extends _Type {
-  const _Enum(this.name, this.enhanced);
-  final String name;
+class const _Enum(
+  final String name,
 
   /// A D-1 enhanced (wire-mapped) enum, so the mappers use `fromWire`/`.wire`
   /// rather than the name-based `values.byName`/`.name`.
-  final bool enhanced;
-}
+  final bool enhanced,
+) extends _Type;
 
-class _Ref extends _Type {
-  const _Ref(this.name);
-  final String name;
-}
+class const _Ref(final String name) extends _Type;
 
-class _ListOf extends _Type {
-  const _ListOf(this.item);
-  final _Type item;
-}
+class const _ListOf(final _Type item) extends _Type;
 
 _Type _resolve(
   Map<String, Object?> prop,
@@ -466,13 +438,12 @@ String _dartType(_Type type) => switch (type) {
   _ListOf(:final item) => 'List<${_dartType(item)}>',
 };
 
-class _Field {
-  _Field(this.jsonKey, this.dartName, this.type, this.required);
-  final String jsonKey;
-  final String dartName;
-  final _Type type;
-  final bool required;
-
+class _Field(
+  final String jsonKey,
+  final String dartName,
+  final _Type type,
+  final bool required,
+) {
   String get dartType => required ? _dartType(type) : '${_dartType(type)}?';
 
   String fromJson(String access) {
@@ -776,12 +747,11 @@ String _generateContractTest(
 }
 
 /// One route+method singled out for a contract test.
-class _Endpoint {
-  _Endpoint(this.method, this.path, this.samplePath);
-  final String method; // lower-case, e.g. 'post'
-  final String path; // OpenAPI path, e.g. '/users/{id}'
-  final String samplePath; // params filled, e.g. '/users/x'
-}
+class _Endpoint(
+  final String method, // lower-case, e.g. 'post'
+  final String path, // OpenAPI path, e.g. '/users/{id}'
+  final String samplePath, // params filled, e.g. '/users/x'
+);
 
 String _samplePath(String openApiPath) =>
     openApiPath.replaceAllMapped(RegExp(r'\{[^}]+\}'), (_) => 'x');

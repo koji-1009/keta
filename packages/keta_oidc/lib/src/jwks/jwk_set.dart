@@ -28,12 +28,19 @@ import '../jwt/rejection.dart';
 /// irregular; last-wins is the deterministic rule this package commits to, so
 /// `kid` lookup is unambiguous. Keys with no `kid` are all retained (they are
 /// only ever selected when the set holds exactly one usable key).
-final class JwkSet {
-  const JwkSet._(this.keys, this.skipped);
+final class const JwkSet._(
+  /// The usable verification keys, in document order (with last-wins applied to
+  /// duplicate `kid`s).
+  final List<Jwk> keys,
 
+  /// The entries that were skipped as unusable, each with the reason and the
+  /// `kid` it carried (if any). Surfaced rather than logged so this package
+  /// keeps no logging dependency; a caller may inspect or report it.
+  final List<SkippedJwk> skipped,
+) {
   /// Parses a JWKS from its JSON [text]. Throws [JwksMalformed] when [text] is
   /// not valid JSON or its top level is not a JSON object.
-  factory JwkSet.parse(String text) {
+  factory parse(String text) {
     final Object? decoded;
     try {
       decoded = jsonDecode(text);
@@ -50,7 +57,7 @@ final class JwkSet {
   ///
   /// Throws [JwksMalformed] when there is no `keys` array. Individual unusable
   /// entries are skipped into [skipped], never thrown.
-  factory JwkSet.fromJson(Map<String, Object?> json) {
+  factory fromJson(Map<String, Object?> json) {
     final keysRaw = json['keys'];
     if (keysRaw is! List) {
       throw const JwksMalformed('JWKS has no "keys" array');
@@ -110,15 +117,6 @@ final class JwkSet {
 
     return JwkSet._(List<Jwk>.unmodifiable(keys), List.unmodifiable(skipped));
   }
-
-  /// The usable verification keys, in document order (with last-wins applied to
-  /// duplicate `kid`s).
-  final List<Jwk> keys;
-
-  /// The entries that were skipped as unusable, each with the reason and the
-  /// `kid` it carried (if any). Surfaced rather than logged so this package
-  /// keeps no logging dependency; a caller may inspect or report it.
-  final List<SkippedJwk> skipped;
 
   /// The number of skipped entries — a convenience over `skipped.length`.
   int get skippedCount => skipped.length;
@@ -211,16 +209,14 @@ final class JwkSet {
 
 /// One JWKS entry that [JwkSet] could not use, with the [reason] and the `kid`
 /// it declared (if any).
-final class SkippedJwk {
-  const SkippedJwk(this.reason, this.kid);
-
+final class const SkippedJwk(
   /// Why the entry was skipped (human-readable).
-  final String reason;
+  final String reason,
 
   /// The `kid` the skipped entry carried, or `null` if it declared none (or the
   /// entry was too malformed to have a string `kid`).
-  final String? kid;
-
+  final String? kid,
+) {
   @override
   String toString() => 'SkippedJwk(${kid ?? '<no kid>'}: $reason)';
 }
@@ -230,12 +226,10 @@ final class SkippedJwk {
 /// and from a document that merely contains some unusable keys (those are
 /// skipped, not thrown). Not a [JwtRejection]: it describes the key source, not
 /// a token.
-final class JwksMalformed implements Exception {
-  const JwksMalformed(this.message);
-
+final class const JwksMalformed(
   /// A human-readable explanation.
-  final String message;
-
+  final String message,
+) implements Exception {
   @override
   String toString() => 'JwksMalformed: $message';
 }

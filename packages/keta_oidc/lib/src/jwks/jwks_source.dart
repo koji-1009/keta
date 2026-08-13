@@ -59,15 +59,13 @@ abstract interface class JwksSource {
 /// left unjudged), never to a `401`. The originating error is preserved in
 /// [cause] (e.g. a `SocketException`, `TimeoutException`, or [JwksMalformed]),
 /// so a raw transport error never escapes this package unwrapped.
-final class JwksUnavailable implements Exception {
-  const JwksUnavailable(this.message, {this.cause});
-
+final class const JwksUnavailable(
   /// A human-readable explanation.
-  final String message;
+  final String message, {
 
   /// The underlying error that caused the source to be unavailable, if any.
-  final Object? cause;
-
+  final Object? cause,
+}) implements Exception {
   @override
   String toString() =>
       'JwksUnavailable: $message${cause == null ? '' : ' (cause: $cause)'}';

@@ -17,14 +17,16 @@ import 'support.dart';
 /// A minimal [TransportRequest] so a test can drive the app pipeline directly
 /// and hold onto a streaming [Response] instead of draining it — which is what
 /// TestClient.get does, and what would hang forever on an open SSE feed.
-class _Req implements TransportRequest {
-  _Req(this.method, String path, {Map<String, String> headers = const {}})
+class _Req(
+  @override final String method,
+  String path, {
+  Map<String, String> headers = const {},
+}) implements TransportRequest {
+  this
     : uri = Uri.parse(path),
       headers = {
         for (final e in headers.entries) e.key.toLowerCase(): [e.value],
       };
-  @override
-  final String method;
   @override
   final Uri uri;
   @override

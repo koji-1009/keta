@@ -105,11 +105,9 @@ void main() {
 
       expect(app.routes, hasLength(3));
       for (final route in app.routes) {
-        expect(
-          (route.segments[1] as CaptureSegment).capture.schema,
-          {'type': 'integer'},
-          reason: '${route.method} must carry the same parameter',
-        );
+        expect((route.segments[1] as CaptureSegment).capture.schema, {
+          'type': 'integer',
+        }, reason: '${route.method} must carry the same parameter');
       }
     });
 

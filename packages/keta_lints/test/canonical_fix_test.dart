@@ -27,10 +27,7 @@ class UserDto {
 const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}, 'age': {'type': 'integer'}}});
 ''';
       final fixed = applyCanonicalFix(source);
-      expect(
-        fixed,
-        contains('factory UserDto.fromJson(Map<String, Object?> json)'),
-      );
+      expect(fixed, contains('factory fromJson(Map<String, Object?> json)'));
       expect(fixed, contains("id: json['id'] as String,"));
       expect(fixed, contains("age: json['age'] as int?,"));
       expect(fixed, contains("if (age != null) 'age': age,"));
@@ -129,26 +126,23 @@ const oneSchema = Schema('One', {
       expect(applyCanonicalFix(fixed), fixed); // idempotent
     });
 
-    test(
-      'does NOT forge the absent mirror of a one-way (fromJson-only) class '
-      'the present mapper declares the direction; the fixer leaves it alone',
-      () {
-        const source = '''
+    test('does NOT forge the absent mirror of a one-way (fromJson-only) class '
+        'the present mapper declares the direction; the fixer leaves it alone', () {
+      const source = '''
 class Dto {
   final String id;
   Dto({required this.id});
   factory Dto.fromJson(Map<String, Object?> json) => Dto(id: json['id'] as String);
 }
 ''';
-        // fromJson present, toJson absent, no Schema — a legitimate input-only
-        // projection. The fixer must not materialize a toJson (that would forge a
-        // direction the class never declared), so the output is byte-identical.
-        final fixed = applyCanonicalFix(source);
-        expect(fixed, source);
-        expect(fixed, isNot(contains('toJson')));
-        expect(canonicalDiagnostics(fixed), isEmpty);
-      },
-    );
+      // fromJson present, toJson absent, no Schema — a legitimate input-only
+      // projection. The fixer must not materialize a toJson (that would forge a
+      // direction the class never declared), so the output is byte-identical.
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, source);
+      expect(fixed, isNot(contains('toJson')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+    });
 
     test('a class with final fields but no canonical signal is ignored', () {
       const source = '''
@@ -733,6 +727,58 @@ class UserDto {
       expect(fixed, contains("'role': role.wire,"));
       expect(fixed, isNot(contains('values.byName')));
       expect(fixed, isNot(contains('role.name')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+  });
+
+  group('applyCanonicalFix — primary constructors', () {
+    test('reconciles a drifted mapper against header-declared fields', () {
+      const source = '''
+class const UserDto({required final String id, required final String name}) {
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, name: json['name'] as String);
+  Map<String, Object?> toJson() => {'id': id};
+}
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("'name': name,"));
+      // The header is the field set; the fix must not fabricate a field block.
+      expect(fixed, contains('required final String name})'));
+      expect(fixed, isNot(contains('final String name;')));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('reconciles a drifted Schema constant against header-declared '
+        'fields', () {
+      const source = '''
+import 'package:keta/keta.dart';
+class const UserDto({required final String id, final int? age}) {
+  factory UserDto.fromJson(Map<String, Object?> json) =>
+      UserDto(id: json['id'] as String, age: json['age'] as int?);
+  Map<String, Object?> toJson() => {'id': id, if (age != null) 'age': age};
+}
+const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains("'age': {'type': 'integer'}"));
+      expect(canonicalDiagnostics(fixed), isEmpty);
+      expect(applyCanonicalFix(fixed), fixed);
+    });
+
+    test('materializes both mappers into a class the header left bodyless', () {
+      // `class Foo(…);` has no braces to insert into — the fixer must grow a
+      // body rather than corrupt the declaration.
+      const source = '''
+import 'package:keta/keta.dart';
+class const UserDto({required final String id});
+const userDtoSchema = Schema('UserDto', {'type': 'object', 'required': ['id'], 'properties': {'id': {'type': 'string'}}});
+''';
+      final fixed = applyCanonicalFix(source);
+      expect(fixed, contains('factory fromJson('));
+      expect(fixed, contains('Map<String, Object?> toJson()'));
+      expect(parseString(content: fixed, throwIfDiagnostics: true), isNotNull);
       expect(canonicalDiagnostics(fixed), isEmpty);
       expect(applyCanonicalFix(fixed), fixed);
     });

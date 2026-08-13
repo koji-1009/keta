@@ -30,20 +30,46 @@ import 'rejection.dart';
 /// immutable and exposes no mutable slot precisely so that caching is the
 /// backend's private concern, attached by identity, invalidated naturally when
 /// the cache drops the key and the instance becomes unreachable.
-final class Jwk {
-  const Jwk._({
-    required this.keyType,
-    required this.kid,
-    required this.algorithm,
-    required this.use,
-    required this.keyOps,
-    required this.curve,
-    required this.modulus,
-    required this.exponent,
-    required this.x,
-    required this.y,
-  });
+final class const Jwk._({
+  /// The key family (`kty`): [JwkKeyType.rsa] or [JwkKeyType.ec].
+  required final JwkKeyType keyType,
 
+  /// The key id (`kid`), or `null`. Used by the JWKS cache to match a token's
+  /// header `kid` to this key.
+  required final String? kid,
+
+  /// The algorithm this key declares (`alg`), or `null` when the JWK omits it or
+  /// declares one outside the [JwsAlgorithm] allowlist. When non-null, the
+  /// validator cross-checks it against the token's `alg` (a key that says
+  /// `RS256` must not be used to verify an `ES256` token).
+  required final JwsAlgorithm? algorithm,
+
+  /// The intended use (`use`), typically `"sig"`, or `null`.
+  required final String? use,
+
+  /// The permitted key operations (`key_ops`), or `null`.
+  required final List<String>? keyOps,
+
+  /// The EC curve (`crv`) — `"P-256"` or `"P-384"` — for an [JwkKeyType.ec] key,
+  /// else `null`.
+  required final String? curve,
+
+  /// RSA modulus (`n`) as raw big-endian bytes, for an [JwkKeyType.rsa] key,
+  /// else `null`.
+  required final Uint8List? modulus,
+
+  /// RSA public exponent (`e`) as raw big-endian bytes, for an [JwkKeyType.rsa]
+  /// key, else `null`.
+  required final Uint8List? exponent,
+
+  /// EC public-point x-coordinate (`x`) as raw big-endian bytes, for an
+  /// [JwkKeyType.ec] key, else `null`.
+  required final Uint8List? x,
+
+  /// EC public-point y-coordinate (`y`) as raw big-endian bytes, for an
+  /// [JwkKeyType.ec] key, else `null`.
+  required final Uint8List? y,
+}) {
   /// Parses a single JWK from its decoded-JSON [Map].
   ///
   /// Throws [JwtMalformed] when the object is not a usable public key of a
@@ -53,7 +79,7 @@ final class Jwk {
   /// **not** fatal here — it is retained as `null` so key parsing does not
   /// double as algorithm policy (the token's own `alg` is what policy gates);
   /// the well-known `alg` values still round-trip.
-  factory Jwk.fromJson(Map<String, Object?> json) {
+  factory fromJson(Map<String, Object?> json) {
     final ktyRaw = json['kty'];
     if (ktyRaw is! String) {
       throw const JwtMalformed('JWK has no string "kty"');
@@ -122,7 +148,7 @@ final class Jwk {
   }
 
   /// Parses a single JWK from its JSON [text].
-  factory Jwk.parse(String text) {
+  factory parse(String text) {
     final Object? decoded;
     try {
       decoded = jsonDecode(text);
@@ -134,45 +160,6 @@ final class Jwk {
     }
     return Jwk.fromJson(decoded);
   }
-
-  /// The key family (`kty`): [JwkKeyType.rsa] or [JwkKeyType.ec].
-  final JwkKeyType keyType;
-
-  /// The key id (`kid`), or `null`. Used by the JWKS cache to match a token's
-  /// header `kid` to this key.
-  final String? kid;
-
-  /// The algorithm this key declares (`alg`), or `null` when the JWK omits it or
-  /// declares one outside the [JwsAlgorithm] allowlist. When non-null, the
-  /// validator cross-checks it against the token's `alg` (a key that says
-  /// `RS256` must not be used to verify an `ES256` token).
-  final JwsAlgorithm? algorithm;
-
-  /// The intended use (`use`), typically `"sig"`, or `null`.
-  final String? use;
-
-  /// The permitted key operations (`key_ops`), or `null`.
-  final List<String>? keyOps;
-
-  /// The EC curve (`crv`) — `"P-256"` or `"P-384"` — for an [JwkKeyType.ec] key,
-  /// else `null`.
-  final String? curve;
-
-  /// RSA modulus (`n`) as raw big-endian bytes, for an [JwkKeyType.rsa] key,
-  /// else `null`.
-  final Uint8List? modulus;
-
-  /// RSA public exponent (`e`) as raw big-endian bytes, for an [JwkKeyType.rsa]
-  /// key, else `null`.
-  final Uint8List? exponent;
-
-  /// EC public-point x-coordinate (`x`) as raw big-endian bytes, for an
-  /// [JwkKeyType.ec] key, else `null`.
-  final Uint8List? x;
-
-  /// EC public-point y-coordinate (`y`) as raw big-endian bytes, for an
-  /// [JwkKeyType.ec] key, else `null`.
-  final Uint8List? y;
 
   static String? _optionalString(Map<String, Object?> json, String key) {
     final v = json[key];

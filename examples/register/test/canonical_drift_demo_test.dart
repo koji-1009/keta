@@ -26,24 +26,25 @@ void main() {
   test('adding a field is caught, then reconciled, by canonical fix', () {
     final original = File('lib/user_dto.dart').readAsStringSync();
 
-    const ctorAnchor = 'this.createdAt,\n  });';
-    const fieldAnchor = 'final List<String> tags;';
+    const fieldAnchor = 'final String? createdAt,\n})';
     expect(
-      original.contains(ctorAnchor) && original.contains(fieldAnchor),
+      original.contains(fieldAnchor),
       isTrue,
       reason:
           'lib/user_dto.dart no longer matches the shape this surgery '
-          'assumes; update the anchors above to match its current source',
+          'assumes; update the anchor above to match its current source',
     );
 
-    // The surgery: a new optional field, added the way anyone actually adds
-    // one — a constructor parameter and a matching final field — with
-    // fromJson, toJson, and the Schema constant deliberately left untouched.
-    // That gap between the field set and the three things that must mirror it
-    // IS the drift this test exists to demonstrate.
-    final drifted = original
-        .replaceFirst(ctorAnchor, 'this.createdAt,\n    this.nickname,\n  });')
-        .replaceFirst(fieldAnchor, '$fieldAnchor\n  final String? nickname;');
+    // The surgery: a new optional field, added the way anyone actually adds one
+    // to a primary constructor — a single declaring parameter, which is both
+    // the constructor parameter and the final field — with fromJson, toJson,
+    // and the Schema constant deliberately left untouched. That gap between the
+    // field set and the three things that must mirror it IS the drift this test
+    // exists to demonstrate.
+    final drifted = original.replaceFirst(
+      fieldAnchor,
+      'final String? createdAt,\n  final String? nickname,\n})',
+    );
     expect(
       drifted,
       isNot(original),

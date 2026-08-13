@@ -326,9 +326,8 @@ void main() {
           }),
       ]);
 
-      final n = (await db.reader.query(
-        'select n from $t where id = 1',
-      )).single['n'];
+      final n = (await db.reader.query('select n from $t where id = 1'))
+          .single['n'];
       expect(n, 100);
     },
   );
@@ -385,9 +384,8 @@ void main() {
         final dir = Directory.systemTemp.createTempSync('keta_rds_alter');
         addTearDown(() => dir.deleteSync(recursive: true));
         final t = _table('alter_users');
-        File(
-          '${dir.path}/0001_one.sql',
-        ).writeAsStringSync('create table $t (id integer);');
+        File('${dir.path}/0001_one.sql')
+            .writeAsStringSync('create table $t (id integer);');
 
         final db = _connect();
         addTearDown(() async {
@@ -410,9 +408,8 @@ void main() {
         );
         await db.writer.execute('create table $t (id integer)');
 
-        File(
-          '${dir.path}/0002_two.sql',
-        ).writeAsStringSync('alter table $t add column email text;');
+        File('${dir.path}/0002_two.sql')
+            .writeAsStringSync('alter table $t add column email text;');
 
         // The real ALTER TABLE ... ADD COLUMN runs against PostgreSQL here.
         final result = await applyMigrations(db, directory: dir.path);

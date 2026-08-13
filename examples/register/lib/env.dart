@@ -23,15 +23,12 @@ import 'package:keta_sqlite/keta_sqlite.dart';
 /// [RdsDb.poolStats] to read. See lib/readiness.dart and the README's
 /// "Readiness" section for why this example carries a second, unused-for-data
 /// database handle.
-class Env implements HasLog, HasDb, Disposable {
-  Env(this.db, this.log, this.bus, {this.rds});
-  @override
-  final Db db;
-  @override
-  final Log log;
-  final Bus bus;
-  final RdsDb? rds;
-
+class Env(
+  @override final Db db,
+  @override final Log log,
+  final Bus bus, {
+  final RdsDb? rds,
+}) implements HasLog, HasDb, Disposable {
   /// Boots a single-isolate [Env]: the [InMemoryBus] seam, for `serve()` at
   /// its default `isolates: 1`. See [connectBus] for the multi-isolate path.
   static Future<Env> boot() => _boot(InMemoryBus());

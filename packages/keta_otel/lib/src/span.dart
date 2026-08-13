@@ -4,23 +4,13 @@ library;
 enum SpanStatus { unset, ok, error }
 
 /// A finished server span for one request.
-class OtelSpan {
-  const OtelSpan({
-    required this.traceId,
-    required this.spanId,
-    this.parentSpanId,
-    required this.name,
-    required this.startUnixNano,
-    required this.endUnixNano,
-    this.attributes = const {},
-    this.status = SpanStatus.unset,
-  });
-  final String traceId; // 32 hex chars
-  final String spanId; // 16 hex chars
-  final String? parentSpanId; // 16 hex chars, or null for a root
-  final String name;
-  final int startUnixNano;
-  final int endUnixNano;
-  final Map<String, Object?> attributes;
-  final SpanStatus status;
-}
+class const OtelSpan({
+  required final String traceId, // 32 hex chars
+  required final String spanId, // 16 hex chars
+  final String? parentSpanId, // 16 hex chars, or null for a root
+  required final String name,
+  required final int startUnixNano,
+  required final int endUnixNano,
+  final Map<String, Object?> attributes = const {},
+  final SpanStatus status = SpanStatus.unset,
+});

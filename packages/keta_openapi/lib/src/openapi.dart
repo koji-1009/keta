@@ -7,16 +7,14 @@ import 'yaml.dart';
 /// An OpenAPI 3.1 document assembled from a route table. Truth flows one way:
 /// the running routes and their [RouteDoc]s are the source, this document the
 /// shadow.
-class OpenApi {
-  const OpenApi._(this.document);
-
+class const OpenApi._(final Map<String, Object?> document) {
   /// Walks [routes], extracting paths and parameters mechanically from the
   /// route values and bodies/responses from each route's [RouteDoc], and
   /// collecting referenced schemas transitively into `components/schemas`.
   ///
   /// [override] is the single escape hatch: it receives and may rewrite the
   /// finished document.
-  factory OpenApi.fromRoutes(
+  factory fromRoutes(
     List<RouteEntry> routes, {
     String title = 'API',
     String version = '0.1.0',
@@ -132,7 +130,6 @@ class OpenApi {
     };
     return OpenApi._(override == null ? document : override(document));
   }
-  final Map<String, Object?> document;
 
   Map<String, Object?> toJson() => document;
 

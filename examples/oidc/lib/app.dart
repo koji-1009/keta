@@ -182,7 +182,7 @@ OpenApi buildOpenApi() => OpenApi.fromRoutes(
 /// route table (each route's `doc`), never dispatches a request, so no
 /// signature is ever verified against this validator.
 final class _UnusedVerifier implements SignatureVerifier {
-  const _UnusedVerifier();
+  const new();
 
   @override
   bool verify({

@@ -15,9 +15,8 @@ void main() {
     test('apply in order, record, and stay idempotent', () async {
       final dir = Directory.systemTemp.createTempSync('keta_mig');
       addTearDown(() => dir.deleteSync(recursive: true));
-      File(
-        '${dir.path}/0002_add_email.sql',
-      ).writeAsStringSync('alter table users add column email text;');
+      File('${dir.path}/0002_add_email.sql')
+          .writeAsStringSync('alter table users add column email text;');
       File('${dir.path}/0001_create_users.sql').writeAsStringSync(
         'create table users (id integer primary key, name text);',
       );
@@ -63,39 +62,34 @@ end;
       },
     );
 
-    test(
-      'verifyMigrations throws on a never-migrated db (no ledger table)',
-      () async {
-        final dir = Directory.systemTemp.createTempSync('keta_verify');
-        addTearDown(() => dir.deleteSync(recursive: true));
-        File(
-          '${dir.path}/0001_one.sql',
-        ).writeAsStringSync('create table one (id integer);');
-        final db = SqliteDb.memory();
-        addTearDown(db.close);
+    test('verifyMigrations throws on a never-migrated db (no ledger table)', () async {
+      final dir = Directory.systemTemp.createTempSync('keta_verify');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      File('${dir.path}/0001_one.sql')
+          .writeAsStringSync('create table one (id integer);');
+      final db = SqliteDb.memory();
+      addTearDown(db.close);
 
-        // The `_keta_migrations` table does not exist yet, so the ledger read
-        // throws inside verifyMigrations — it must surface as the pending-schema
-        // StateError, not the raw driver error.
-        await expectLater(
-          db.verifyMigrations(dir.path),
-          throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              contains('0001'),
-            ),
+      // The `_keta_migrations` table does not exist yet, so the ledger read
+      // throws inside verifyMigrations — it must surface as the pending-schema
+      // StateError, not the raw driver error.
+      await expectLater(
+        db.verifyMigrations(dir.path),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('0001'),
           ),
-        );
-      },
-    );
+        ),
+      );
+    });
 
     test('verifyMigrations passes once migrations are applied', () async {
       final dir = Directory.systemTemp.createTempSync('keta_verify_ok');
       addTearDown(() => dir.deleteSync(recursive: true));
-      File(
-        '${dir.path}/0001_one.sql',
-      ).writeAsStringSync('create table one (id integer);');
+      File('${dir.path}/0001_one.sql')
+          .writeAsStringSync('create table one (id integer);');
       final db = SqliteDb.memory();
       addTearDown(db.close);
       await applyMigrations(db, directory: dir.path);
@@ -108,9 +102,8 @@ end;
       () async {
         final dir = Directory.systemTemp.createTempSync('keta_alter');
         addTearDown(() => dir.deleteSync(recursive: true));
-        File(
-          '${dir.path}/0001_one.sql',
-        ).writeAsStringSync('create table one (id integer);');
+        File('${dir.path}/0001_one.sql')
+            .writeAsStringSync('create table one (id integer);');
         final db = SqliteDb.memory();
         addTearDown(db.close);
 
@@ -126,9 +119,8 @@ end;
         );
         await db.writer.execute('create table one (id integer)');
 
-        File(
-          '${dir.path}/0002_two.sql',
-        ).writeAsStringSync('create table two (id integer);');
+        File('${dir.path}/0002_two.sql')
+            .writeAsStringSync('create table two (id integer);');
 
         // The real ALTER TABLE runs against sqlite3 here; 0002 applies and the
         // legacy 0001 row keeps its NULL checksum.
@@ -169,19 +161,16 @@ end;
     test('an out-of-order pending version is a hard error', () async {
       final dir = Directory.systemTemp.createTempSync('keta_ooo');
       addTearDown(() => dir.deleteSync(recursive: true));
-      File(
-        '${dir.path}/0001_one.sql',
-      ).writeAsStringSync('create table one (id integer);');
-      File(
-        '${dir.path}/0003_three.sql',
-      ).writeAsStringSync('create table three (id integer);');
+      File('${dir.path}/0001_one.sql')
+          .writeAsStringSync('create table one (id integer);');
+      File('${dir.path}/0003_three.sql')
+          .writeAsStringSync('create table three (id integer);');
       final db = SqliteDb.memory();
       addTearDown(db.close);
       await applyMigrations(db, directory: dir.path);
 
-      File(
-        '${dir.path}/0002_two.sql',
-      ).writeAsStringSync('create table two (id integer);');
+      File('${dir.path}/0002_two.sql')
+          .writeAsStringSync('create table two (id integer);');
       await expectLater(
         applyMigrations(db, directory: dir.path),
         throwsA(

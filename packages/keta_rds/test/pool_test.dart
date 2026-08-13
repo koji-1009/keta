@@ -12,9 +12,7 @@ import 'package:test/test.dart';
 
 /// A stand-in resource: knows its id, whether it was disposed, and whether it
 /// still validates (stands in for a driver connection's `isOpen`).
-class FakeConn {
-  FakeConn(this.id);
-  final int id;
+class FakeConn(final int id) {
   bool closed = false;
   bool open = true;
 }

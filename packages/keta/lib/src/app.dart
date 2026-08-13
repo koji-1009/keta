@@ -20,51 +20,40 @@ typedef Handler<E> = FutureOr<Response> Function(Context<E> c);
 
 /// A middleware: it may run code around [next] and short-circuit by returning
 /// its own response.
-typedef Middleware<E> =
-    FutureOr<Response> Function(Context<E> c, Handler<E> next);
+typedef Middleware<E> = FutureOr<Response> Function(
+  Context<E> c,
+  Handler<E> next,
+);
 
 /// A typed-DSL handler, receiving the path's captured tuple as [params].
-typedef TypedHandler<E, T> =
-    FutureOr<Response> Function(Context<E> c, T params);
+typedef TypedHandler<E, T> = FutureOr<Response> Function(
+  Context<E> c,
+  T params,
+);
 
 /// A registered middleware paired with the position it declared, so the chain
 /// can be checked before it is composed. Null [order] is unconstrained.
-class _Ordered<E> {
-  _Ordered(this.middleware, this.order);
-  final Middleware<E> middleware;
-  final MiddlewareOrder? order;
-}
+class _Ordered<E>(final Middleware<E> middleware, final MiddlewareOrder? order);
 
 /// One registered route, before the trie is compiled.
-class _Reg<E> {
-  _Reg(
-    this.method,
-    this.segments,
-    this.captures,
-    this.captureNames,
-    this.handler,
-    this.groupMiddleware,
-    this.doc,
-    this.template,
-  );
-  final String method;
-  final List<Segment> segments;
-  final List<Capture<Object?>> captures;
-  final List<String> captureNames;
-  final Handler<E> handler;
-  final List<_Ordered<E>> groupMiddleware;
-  final RouteDoc? doc;
-  final String template;
-}
+class _Reg<E>(
+  final String method,
+  final List<Segment> segments,
+  final List<Capture<Object?>> captures,
+  final List<String> captureNames,
+  final Handler<E> handler,
+  final List<_Ordered<E>> groupMiddleware,
+  final RouteDoc? doc,
+  final String template,
+);
 
 /// A registered route exposed for OpenAPI generation and inspection.
-class RouteEntry {
-  const RouteEntry(this.method, this.segments, this.doc, this.template);
-  final String method;
-  final List<Segment> segments;
-  final RouteDoc? doc;
-  final String template;
-}
+class const RouteEntry(
+  final String method,
+  final List<Segment> segments,
+  final RouteDoc? doc,
+  final String template,
+);
 
 /// The application: a routing table plus app-wide middleware.
 ///
@@ -440,12 +429,11 @@ class App<E> {
 List<Segment> _prefixSegments(String prefix) => parsePathString(prefix).parts;
 
 /// A prefixed child router with its own confined middleware.
-class RouteGroup<E> {
-  RouteGroup._(this._app, this._prefix, this._middleware);
-  final App<E> _app;
-  final List<Segment> _prefix;
-  final List<_Ordered<E>> _middleware;
-
+class RouteGroup<E>._(
+  final App<E> _app,
+  final List<Segment> _prefix,
+  final List<_Ordered<E>> _middleware,
+) {
   /// Adds middleware confined to this group's routes. Runs after app-wide
   /// middleware, in the order added.
   ///
@@ -480,13 +468,12 @@ class RouteGroup<E> {
 
 /// The typed-DSL binding surface for one [Path]. Its verbs mirror [App]'s but
 /// hand the handler the path's captured tuple.
-class Route<E, T> {
-  Route._(this._app, this._path, this._prefix, this._middleware);
-  final App<E> _app;
-  final Path<T> _path;
-  final List<Segment> _prefix;
-  final List<_Ordered<E>> _middleware;
-
+class Route<E, T>._(
+  final App<E> _app,
+  final Path<T> _path,
+  final List<Segment> _prefix,
+  final List<_Ordered<E>> _middleware,
+) {
   void get(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
       _app._addTyped('GET', _path, handler, doc, _prefix, _middleware);
   void post(TypedHandler<E, T> handler, {RouteDoc? doc}) =>
@@ -509,24 +496,23 @@ class _TrieNode<E> {
   final Map<String, _Compiled<E>> methods = {};
 }
 
-class _Compiled<E> {
-  _Compiled(this.handler, this.captureNames, this.template, this.doc);
-  final Handler<E> handler;
-  final List<String> captureNames;
-  final String template;
-  final RouteDoc? doc;
-}
+class _Compiled<E>(
+  final Handler<E> handler,
+  final List<String> captureNames,
+  final String template,
+  final RouteDoc? doc,
+);
 
 /// The compiled dispatcher: a radix trie plus the bound env. Matching stays on
 /// the synchronous path so a sync handler allocates no [Future].
-class Router<E> {
-  Router._(
-    this._root,
-    this.env,
-    this.baseLog,
-    this.maxBodyBytes,
-    List<Middleware<E>> appMiddleware,
-  ) {
+class Router<E>._(
+  final _TrieNode<E> _root,
+  final E env,
+  final Log baseLog,
+  final int maxBodyBytes,
+  List<Middleware<E>> appMiddleware,
+) {
+  this {
     var handler = _terminal;
     for (final m in appMiddleware.reversed) {
       final next = handler;
@@ -534,10 +520,6 @@ class Router<E> {
     }
     _appHandler = handler;
   }
-  final _TrieNode<E> _root;
-  final E env;
-  final Log baseLog;
-  final int maxBodyBytes;
   final Random _random = Random.secure();
 
   /// App-level middleware composed around the whole dispatch, including the
@@ -759,12 +741,11 @@ Future<void> _teardown<E>(E env, Log log) async {
   }
 }
 
-class _Server<E> implements Server {
-  _Server(this.env, this._baseLog, this._transport);
-  final E env;
-  final Log _baseLog;
-  final TransportServer _transport;
-
+class _Server<E>(
+  final E env,
+  final Log _baseLog,
+  final TransportServer _transport,
+) implements Server {
   @override
   Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
     await _transport.close(grace: grace);
@@ -774,9 +755,7 @@ class _Server<E> implements Server {
 
 /// A handle to a spawned worker isolate, its shutdown control port, and the
 /// port over which the isolate reports its own death.
-class _Worker {
-  _Worker(this.events);
-
+class _Worker(
   /// Carries the isolate's `onError` payload and its `onExit` signal. Held open
   /// for the worker's whole life: closing it right after a successful spawn —
   /// which is what used to happen — throws away the only channel on which a
@@ -784,8 +763,8 @@ class _Worker {
   /// accept set silently, so the process kept serving on N-1 isolates with
   /// nothing logged, and shutdown then spent the full grace waiting for an ack
   /// from an isolate that no longer existed.
-  final ReceivePort events;
-
+  final ReceivePort events,
+) {
   late final Isolate isolate;
   late final SendPort control;
 
@@ -801,13 +780,12 @@ class _Worker {
 
 /// The server for [App.serve] with `isolates > 1`: worker 0 runs here, the rest
 /// in spawned isolates driven over control ports.
-class _MultiServer<E> implements Server {
-  _MultiServer(this._env, this._baseLog, this._transport, this._workers);
-  final E _env;
-  final Log _baseLog;
-  final TransportServer _transport;
-  final List<_Worker> _workers;
-
+class _MultiServer<E>(
+  final E _env,
+  final Log _baseLog,
+  final TransportServer _transport,
+  final List<_Worker> _workers,
+) implements Server {
   @override
   Future<void> shutdown({Duration grace = const Duration(seconds: 30)}) async {
     final ports = <ReceivePort>[];
@@ -860,7 +838,7 @@ Future<_Worker> _spawnWorker<E>(
   // after, it means the worker died and the process is now serving on one
   // fewer isolate. Reporting that is the framework's part — restarting is the
   // supervisor's, which is why nothing here tries to.
-  worker.events.listen((message) {
+  worker.events.listen((Object? message) {
     if (!bound) {
       if (!failed.isCompleted) failed.complete(message);
       return;

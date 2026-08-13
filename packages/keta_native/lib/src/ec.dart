@@ -13,20 +13,17 @@ import 'pkey.dart';
 /// is the caller's responsibility (e.g. keta_oidc does it for JWS).
 ///
 /// The underlying native key is freed automatically on garbage collection.
-final class EcPublicKey implements Finalizable {
-  EcPublicKey._(this._pkey);
-
+final class EcPublicKey._(final Pointer<EVP_PKEY> _pkey)
+    implements Finalizable {
   /// A P-256 public key from big-endian affine coordinates ([x], [y], JWK
   /// `x`/`y`). Each coordinate must be exactly 32 bytes (the P-256 field size).
-  factory EcPublicKey.p256(Uint8List x, Uint8List y) =>
+  factory p256(Uint8List x, Uint8List y) =>
       _fromAffine(NID_X9_62_prime256v1, 32, x, y);
 
   /// A P-384 public key from big-endian affine coordinates ([x], [y]). Each
   /// coordinate must be exactly 48 bytes (the P-384 field size).
-  factory EcPublicKey.p384(Uint8List x, Uint8List y) =>
+  factory p384(Uint8List x, Uint8List y) =>
       _fromAffine(NID_secp384r1, 48, x, y);
-
-  final Pointer<EVP_PKEY> _pkey;
 
   static EcPublicKey _fromAffine(
     int nid,

@@ -64,13 +64,12 @@ List<Diagnostic> middlewareOrderDiagnosticsUnit(
 }
 
 /// One `use(mw())` in a run, with the position [mw] was recognized as carrying.
-class _Use {
-  _Use(this.name, this.order, this.offset, this.length);
-  final String name;
-  final MiddlewareOrder order;
-  final int offset;
-  final int length;
-}
+class _Use(
+  final String name,
+  final MiddlewareOrder order,
+  final int offset,
+  final int length,
+);
 
 /// The position each of keta's middleware factories tags its result with.
 ///
@@ -99,10 +98,8 @@ const Map<String, MiddlewareOrder> _positions = {
 bool _ownedByTxRule(String inner, String outer) =>
     inner == 'recover' && outer == 'tx';
 
-class _OrderVisitor extends RecursiveAstVisitor<void> {
-  _OrderVisitor(this.report);
-  final void Function(_Use inner, _Use outer) report;
-
+class _OrderVisitor(final void Function(_Use inner, _Use outer) report)
+    extends RecursiveAstVisitor<void> {
   /// `app..use(a())..use(b())` — the idiomatic form.
   @override
   void visitCascadeExpression(CascadeExpression node) {

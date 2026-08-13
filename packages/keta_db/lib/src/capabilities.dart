@@ -16,19 +16,13 @@ import 'db.dart';
 /// — are the row accessors' job and are not modelled here. What is modelled is
 /// what no reader can recover: a decimal whose digits were already lost by the
 /// storage class is gone, and no accessor can conjure them back.
-final class DbCapabilities {
-  const DbCapabilities({
-    required this.nativeBool,
-    required this.exactDecimal,
-    required this.typedTemporal,
-  });
-
+final class const DbCapabilities({
   /// The engine has a boolean storage class, so a boolean column comes back as
   /// a Dart [bool] rather than an integer `0`/`1`.
   ///
   /// False does not mean booleans are unusable — `row.boolAt(...)` reads both
   /// shapes — only that the raw value is not one.
-  final bool nativeBool;
+  required final bool nativeBool,
 
   /// A `numeric`/`decimal` column round-trips with every digit intact.
   ///
@@ -37,7 +31,7 @@ final class DbCapabilities {
   /// enough digits later comes back wrong. On such an engine an exact decimal
   /// must be stored in a TEXT column — `row.decimalAt(...)` then reads it back
   /// exactly, and says so loudly when the column was not TEXT.
-  final bool exactDecimal;
+  required final bool exactDecimal,
 
   /// The engine distinguishes date / timestamp / timestamp-with-time-zone, and
   /// the adapter renders each as exactly what the column type carries.
@@ -45,8 +39,8 @@ final class DbCapabilities {
   /// False means a temporal value is whatever was written — the engine neither
   /// validates nor normalizes it, so the ISO 8601 convention is the
   /// application's to keep. `row.timestampAt(...)` enforces it at the read.
-  final bool typedTemporal;
-
+  required final bool typedTemporal,
+}) {
   @override
   String toString() =>
       'DbCapabilities(nativeBool: $nativeBool, exactDecimal: $exactDecimal, '
