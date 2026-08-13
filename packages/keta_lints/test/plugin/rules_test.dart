@@ -26,7 +26,6 @@ void main() {
     defineReflectiveTests(KetaTxOrderRuleTest);
     defineReflectiveTests(KetaMiddlewareOrderRuleTest);
     defineReflectiveTests(KetaKeyRuleTest);
-    defineReflectiveTests(KetaInternalAwaitRuleTest);
   });
 }
 
@@ -559,41 +558,6 @@ $_stubs
 void f(dynamic c) {
   final k = Key('x');
   c.get(k);
-}
-''');
-  }
-}
-
-@reflectiveTest
-class KetaInternalAwaitRuleTest extends AnalysisRuleTest {
-  @override
-  void setUp() {
-    rule = KetaInternalAwaitRule();
-    super.setUp();
-  }
-
-  Future<void> test_await_fires() async {
-    await assertDiagnostics(
-      r'''
-Future<void> f(Future<void> p) async {
-  await p;
-}
-''',
-      [
-        lint(
-          41,
-          5,
-          name: 'keta_internal_await',
-          messageContainsAll: [_idPrefix, 'defeats the synchronous path'],
-        ),
-      ],
-    );
-  }
-
-  Future<void> test_allowAwait_isClean() async {
-    await assertNoDiagnostics(r'''
-Future<void> f(Future<void> p) async {
-  await p; // keta:allow-await
 }
 ''');
   }

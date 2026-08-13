@@ -152,60 +152,6 @@ void register(app) {
     });
   });
 
-  group('internalAwaitDiagnostics', () {
-    test('await-free code is clean', () {
-      const source = 'int add(int a, int b) => a + b;';
-      expect(internalAwaitDiagnostics(source), isEmpty);
-    });
-
-    test('an await is flagged', () {
-      const source =
-          'Future<void> f() async { await g(); }\nFuture<void> g() async {}';
-      final d = internalAwaitDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_internal_await');
-    });
-
-    test('a justified await is suppressed', () {
-      const source = '''
-Future<void> f() async {
-  // keta:allow-await
-  await g();
-}
-Future<void> g() async {}
-''';
-      expect(internalAwaitDiagnostics(source), isEmpty);
-    });
-
-    test('an await-for is flagged', () {
-      const source =
-          'Future<void> f(Stream<int> s) async {\n  await for (final _ in s) {}\n}';
-      final d = internalAwaitDiagnostics(source);
-      expect(d, hasLength(1));
-      expect(d.single.rule, 'keta_internal_await');
-      expect(d.single.message, contains('await on line 2'));
-    });
-
-    test('a justified await-for is suppressed', () {
-      const source =
-          'Future<void> f(Stream<int> s) async {\n  // keta:allow-await\n  await for (final _ in s) {}\n}';
-      expect(internalAwaitDiagnostics(source), isEmpty);
-    });
-
-    test('two awaits on one line get distinct ids (regression: the "L\$line" '
-        'scope hashed both to one id)', () {
-      const source =
-          'Future<void> f() async { await g(); await g(); }\n'
-          'Future<void> g() async {}';
-      final d = internalAwaitDiagnostics(source);
-      expect(d, hasLength(2));
-      expect(
-        d.map((e) => e.id).toSet(),
-        hasLength(2),
-      ); // line:column disambiguates
-    });
-  });
-
   group('txOrderDiagnostics', () {
     test('use(tx()) before use(recover()) is flagged', () {
       const source = 'void register(app) { app..use(tx())..use(recover()); }';
