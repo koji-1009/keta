@@ -16,9 +16,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Nothing here writes to the repository; see ci.yml.
+permissions:
+  contents: read
+
 jobs:
   aot:
     runs-on: ubuntu-latest
+    # This job has never exceeded 3m30s, cold BoringSSL cache included. 15
+    # minutes is a hang backstop with room to spare, not a budget — the point is
+    # to fail in minutes instead of burning the 6-hour default.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1 # v1.8.0
@@ -38,7 +46,8 @@ jobs:
             .dart_tool/hooks_runner
             !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
           key: boringssl-aot-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
-      - run: dart pub get
+      # --enforce-lockfile: see ci.yml.
+      - run: dart pub get --enforce-lockfile
       # dart compile exe cannot build these: it does not run build hooks, and
       # both sqlite3 and keta_native have them, so `dart build cli` is the only
       # AOT path. register carries the sqlite native asset; the oidc demo carries

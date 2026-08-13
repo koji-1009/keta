@@ -9,6 +9,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Nothing here writes to the repository, so the token needs nothing but the
+# checkout. Declared at the top level: a job without its own `permissions:`
+# inherits whatever the repository default is, which is the write-capable one on
+# a push to a branch in this repo.
+permissions:
+  contents: read
+
 env:
   # Space-padded: `contains` is a substring test, so an unpadded list matches
   # every prefix too, `packages/keta` included.
@@ -18,6 +25,8 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    # This job runs in well under a minute; 10 is a hang backstop, not a budget.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1 # v1.8.0
@@ -30,7 +39,10 @@ jobs:
           # One pub workspace = one resolve, so every job shares this key.
           key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
           restore-keys: pub-${{ runner.os }}-
-      - run: dart pub get
+      # --enforce-lockfile: CI resolves to exactly what pubspec.lock pins, and
+      # fails when it cannot, rather than silently testing a different version
+      # set than the one committed.
+      - run: dart pub get --enforce-lockfile
       - run: dart format --output=none --set-exit-if-changed .
       - run: dart analyze --fatal-infos
       # keta_files' own CI gate: fails when examples/files' lib/routes/ tree
@@ -50,7 +62,7 @@ jobs:
       # example ships one, so it is not part of this gate.
       - name: keta_lints:check (examples)
         run: |
-          for s in canonical routes query key tx order; do
+          for s in canonical routes query body key tx order; do
             dart run keta_lints:check "$s" examples || exit 1
           done
       # A new package or example with a test/ dir must join the test matrix
@@ -92,6 +104,10 @@ jobs:
     # Padded like BORINGSSL_DIRS; the env context is unavailable here, so the
     # list is inline.
     runs-on: ${{ contains(' packages/keta_rds packages/keta_lints packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc ', format(' {0} ', matrix.dir)) && 'ubuntu-latest' || 'ubuntu-slim' }}
+    # The slowest entry (a BoringSSL consumer) has never exceeded 3m20s. 15
+    # matches ubuntu-slim's own hard cap, so both halves of the matrix fail on
+    # the same bound instead of two different ones.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1 # v1.8.0
@@ -118,7 +134,7 @@ jobs:
             .dart_tool/hooks_runner/shared/keta_native/build
             !.dart_tool/hooks_runner/shared/keta_native/build/boringssl-checkout
           key: boringssl-obj-${{ runner.os }}-${{ hashFiles('packages/keta_native/hook/**') }}
-      - run: dart pub get
+      - run: dart pub get --enforce-lockfile
       # keta_rds's contract suite runs only when KETA_TEST_PG is set (it skips
       # visibly otherwise), so the container and the variable exist only on
       # this entry. sslmode=disable: the stock postgres:16 image ships with
