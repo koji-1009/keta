@@ -16,7 +16,7 @@ dart run keta_lints:fix canonical lib/     # materialize / reconcile, in place
 dart run keta_lints:check canonical lib/   # converged: exits 0
 ```
 
-`check` covers nine subcommands, each over files or directories (except `drift`, which takes two documents):
+`check` covers eight subcommands, each over files or directories (except `drift`, which takes two documents):
 
 ```
 dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
@@ -24,7 +24,6 @@ dart run keta_lints:check canonical <file-or-dir> ...
 dart run keta_lints:check routes <file-or-dir> ...
 dart run keta_lints:check query <file-or-dir> ...
 dart run keta_lints:check body <file-or-dir> ...
-dart run keta_lints:check internal-await <file-or-dir> ...
 dart run keta_lints:check key <file-or-dir> ...
 dart run keta_lints:check tx <file-or-dir> ...
 dart run keta_lints:check order <file-or-dir> ...
@@ -53,7 +52,6 @@ Check and fix consult the *same* recognizer, so they never disagree. A class is 
 | `keta_key_inline` | a `Key(...)` constructed inline at a `get`/`tryGet`/`set` call — identity keys make the value unreachable | `key` |
 | `keta_tx_outside_recover` | `use(tx())` registered before `use(recover())`, so the transaction commits a failed request | `tx` |
 | `keta_middleware_order` | a `use()` run whose middleware ranks descend, so an outer middleware is registered inside an inner one | `order` |
-| `keta_internal_await` | `await` in framework composition code (framework-development only); opt out per line with `// keta:allow-await` | `internal-await` |
 | `keta_contract_drift` | an endpoint, schema, or field present on only one side of the contract diff | `drift` |
 | `keta_contract_type_drift` | a field present on both sides whose type differs | `drift` |
 | `keta_contract_required_drift` | a field required on one side but optional on the other | `drift` |
@@ -79,7 +77,7 @@ plugins:
   keta_lints: ^0.1.0
 ```
 
-The six route/query/canonical/tx/key/order rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; `// ignore:` / `// ignore_for_file:` comments suppress them, written in the plugin-qualified form the analyzer requires for a plugin diagnostic — `// ignore_for_file: keta_lints/keta_capture_unused`, not the bare code. `keta_internal_await` is an opt-in lint (`diagnostics: keta_internal_await: true`), meaningful only over keta's own source. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
+The seven route/query/body/canonical/tx/key/order rules are warnings, on by default once the plugin is enabled, and surface the same IDs and messages as the CLI; `// ignore:` / `// ignore_for_file:` comments suppress them, written in the plugin-qualified form the analyzer requires for a plugin diagnostic — `// ignore_for_file: keta_lints/keta_capture_unused`, not the bare code. Cross-file checks — contract drift among them — remain CLI-authoritative and are not part of the plugin.
 
 ## Deliberately not attempted
 
@@ -96,7 +94,7 @@ The project gate is that each documented invariant has a test. The map:
 | canonical missing/drift/schema/type findings; refusal messages name the real blocker; abstract/sealed/subclass and hand-modified mappers are left silent; schema drift is independent of the mappers | `test/canonical_check_test.dart` |
 | fix materializes and reconciles whole members without corrupting source, touches only the drifted member (comments elsewhere survive), and refuses what it must not touch | `test/canonical_fix_test.dart` |
 | contract drift in every direction; distinct axes on one field get distinct IDs; enum member order is not drift; a malformed oracle is descriptive drift, not a crash | `test/drift_test.dart` |
-| the route, query, key, tx-order, and internal-await rules, including `keta:allow-await` suppression and the distinct-ID regressions | `test/keta_lints_test.dart` |
+| the route, query, key, and tx-order rules, including the distinct-ID regressions | `test/keta_lints_test.dart` |
 | the plugin rules fire with the exact IDs and messages the CLI produces, and `// ignore:` comments suppress them | `test/plugin/rules_test.dart` |
 | scaffold output shapes — canonical DTOs, 501 route skeletons, contract tests, enhanced enums — plus `ScaffoldError` on every out-of-canonical or malformed input, and a scaffold → check → fix round-trip that converges clean | `test/scaffold_test.dart` |
 

@@ -23,7 +23,6 @@ import 'package:analyzer/error/error.dart';
 
 import '../canonical.dart';
 import '../diagnostic.dart';
-import '../internal_await.dart';
 import '../key_lint.dart';
 import '../middleware_order_lint.dart';
 import '../package_path.dart';
@@ -93,11 +92,6 @@ const _txOutsideRecover = LintCode(
 );
 const _middlewareOrder = LintCode(
   'keta_middleware_order',
-  '{0}',
-  severity: DiagnosticSeverity.WARNING,
-);
-const _internalAwait = LintCode(
-  'keta_internal_await',
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
@@ -315,26 +309,4 @@ class KetaKeyRule extends _KetaRule {
 
   @override
   Map<String, LintCode> get _codes => const {'keta_key_inline': _keyInline};
-}
-
-/// `keta_internal_await` — `await` on the framework's synchronous path. Opt-in
-/// (registered as a lint), because it is meaningful only over keta's own
-/// composition modules, not consumer code.
-class KetaInternalAwaitRule extends _KetaRule {
-  new()
-    : super(
-        name: 'keta_internal_await',
-        description:
-            'await defeats the Future-free synchronous path; use chain()/guard() '
-            'or justify it with // keta:allow-await.',
-      );
-
-  @override
-  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
-      internalAwaitDiagnosticsUnit(unit.unit, unit.content, file: file);
-
-  @override
-  Map<String, LintCode> get _codes => const {
-    'keta_internal_await': _internalAwait,
-  };
 }

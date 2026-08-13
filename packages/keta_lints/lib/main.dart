@@ -9,9 +9,6 @@
 ///   # or, within this workspace / for local development:
 ///   #   keta_lints:
 ///   #     path: ../keta_lints
-///   # keta_internal_await is a lint (framework-development only); opt in with:
-///   #     diagnostics:
-///   #       keta_internal_await: true
 /// ```
 ///
 /// The seven route/query/request-body/canonical/tx/middleware-order/key rules
@@ -34,7 +31,6 @@ class KetaPlugin extends Plugin {
 
   @override
   void register(PluginRegistry registry) {
-    // Enabled by default (analyzer "warnings").
     registry.registerWarningRule(KetaRouteRule());
     registry.registerWarningRule(KetaQueryRule());
     registry.registerWarningRule(KetaRequestBodyRule());
@@ -42,7 +38,5 @@ class KetaPlugin extends Plugin {
     registry.registerWarningRule(KetaTxOrderRule());
     registry.registerWarningRule(KetaMiddlewareOrderRule());
     registry.registerWarningRule(KetaKeyRule());
-    // Opt-in (analyzer "lint"): only meaningful over keta's own source.
-    registry.registerLintRule(KetaInternalAwaitRule());
   }
 }
