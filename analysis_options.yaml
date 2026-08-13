@@ -2,13 +2,15 @@ include: package:lints/recommended.yaml
 
 analyzer:
   language:
-    strict-casts: true
+    # strict-casts and strict-raw-types were replaced by the no_dynamic_casts
+    # and no_raw_types lint rules in Dart 3.13; both are in the linter block
+    # below. strict-inference has no lint replacement, so it stays here.
     strict-inference: true
-    strict-raw-types: true
 
 linter:
   rules:
     always_declare_return_types: true
+    async_return_with_no_await: true
     avoid_catching_errors: true
     avoid_dynamic_calls: true
     avoid_void_async: true
@@ -16,6 +18,11 @@ linter:
     close_sinks: true
     directives_ordering: true
     no_adjacent_strings_in_list: true
+    # The Dart 3.13 replacements for strict-casts / strict-raw-types. They
+    # report as info rather than error, which this repo's CI treats as fatal
+    # (`dart analyze --fatal-infos`), so the gate is unchanged.
+    no_dynamic_casts: true
+    no_raw_types: true
     only_throw_errors: true
     prefer_const_constructors_in_immutables: true
     prefer_const_constructors: true
@@ -31,4 +38,5 @@ linter:
     unawaited_futures: true
     unnecessary_breaks: true
     unnecessary_statements: true
+    unnecessary_type_name_in_constructor: true
     use_super_parameters: true
