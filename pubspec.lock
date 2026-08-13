@@ -429,10 +429,10 @@ packages:
     dependency: transitive
     description:
       name: test_reflective_loader
-      sha256: e2bb34c6d396eafd332f364ca71d17e70d37268f4ec8b04a00bb7f2d16df2510
+      sha256: d828d5ca15179aaac2aaf8f510cf0a52ec28e0031681b044ec5e581a4b8002e7
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.3"
+    version: "0.4.0"
   typed_data:
     dependency: transitive
     description:
