@@ -9,6 +9,7 @@ import 'package:keta_lints/keta_lints.dart';
 /// dart run keta_lints:check canonical <file-or-dir> ...
 /// dart run keta_lints:check routes <file-or-dir> ...
 /// dart run keta_lints:check query <file-or-dir> ...
+/// dart run keta_lints:check body <file-or-dir> ...
 /// dart run keta_lints:check internal-await <file-or-dir> ...
 /// dart run keta_lints:check key <file-or-dir> ...
 /// dart run keta_lints:check tx <file-or-dir> ...
@@ -17,7 +18,9 @@ import 'package:keta_lints/keta_lints.dart';
 /// `drift` is the contract-drift document diff between the externally-supplied
 /// contract (oracle) and the OpenAPI the code emits. `canonical` reports DTOs
 /// whose mappers are missing or drifted. `routes` reports unknown params and
-/// unused captures. `internal-await` guards the framework's synchronous path.
+/// unused captures. `body` reports a declared `RouteDoc.requestBody` the handler
+/// never validates against — the declaration is emitted into OpenAPI and read by
+/// nothing at runtime. `internal-await` guards the framework's synchronous path.
 /// `key` reports a Context key constructed inline at a get/tryGet/set call.
 /// `tx` reports `use(tx())` registered outside `use(recover())`. `order`
 /// reports any other `use()` run whose middleware positions descend.
@@ -25,7 +28,7 @@ void main(List<String> args) {
   if (args.isEmpty) {
     stderr.writeln(
       'usage: check '
-      '<drift|canonical|routes|query|internal-await|key|tx|order> ...',
+      '<drift|canonical|routes|query|body|internal-await|key|tx|order> ...',
     );
     exit(64);
   }
@@ -42,6 +45,12 @@ void main(List<String> args) {
       _sourceCheck(args.sublist(1), routeDiagnostics, 'no route issues');
     case 'query':
       _sourceCheck(args.sublist(1), queryDiagnostics, 'no query issues');
+    case 'body':
+      _sourceCheck(
+        args.sublist(1),
+        requestBodyDiagnostics,
+        'no request-body issues',
+      );
     case 'internal-await':
       _sourceCheck(
         args.sublist(1),

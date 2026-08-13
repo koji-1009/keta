@@ -16,13 +16,14 @@ dart run keta_lints:fix canonical lib/     # materialize / reconcile, in place
 dart run keta_lints:check canonical lib/   # converged: exits 0
 ```
 
-`check` covers eight subcommands, each over files or directories (except `drift`, which takes two documents):
+`check` covers nine subcommands, each over files or directories (except `drift`, which takes two documents):
 
 ```
 dart run keta_lints:check drift <oracle.yaml> <shadow.yaml>
 dart run keta_lints:check canonical <file-or-dir> ...
 dart run keta_lints:check routes <file-or-dir> ...
 dart run keta_lints:check query <file-or-dir> ...
+dart run keta_lints:check body <file-or-dir> ...
 dart run keta_lints:check internal-await <file-or-dir> ...
 dart run keta_lints:check key <file-or-dir> ...
 dart run keta_lints:check tx <file-or-dir> ...
@@ -47,6 +48,8 @@ Check and fix consult the *same* recognizer, so they never disagree. A class is 
 | `keta_capture_unused` | a path capture the handler never reads via `c.param` | `routes` |
 | `keta_query_undeclared` | `c.query`/`tryQuery`/`queryAll` on a name not declared in `RouteDoc(query: [...])` | `query` |
 | `keta_query_drift` | a query param declared `required: true` but read with `tryQuery` | `query` |
+| `keta_request_body_unvalidated` | a route declares `RouteDoc(requestBody: x)` and reads the body, but never gates it with `x.require`/`requireMap` | `body` |
+| `keta_request_body_drift` | it gates the body with a *different* schema than the one it declared | `body` |
 | `keta_key_inline` | a `Key(...)` constructed inline at a `get`/`tryGet`/`set` call — identity keys make the value unreachable | `key` |
 | `keta_tx_outside_recover` | `use(tx())` registered before `use(recover())`, so the transaction commits a failed request | `tx` |
 | `keta_middleware_order` | a `use()` run whose middleware ranks descend, so an outer middleware is registered inside an inner one | `order` |

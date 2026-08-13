@@ -116,6 +116,34 @@ class Dto {
       expect(r.stdout, contains('keta_tx_outside_recover'));
     });
 
+    test('body: exits 0 when the declared schema gates the body', () {
+      final r = _run(_script('check.dart'), [
+        'body',
+        write(
+          'ok.dart',
+          "void register(app) { app.post('/u', (c) async => "
+              'c.json(s.requireMap(await c.body())), '
+              'doc: const RouteDoc(success: Success(), requestBody: s)); }',
+        ),
+      ]);
+      expect(r.exitCode, 0);
+      expect(r.stdout, contains('no request-body issues'));
+    });
+
+    test('body: exits 1 when a declared requestBody is never validated', () {
+      final r = _run(_script('check.dart'), [
+        'body',
+        write(
+          'bad.dart',
+          "void register(app) { app.post('/u', (c) async => "
+              'c.json(await c.body()), '
+              'doc: const RouteDoc(success: Success(), requestBody: s)); }',
+        ),
+      ]);
+      expect(r.exitCode, 1);
+      expect(r.stdout, contains('keta_request_body_unvalidated'));
+    });
+
     test('a finding carries the same stable id whether the file is addressed '
         'absolutely (as the analyzer plugin supplies it) or relatively (as a '
         'user invokes the CLI) — the item-1 portability guarantee, end to end', () {

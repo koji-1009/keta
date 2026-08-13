@@ -472,6 +472,142 @@ void register(app) {
     });
   });
 
+  group('request-body lint', () {
+    test('a declared requestBody the handler never validates is flagged', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async {
+    final dto = UserDto.fromJson(await c.body() as Map<String, Object?>);
+    return c.json(dto.toJson());
+  }, doc: const RouteDoc(success: Success(status: 201),
+      requestBody: userDtoSchema));
+}
+''';
+      final d = requestBodyDiagnostics(source);
+      expect(d.single.rule, 'keta_request_body_unvalidated');
+      expect(d.single.message, contains('userDtoSchema'));
+    });
+
+    test('validating against a different schema is drift', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async {
+    final dto = UserDto.fromJson(otherSchema.requireMap(await c.body()));
+    return c.json(dto.toJson());
+  }, doc: const RouteDoc(success: Success(status: 201),
+      requestBody: userDtoSchema));
+}
+''';
+      final d = requestBodyDiagnostics(source);
+      expect(d.single.rule, 'keta_request_body_drift');
+      expect(d.single.message, contains('userDtoSchema'));
+      expect(d.single.message, contains('otherSchema'));
+    });
+
+    test('validating against the declared schema is clean', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async {
+    final dto = UserDto.fromJson(userDtoSchema.requireMap(await c.body()));
+    return c.json(dto.toJson());
+  }, doc: const RouteDoc(success: Success(status: 201),
+      requestBody: userDtoSchema));
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('the untyped require() primitive counts as validation too', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async {
+    final v = tagsSchema.require(await c.body());
+    return c.json(v);
+  }, doc: const RouteDoc(success: Success(), requestBody: tagsSchema));
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('a handler that reads no body is skipped (validation may be in a '
+        'helper this file cannot see)', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) => persist(c),
+      doc: const RouteDoc(success: Success(), requestBody: userDtoSchema));
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('a route declaring no requestBody is not this rule\'s business', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async => c.json(await c.body()),
+      doc: const RouteDoc(success: Success()));
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('a non-inline doc is not second-guessed', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async => c.json(await c.body()), doc: createUserDoc);
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('a requestBody that is not a plain identifier is skipped', () {
+      const source = '''
+void register(app) {
+  app.post('/u', (c) async => c.json(await c.body()),
+      doc: RouteDoc(success: const Success(),
+          requestBody: listSchema(userDtoSchema)));
+}
+''';
+      expect(requestBodyDiagnostics(source), isEmpty);
+    });
+
+    test('bodyBytes and bodyStream count as reading the body', () {
+      const bytes = '''
+void register(app) {
+  app.post('/u', (c) async => c.json(await c.bodyBytes()),
+      doc: const RouteDoc(success: Success(), requestBody: blobSchema));
+}
+''';
+      const stream = '''
+void register(app) {
+  app.post('/u', (c) async => c.json(await store(c.bodyStream())),
+      doc: const RouteDoc(success: Success(), requestBody: blobSchema));
+}
+''';
+      expect(
+        requestBodyDiagnostics(bytes).single.rule,
+        'keta_request_body_unvalidated',
+      );
+      expect(
+        requestBodyDiagnostics(stream).single.rule,
+        'keta_request_body_unvalidated',
+      );
+    });
+
+    test('two unvalidated routes in one file get distinct ids', () {
+      const source = '''
+void register(app) {
+  app.post('/a', (c) async => c.json(await c.body()),
+      doc: const RouteDoc(success: Success(), requestBody: userDtoSchema));
+  app.put('/b', (c) async => c.json(await c.body()),
+      doc: const RouteDoc(success: Success(), requestBody: userDtoSchema));
+}
+''';
+      final d = requestBodyDiagnostics(source);
+      expect(d, hasLength(2));
+      expect(d.map((e) => e.id).toSet(), hasLength(2));
+    });
+  });
+
   group('keyDiagnostics', () {
     test('an inline Key in c.get is keta_key_inline', () {
       const source = '''

@@ -13,6 +13,7 @@ export 'src/key_lint.dart' show keyDiagnostics;
 export 'src/middleware_order_lint.dart' show middlewareOrderDiagnostics;
 export 'src/package_path.dart' show packageRelativePath;
 export 'src/query_lint.dart' show queryDiagnostics;
+export 'src/request_body_lint.dart' show requestBodyDiagnostics;
 export 'src/routes_lint.dart' show routeDiagnostics;
 export 'src/tx_order.dart' show txOrderDiagnostics;
 export 'src/yaml_plain.dart' show loadYamlDocument, yamlToPlain;
