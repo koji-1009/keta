@@ -14,9 +14,8 @@ import 'keta_db.dart';
 /// Runs the behaviour every [Db] adapter owes its callers, against a live
 /// engine, so the floor is written once instead of once per adapter.
 ///
-/// Before this existed keta_sqlite and keta_rds each wrote their own
-/// expectations, and the gaps were invisible: the SQLite suite had no boolean
-/// test at all, because nobody looking only at SQLite would think to add one.
+/// Per-adapter expectations leave invisible gaps — nobody looking only at
+/// SQLite thinks to write a boolean test, because on SQLite there is no boolean.
 /// A shared floor makes an omission structural rather than a matter of who
 /// remembered what.
 ///

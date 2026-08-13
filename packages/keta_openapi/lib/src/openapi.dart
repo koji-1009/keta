@@ -42,18 +42,12 @@ class const OpenApi._(final Map<String, Object?> document) {
       final routeLabel = '${route.method} $path';
       final pathItem = paths.putIfAbsent(path, () => {});
       final method = route.method.toLowerCase();
-      // Two routes with the same method+template would otherwise overwrite
-      // one another here, silently, in registration order — the document
-      // would then depend on registration order despite the determinism
-      // contract above. `App.compile` catches this too, but this walk can run
-      // standalone (a tool/openapi.dart that never serves), so it must catch
-      // it independently — and it must catch the same *shape* of conflict.
-      // `path` embeds capture names (`{id}` vs `{userId}`), so two routes
-      // differing only in capture name would land in two different `paths`
-      // entries here and slip past a `path`-keyed guard, yet `App.compile`
-      // deliberately treats them as one conflict (`conflictKey` collapses
-      // every capture to `*`). The guard therefore keys off that same
-      // collapsed shape, not off `path`.
+      // This walk can run standalone (a tool/openapi.dart that never serves),
+      // so it must catch a route conflict independently of `App.compile` — and
+      // catch the same *shape* of one. Keying off `path` would not: `path`
+      // embeds capture names, so `/users/{id}` and `/users/{userId}` would land
+      // in two entries here while `App.compile` treats them as one conflict.
+      // `conflictKey` collapses every capture to `*`, which is that shape.
       final conflict = conflictKey(route.method, route.segments);
       if (!routeConflicts.add(conflict)) {
         throw StateError('route conflict: $routeLabel registered twice');
@@ -328,8 +322,8 @@ Map<String, T> _sortedByKey<T>(Map<String, T> map) => {
 /// request, success, or failure — honors its own declared media type: a request
 /// body (e.g. `multipart/form-data` for an upload), a [Success.contentType], and
 /// a [Failure.contentType] (e.g. `application/problem+json`) each document what
-/// is truly on the wire. A bare [Schema] failure still means `application/json`,
-/// the common case, but that default now lives at the call site, not here.
+/// is truly on the wire. A bare [Schema] failure means `application/json`, the
+/// common case; that default lives at the call site, not here.
 Map<String, Object?> _body(Schema schema, String mediaType) => {
   'content': {
     mediaType: {
@@ -342,7 +336,8 @@ Map<String, Object?> _body(Schema schema, String mediaType) => {
 /// `'Status <code>'` for a code with no registered name. Used for every
 /// generated response `description` — success, failure, the fabricated 200, and
 /// the automatic 401 — so the description is a deterministic projection of the
-/// status, not a fixed `'OK'`/`''` that lied for a 201, 204, 302, or any 4xx.
+/// status, rather than a fixed `'OK'`/`''` that would be wrong for a 201, 204,
+/// 302, or any 4xx.
 /// Only codes keta can actually emit (2xx/3xx successes, 4xx/5xx failures) need
 /// appear; 101 is described by [SwitchingProtocols], not from this table.
 String _reasonPhrase(int status) => _reasonPhrases[status] ?? 'Status $status';

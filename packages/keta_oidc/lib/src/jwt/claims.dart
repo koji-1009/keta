@@ -39,9 +39,8 @@ final class const JwtClaims._({
   ///
   /// **Surfaced but not validated for age.** RFC 7519 makes `iat` informational
   /// — it is not a validity boundary the way `exp`/`nbf` are — so this layer
-  /// does not reject a token for being "too old" by default. A maximum-age knob
-  /// is a deliberate non-feature here rather than a forgotten one; it can be
-  /// added when a concrete need appears, without changing this shape.
+  /// does not reject a token for being "too old", and offers no maximum-age
+  /// knob.
   required final DateTime? issuedAt,
 
   /// The full decoded payload, including registered claims. Read application

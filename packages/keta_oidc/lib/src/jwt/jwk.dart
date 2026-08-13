@@ -21,9 +21,9 @@ import 'rejection.dart';
 ///
 /// ## Long-lived, and cacheable by identity
 ///
-/// [Jwk] instances are **long-lived and reused across calls**: the JWKS cache (a
-/// later wave) parses a key once and hands the *same* instance to the verifier
-/// for every token that key signs. A backend that must convert the raw
+/// [Jwk] instances are **long-lived and reused across calls**: a [JwksSource]
+/// parses a key once and hands the *same* instance to the verifier for every
+/// token that key signs. A backend that must convert the raw
 /// components into a native key object (and would rather not repeat that work
 /// per request) MAY cache the derived key **keyed on [Jwk] identity** — an
 /// [Expando] over the [Jwk] instance is the intended mechanism. This class is

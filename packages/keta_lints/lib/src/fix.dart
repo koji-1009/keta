@@ -75,9 +75,9 @@ void _fixClass(
   // The Schema-vs-fields comparison doesn't depend on the mapper shape at all,
   // and regenerating the Schema needs only the resolvable field model — so a
   // class whose MAPPERS the fixer refuses (a positional ctor, a hand-modified/
-  // spread toJson) still gets its drifted Schema reconciled, instead of the old
-  // behavior where any mapper blocker suppressed the Schema fix and shipped a
-  // stale contract. The guard is [isSchemaFixable] (only an unresolvable field
+  // spread toJson) still gets its drifted Schema reconciled; a mapper blocker
+  // suppressing the Schema fix would ship a stale contract. The guard is
+  // [isSchemaFixable] (only an unresolvable field
   // type blocks it), NOT [isFixable]. The Schema edit spans the top-level
   // initializer, disjoint from every mapper edit (which live inside the class
   // body), so the non-overlap invariant holds — _applyEdits verifies it.
@@ -107,10 +107,10 @@ void _fixClass(
 
   // D-2: decide drift PER MEMBER, and regenerate ONLY the member(s) that
   // actually drifted, so a non-drifted member is left byte-for-byte untouched
-  // and its inline comments survive. Previously any drift rewrote fromJson,
-  // toJson, AND the Schema wholesale — a schema-only drift silently reformatted
-  // both mappers, a fromJson cast drift rewrote toJson, and so on. Each axis is
-  // now independent:
+  // and its inline comments survive. Rewriting fromJson, toJson AND the Schema
+  // on any drift would reformat members that did not change — a schema-only
+  // drift touching both mappers, a fromJson cast drift rewriting toJson. Each
+  // axis is independent:
   //
   //  * a PRESENT fromJson drifts when it reads a key set other than the fields,
   //    carries a stale `as T` cast (type drift — invisible to a key-set diff),

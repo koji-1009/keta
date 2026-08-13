@@ -12,12 +12,11 @@ library;
 /// `middleware.dart`'s `otel()`. Do not `record` with a high-cardinality or
 /// attacker-controlled method or route — either grows memory without bound.
 ///
-/// The duration family is a Prometheus *histogram*, not a summary — a prior
-/// design emitted only `_sum`/`_count`, which cannot answer "what's p95
-/// latency" (a summary's mean is derivable; a quantile is not, once the raw
-/// samples are gone). A histogram instead buckets every observation as it
-/// arrives, so `histogram_quantile` can estimate quantiles later from the
-/// bucket counts, at the query engine, even after aggregating across series.
+/// The duration family is a Prometheus *histogram*, not a summary. `_sum`/
+/// `_count` alone cannot answer "what is p95 latency" — a mean is derivable
+/// from them, a quantile is not, once the raw samples are gone. Bucketing every
+/// observation as it arrives lets `histogram_quantile` estimate quantiles later
+/// at the query engine, even after aggregating across series.
 ///
 /// Each (method, route, status) key renders one cumulative
 /// `_bucket{...,le="<edge>"}` line per entry in [buckets] (ascending, each
@@ -135,9 +134,8 @@ class MetricsRegistry({List<double> buckets = defaultBuckets}) {
   /// Validates a caller-supplied bucket list against the constraints the
   /// histogram exposition depends on, returning an unmodifiable copy.
   ///
-  /// - Non-empty: a histogram with no buckets is just `_sum`/`_count`, i.e.
-  ///   the summary this type no longer supports — construct one with at
-  ///   least one boundary.
+  /// - Non-empty: a histogram with no buckets is just `_sum`/`_count`, which
+  ///   answers no quantile — pass at least one boundary.
   /// - Strictly ascending: the cumulative-sum rendering in [prometheus] walks
   ///   `_buckets` once, front to back, assuming each edge is greater than the
   ///   last; a tie or a descending pair would silently misrender.

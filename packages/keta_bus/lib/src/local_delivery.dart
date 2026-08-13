@@ -14,12 +14,10 @@ import 'dart:async';
 /// message is dropped — the at-most-once rule falling straight out of broadcast
 /// [Stream] semantics.
 ///
-/// A controller is also *reclaimed* the moment its last listener cancels: its
-/// `onCancel` removes the topic entry, so a client-driven topic namespace (one
-/// topic per session id, say) cannot leave a dead broadcast controller resident
-/// for the life of the process. The next [subscribe] recreates the controller
-/// lazily, exactly as the first one did. A [deliver] racing that removal is a
-/// safe no-op drop (`_topics[topic]?.add` on a missing entry does nothing) —
+/// A controller is also *reclaimed* the moment its last listener cancels, so a
+/// client-driven topic namespace (one topic per session id, say) cannot leave a
+/// dead controller resident for the life of the process. The next [subscribe]
+/// recreates it. A [deliver] racing that removal is a safe no-op drop —
 /// at-most-once means a message with no live listener is correctly dropped.
 class LocalDelivery {
   final Map<String, StreamController<Object?>> _topics = {};
@@ -40,15 +38,11 @@ class LocalDelivery {
   /// (and again after a previous controller was reclaimed at zero listeners).
   Stream<Object?> subscribe(String topic) {
     return _topics.putIfAbsent(topic, () {
-      // Self-reference so `onCancel` can reclaim the topic only when the map
-      // still holds THIS controller. With a broadcast controller, `onCancel`
-      // fires when the LAST listener leaves — a topic with two subscribers,
-      // one cancelling, does not reclaim (the other keeps it live). The
-      // identity guard means a controller that was already reclaimed and
-      // replaced (e.g. a cached stream re-listened then cancelled) never
-      // removes its successor. `close()` clears `_topics` before closing the
-      // controllers, so an `onCancel` that fires during close finds no match
-      // and is a safe no-op — no mid-close map corruption.
+      // The identity guard is what makes reclaim safe: a controller that was
+      // already replaced must never remove its successor, and an `onCancel`
+      // firing during `close()` (which clears the map first) must find no
+      // match. `hasListener` covers the two-subscriber case, where `onCancel`
+      // fires for one while the other keeps the topic live.
       late final StreamController<Object?> controller;
       controller = StreamController<Object?>.broadcast(
         onCancel: () {

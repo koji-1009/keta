@@ -15,13 +15,12 @@ final class const JoseHeader._({
   /// produces a [JoseHeader] — [Jws.parse] rejects it as [JwtMalformed] first.
   required final JwsAlgorithm algorithm,
 
-  /// The key id (`kid`), or `null`. The JWKS wave matches this against the keys
+  /// The key id (`kid`), or `null`. A [JwksSource] matches this against the keys
   /// it holds to resolve the verification key.
   required final String? kid,
 
   /// The media type (`typ`), or `null`. Surfaced, not enforced: RFC 9068's
-  /// `at+jwt` typing is a policy a later wave can add; this layer does not
-  /// presume it.
+  /// `at+jwt` typing is a policy this layer does not presume.
   required final String? type,
 
   /// The full decoded header object.

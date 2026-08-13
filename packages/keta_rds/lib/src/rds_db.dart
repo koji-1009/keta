@@ -145,19 +145,12 @@ class RdsDb._(
 
   // Stamped into the transaction's zone so a nested transaction() call is
   // caught as a StateError instead of silently pinning a second connection and
-  // running an independent transaction under the caller's nose. Each
-  // transaction() call stamps a *fresh* token (not a constant), and the
-  // no-nest check below is a membership test against the tokens of
-  // transactions genuinely running right now — mirroring keta_sqlite's
-  // identity-checked _inActiveTxZone (sqlite_db.dart) — so a zone captured
-  // inside one transaction and leaked or reused after that transaction
-  // finished is not mistaken for nesting just because the token object still
-  // exists somewhere. Unlike keta_sqlite's single serialized connection (at
-  // most one transaction ever active, so a single field suffices), RdsDb pools
-  // several connections and genuinely concurrent transactions are normal
-  // (see the contract suite's "concurrent transactions serialize" test), so a
-  // *set* of the currently-live tokens stands in for sqlite's single
-  // `_currentTx` field.
+  // running an independent transaction under the caller's nose. Each call
+  // stamps a *fresh* token and the no-nest check is a membership test against
+  // the tokens running right now, so a zone captured inside one transaction and
+  // reused after it finished is not mistaken for nesting. A set rather than a
+  // single field because this adapter pools several connections and concurrent
+  // transactions are normal.
   final Object _txZoneKey = Object();
   final Set<Object> _activeTx = {};
 
@@ -316,11 +309,6 @@ Future<List<Map<String, Object?>>> _runQuery(
   return [for (final row in result) mapRow(row)];
 }
 
-/// Runs a statement on [session] and returns the affected-row count. A
-/// parameterless statement goes through the simple query protocol (the driver
-/// picks it automatically for a parameterless `ignoreRows` execute), which is
-/// what allows a migration's several `;`-separated statements to run in one
-/// call; a parameterized statement is prepared and bound via `?` placeholders.
 /// Opens a connection via [open] and, when [statementTimeout] is set, pins a
 /// session-level `statement_timeout` on it before it is ever handed out, so
 /// every connection any pool opens carries the cap. Issued at open time (not
@@ -367,6 +355,11 @@ Future<Connection> openWithTimeout(
   return conn;
 }
 
+/// Runs a statement on [session] and returns the affected-row count. A
+/// parameterless statement goes through the simple query protocol (the driver
+/// picks it automatically for a parameterless `ignoreRows` execute), which is
+/// what allows a migration's several `;`-separated statements to run in one
+/// call; a parameterized statement is prepared and bound via `?` placeholders.
 Future<int> _runExecute(
   Session session,
   String sql,

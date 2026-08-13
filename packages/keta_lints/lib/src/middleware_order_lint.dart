@@ -168,9 +168,7 @@ List<_Use> _useOf(Expression expression) {
   if (expression is! MethodInvocation || expression.methodName.name != 'use') {
     return const [];
   }
-  // Exactly one argument, so a `use(m, order: ...)` — two arguments — drops out
-  // here: an explicit position is deliberate placement, and checking it against
-  // the one keta shipped would flag the override the application chose.
+  // Exactly one argument, so a `use(m, order: ...)` drops out here — see above.
   final args = expression.argumentList.arguments;
   if (args.length != 1) return const [];
   final arg = args.first;

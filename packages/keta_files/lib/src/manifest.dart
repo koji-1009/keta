@@ -18,9 +18,7 @@ const _startMarkers = {_importsMarker, _routesMarker};
 /// taking "syncing is a no-op" with it, which is the only assertion standing
 /// between the tree and the routes disagreeing.
 ///
-/// Saying so in the file also beats the alternative of the generator carrying a
-/// formatter to agree with: this region is machine-owned, and now says so to the
-/// formatter and the reader in the same breath.
+/// The alternative would be a generator that carries a formatter to agree with.
 const _formatOff = '// dart format off';
 const _formatOn = '// dart format on';
 
@@ -59,11 +57,9 @@ String _importFor(RouteFile file) => _importLine(file.importPath, file.prefix);
 /// sorted by URL/import path rather than alphabetically interleaved with the
 /// file's hand-written imports, and `library_prefixes`, because every alias
 /// is `$`-led on purpose (see [_aliasFor]) and so can never be
-/// `lower_underscore_case`. Suppressing both here — on the line that triggers
-/// them, naming exactly those two diagnostics — means the generator owns the
-/// noise its own convention creates, instead of every consuming project
-/// carrying a matching `ignore_for_file` the generator did not ask for and the
-/// user did not choose.
+/// `lower_underscore_case`. Suppressed on the line that triggers them, so the
+/// generator owns the noise its own convention creates rather than every
+/// consuming project carrying an `ignore_for_file` it did not choose.
 const _importIgnore = '// ignore: directives_ordering, library_prefixes';
 
 String _importLine(String importPath, String prefix) =>

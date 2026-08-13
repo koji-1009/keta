@@ -7,7 +7,7 @@ import '../jwt/rejection.dart';
 /// The seam that resolves a token's [JoseHeader] to the [Jwk] to verify it with.
 /// It is where key *sourcing* lives — static keys, or an HTTP JWKS endpoint with
 /// caching and refresh — kept behind one interface so the validator and the
-/// middleware (a later wave) depend on the seam, not on where keys come from.
+/// middleware depend on the seam, not on where keys come from.
 ///
 /// ## Contract
 ///
@@ -55,8 +55,8 @@ abstract interface class JwksSource {
 /// returned something unusable, and this is a cold source.
 ///
 /// **Not a [JwtRejection].** The presented token is not the problem; the key
-/// infrastructure is. The middleware wave maps this to a `503` (with the token
-/// left unjudged), never to a `401`. The originating error is preserved in
+/// infrastructure is. The middleware maps this to a `503` (with the token left
+/// unjudged), never to a `401`. The originating error is preserved in
 /// [cause] (e.g. a `SocketException`, `TimeoutException`, or [JwksMalformed]),
 /// so a raw transport error never escapes this package unwrapped.
 final class const JwksUnavailable(

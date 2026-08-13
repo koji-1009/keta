@@ -53,9 +53,8 @@ typedef _Bind<E> = void Function(
 ///
 /// The two are one value because they describe one thing. Held apart — a `get`
 /// here and a `getDoc` over there, matched up by name — a misspelling silently
-/// unbinds the document and the contract quietly stops describing the code.
-/// Measured: renaming `getDoc` to `getDocs` dropped a route's summary from the
-/// OpenAPI output with no diagnostic at all.
+/// unbinds the document, and the contract stops describing the code with no
+/// diagnostic anywhere.
 ///
 /// Which method this answers is the slot it occupies on [Exported], so it does
 /// not say.
@@ -74,8 +73,8 @@ final class const Serve<E>(
 ///
 /// One slot per method rather than a list, so the shape carries what a check
 /// would otherwise have to: a URL cannot answer `GET` twice, because there is
-/// nowhere to write it twice. As a list, `[Get(...), Get(...)]` compiled, and
-/// only keta's own boot-time `route conflict` caught it.
+/// nowhere to write it twice. A list would compile and leave the duplicate to
+/// keta's boot-time `route conflict`.
 ///
 /// This is a type rather than a set of conventionally-named top-level
 /// declarations because a convention enforced by string matching fails quietly.
@@ -127,8 +126,7 @@ class const Exported<E>({
   /// group — is what makes the ordering match keta's discipline: app-wide
   /// `app.use` middleware still wraps the whole dispatch (404/405 included), and
   /// what this composes runs inside it, root scope before admin scope before the
-  /// handler. A directory with no `_middleware.dart` contributes nothing, so an
-  /// ordinary route keeps binding exactly as before.
+  /// handler. A directory with no `_middleware.dart` contributes nothing.
   void bind(
     App<E> app,
     List<String> template, [

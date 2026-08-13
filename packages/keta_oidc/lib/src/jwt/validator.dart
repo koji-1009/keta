@@ -15,12 +15,11 @@ import 'signature_verifier.dart';
 /// ## What it does *not* do
 ///
 /// It does not parse the compact token ([Jws.parse] does that) and it does not
-/// resolve the key from the header's `kid` (the JWKS wave does that, and raises
+/// resolve the key from the header's `kid` (a [JwksSource] does, raising
 /// [JwtUnknownKey] when it cannot). The pipeline is deliberately three separate
 /// steps — parse, resolve, validate — so a caller reads the header's `kid` to
-/// pick a key *before* this validator ever runs, which is the order
-/// JWKS-based verification requires. This wave owns parse and validate; the
-/// resolve step is a clean seam left for JWKS.
+/// pick a key *before* this validator ever runs, which is the order JWKS-based
+/// verification requires.
 ///
 /// ## Order of checks
 ///
