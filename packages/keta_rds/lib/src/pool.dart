@@ -60,12 +60,9 @@ class Pool<C>(
       );
     }
     if (acquireTimeout <= Duration.zero) {
-      // A non-positive acquire wait is not "fail fast", it is broken: a
-      // saturated pool would return [Unavailable] the instant it saturates,
-      // never handing off a slot a concurrent release frees microseconds later
-      // — the FIFO waiter path (the whole point of a bounded wait) can never
-      // run. An authoring defect, refused loudly here rather than degrading
-      // every saturation into an immediate 503.
+      // Not "fail fast" but broken: a saturated pool would 503 the instant it
+      // saturates, never handing off a slot a concurrent release frees
+      // microseconds later, so the FIFO waiter path could never run.
       throw ArgumentError.value(
         acquireTimeout,
         'acquireTimeout',
@@ -73,14 +70,10 @@ class Pool<C>(
       );
     }
     if (maxIdleTime > Duration.zero && maxIdleTime.inMilliseconds < 1) {
-      // A non-positive maxIdleTime is a documented, deliberate "reaper off"
-      // (see the field doc); but a positive value under 1ms is an authoring
-      // defect. The reaper ticks at `maxIdleTime ~/ 2`, and any positive
-      // maxIdleTime under 2µs floors that to Duration.zero — a Timer.periodic
-      // that fires on every event-loop turn, pinning the isolate at 100% for a
-      // reap interval no deployment could want. Rejected here for the same
-      // reason RdsDb rejects a sub-millisecond statementTimeout: a
-      // sub-millisecond reap interval means the value, not the pool.
+      // A non-positive maxIdleTime is the documented "reaper off"; a positive
+      // value under 1ms is an authoring defect. The reaper ticks at
+      // `maxIdleTime ~/ 2`, which floors to Duration.zero — a Timer.periodic
+      // firing on every event-loop turn, pinning the isolate at 100%.
       throw ArgumentError.value(
         maxIdleTime,
         'maxIdleTime',
@@ -92,15 +85,12 @@ class Pool<C>(
   }
 
   final ListQueue<_Idle<C>> _idle = ListQueue<_Idle<C>>();
-  // A doubly-linked queue rather than [ListQueue]: [_takePermit] keeps the
-  // [DoubleLinkedQueueEntry] handed back by [DoubleLinkedQueue.addLast] (via
-  // [DoubleLinkedQueue.lastEntry]) for the waiter it just parked, so its
-  // timeout branch can unlink that exact node in O(1) — `entry.remove()` —
-  // instead of [ListQueue.remove]'s linear scan-then-shift. A saturation burst
-  // times out many waiters near together; the queue length is `w`, so an O(w)
-  // removal per timeout makes clearing the burst O(w²), right when the pool
-  // most needs to shed cheaply. FIFO order is unaffected: [_givePermit] still
-  // pops from the front with [DoubleLinkedQueue.removeFirst], itself O(1).
+  // Doubly-linked rather than a [ListQueue] so a timed-out waiter can unlink
+  // its own node in O(1) ([_takePermit] keeps the entry it parked). A
+  // saturation burst times out many waiters together, and [ListQueue.remove]'s
+  // linear scan would make clearing the burst O(w²) exactly when the pool most
+  // needs to shed cheaply. FIFO is unaffected — [_givePermit] still pops the
+  // front.
   final DoubleLinkedQueue<Completer<void>> _waiters =
       DoubleLinkedQueue<Completer<void>>();
 
@@ -144,9 +134,6 @@ class Pool<C>(
   /// [acquire], and the configured ceiling. See [PoolStats] for field
   /// semantics and intended use.
   ///
-  /// Reads [_checkedOut], [_idle], and [_waiters] directly rather than adding
-  /// any bookkeeping beyond what the pool already tracks for its own
-  /// checkout/release logic.
   PoolStats get stats => PoolStats(
     leased: _checkedOut,
     idle: _idle.length,
@@ -177,13 +164,10 @@ class Pool<C>(
         valid = validate == null || validate!(resource);
       } catch (_) {
         // validate() itself threw — not "returned false". The resource is
-        // already popped from _idle and this checkout already holds a permit
-        // and counts against _checkedOut, so an unguarded rethrow here would
-        // leak both: the resource ends up neither idle, in _out, nor disposed,
-        // and repeated occurrences wedge the pool at a permanently lower
-        // effective ceiling (eventually permanent 503s). Mirror _open's catch
-        // below: dispose the resource, undo the checkout and permit, nudge a
-        // drain in progress, then rethrow.
+        // already popped from _idle and this checkout already holds a permit,
+        // so an unguarded rethrow leaks both: the resource ends up neither
+        // idle, in _out, nor disposed, and repeats wedge the pool at a lower
+        // effective ceiling until every acquire 503s.
         unawaited(_safeClose(resource));
         _checkedOut--;
         _givePermit();
@@ -370,15 +354,11 @@ class _Idle<C>(final C resource, final DateTime returnedAt);
 
 /// A point-in-time snapshot of a [Pool]'s connection accounting.
 ///
-/// Every field is a direct read of counters the pool already keeps for its
-/// own checkout/release bookkeeping — nothing here is inferred or tracked
-/// solely for reporting. And every field is stale the instant it is taken: a
-/// concurrent [Pool.acquire] or [Pool.release] can change any of them before
-/// this value is even returned to the caller. Treat it as "roughly what the
-/// pool looked like just now", suited to a readiness/health handler or a
-/// diagnostic log line — not as a live view, and not as a synchronization
-/// primitive. This type takes no position on what a readiness policy should
-/// do with these numbers; that judgment belongs to the application.
+/// Every field is stale the instant it is taken: a concurrent [Pool.acquire] or
+/// [Pool.release] can change any of them before this value reaches the caller.
+/// Treat it as "roughly what the pool looked like just now" — suited to a
+/// readiness handler or a diagnostic log line, not a live view and not a
+/// synchronization primitive.
 class const PoolStats({
   /// Resources currently checked out by a caller (in [Pool.acquire] and not
   /// yet [Pool.release]d).

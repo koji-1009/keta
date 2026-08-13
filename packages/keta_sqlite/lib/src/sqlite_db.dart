@@ -39,24 +39,18 @@ class SqliteDb._(
   /// **Stated trade-off**: `busy_timeout`'s retry loop spins inside sqlite3's
   /// synchronous FFI call (see the class-level constraint above), so a
   /// cross-process writer contending for the file lock blocks this connection's
-  /// entire isolate — every request it serves, not only the one waiting on the
-  /// lock — for up to [lockTimeout], not just the one call. Measured: a 500ms
-  /// contention window fired zero event-loop timers on the blocked isolate.
-  /// Deployments expecting cross-process writers should keep [lockTimeout]
-  /// modest rather than relying on its 30s default. [transaction] opens with
-  /// `BEGIN IMMEDIATE`, so a write transaction takes the lock (and does its
-  /// bounded `busy_timeout` wait) at `BEGIN` rather than on first upgrade.
+  /// entire isolate — every request it serves, not only the one waiting — for up
+  /// to [lockTimeout]. Deployments expecting cross-process writers should keep
+  /// [lockTimeout] modest rather than relying on its 30s default. [transaction]
+  /// opens with `BEGIN IMMEDIATE`, so a write transaction takes the lock at
+  /// `BEGIN` rather than on first upgrade.
   ///
-  /// **[wal]** (opt-in, default off) switches this file to WAL journaling:
-  /// readers no longer block the single writer, and the writer no longer blocks
-  /// readers — across processes, not just within this isolate — which is the
-  /// win under the cross-process contention this adapter targets. The cost:
-  /// WAL keeps a shared-memory index (`-wal`/`-shm` sidecar files) that every
-  /// connection to the database must reach through the *same host's*
-  /// filesystem, so a WAL database cannot live on a network filesystem (NFS);
-  /// [_enableWal] reads the mode back and fails loudly if the switch did not
-  /// take. Left off, the file uses SQLite's default rollback journal — the
-  /// prior behavior, unchanged. WAL is a no-op for [memory] (see there).
+  /// **[wal]** (opt-in, default off) switches this file to WAL journaling, so
+  /// readers and the single writer stop blocking each other across processes.
+  /// The cost: WAL's shared-memory index (`-wal`/`-shm` sidecars) must be
+  /// reachable through the *same host's* filesystem, so a WAL database cannot
+  /// live on NFS; [_enableWal] reads the mode back and fails loudly if the
+  /// switch did not take. WAL is a no-op for [memory] (see there).
   factory open(
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),
@@ -66,12 +60,10 @@ class SqliteDb._(
 
   /// Opens a private in-memory database. See [open] for [lockTimeout].
   ///
-  /// [wal] is accepted for a uniform surface but is a deliberate no-op here: an
-  /// in-memory database has no file for WAL's `-wal`/`-shm` sidecar index, and
-  /// sqlite3 will not switch it — `PRAGMA journal_mode = WAL` silently returns
-  /// `memory` and the mode stays `memory` (measured). Rather than issue a pragma
-  /// whose result we would have to special-case, [memory] never asks for WAL, so
-  /// `memory(wal: true)` opens a normal in-memory database.
+  /// [wal] is accepted for a uniform surface but is a no-op here: an in-memory
+  /// database has no file for WAL's sidecar index, and sqlite3 declines the
+  /// switch silently rather than erroring. [memory] therefore never issues the
+  /// pragma, so `memory(wal: true)` opens a normal in-memory database.
   factory memory({
     Duration lockTimeout = const Duration(seconds: 30),
     bool wal = false,
@@ -183,26 +175,22 @@ class SqliteDb._(
     return _synchronized(
       () => runZoned(() async {
         _currentTx = token;
-        // Route BEGIN and COMMIT through _translating, the same wrapper
-        // rawQuery/rawExecute use, so the whole BEGIN..COMMIT span speaks
-        // keta's vocabulary — not just the statements inside `f`. Without this,
-        // a cross-connection lock timeout at `BEGIN IMMEDIATE` (the moment this
-        // adapter deliberately takes the write lock, so it is exactly where a
-        // contending writer surfaces) would escape as a raw SQLITE_BUSY
-        // SqliteException, breaking the loud, timed [Unavailable] the open-time
-        // doc promises. keta_rds wraps its BEGIN/COMMIT/ROLLBACK span the same
-        // way (RdsDb.transaction); this restores that symmetry.
+        // BEGIN and COMMIT go through _translating too, so the whole span
+        // speaks keta's vocabulary and not just the statements inside `f`: a
+        // cross-connection lock timeout lands at `BEGIN IMMEDIATE`, which is
+        // exactly where a contending writer surfaces, and untranslated it would
+        // escape as a raw SQLITE_BUSY instead of the timed [Unavailable] the
+        // open-time doc promises.
         _translating(() => _db.execute('BEGIN IMMEDIATE'));
         try {
           final result = await f(_conn);
           _translating(() => _db.execute('COMMIT'));
           return result;
         } catch (_) {
-          // Never let a ROLLBACK failure (e.g. the txn was already closed)
-          // mask the original error. Left raw, NOT routed through _translating:
-          // its outcome is swallowed either way, so translating the driver's
-          // vocabulary here would only build a keta exception nothing ever
-          // reads — the original error is what rethrows.
+          // Never let a ROLLBACK failure (e.g. the txn was already closed) mask
+          // the original error. Left raw rather than routed through
+          // _translating: the outcome is swallowed either way, so a translated
+          // exception here would be one nothing reads.
           try {
             _db.execute('ROLLBACK');
           } catch (_) {}
@@ -219,19 +207,12 @@ class SqliteDb._(
   /// chain as any other call, so it does not preempt or kill in-flight work.
   ///
   /// Deliberately does **not** go through [_synchronized]/[run]: those apply
-  /// [_lockTimeout], the request-path bound that exists so a caller waiting on
-  /// a busy connection fails loud in bounded time rather than hanging forever
-  /// (see [_lockTimeout]'s doc). [close] is not a request — under a saturated
-  /// lock queue, applying that same bound here would make `close()` itself
-  /// throw [Unavailable] and return with the connection still open, which is
-  /// worse than waiting: a server that believes it shut down its database
-  /// cleanly, but did not. So [close] waits for the current holder (and
-  /// everything already queued ahead of it) for as long as that takes, with no
-  /// timeout of its own. In practice this wait is short: shutdown
-  /// (`Server.shutdown` in package:keta) already drains in-flight requests,
-  /// bounded by its own `grace` period, before calling [close] — [close]'s
-  /// unbounded wait is a backstop against the request-path bound firing here
-  /// by accident, not a substitute for that draining.
+  /// [_lockTimeout], and under a saturated lock queue that bound would make
+  /// `close()` throw [Unavailable] and return with the connection still open —
+  /// a server that believes it shut its database down cleanly, but did not. So
+  /// [close] waits out the current holder for as long as it takes. `Server
+  /// .shutdown` already drains in-flight requests under its own grace before
+  /// calling this, so the wait is a backstop, not the drain.
   @override
   Future<void> close() {
     final done = Completer<void>();
@@ -296,17 +277,12 @@ class SqliteDb._(
 
   /// Maps [sql]'s result to `List<Map<String, Object?>>`, one map per row.
   ///
-  /// Builds each map from [ResultSet.rows] (`List<List<Object?>>`, positional,
-  /// 1:1 with [ResultSet.columnNames]) by direct indexing, rather than
-  /// iterating `result` as `Row` objects: each [Row] construction pays a
-  /// defensive copy (`List.unmodifiable(data)`, sqlite3 3.3.4
-  /// result_set.dart:107) and each `row[column]` lookup is a String-keyed
-  /// hashmap probe (`_calculatedIndexes[key]`) — both wasted here, since this
-  /// adapter fully materializes every row into a fresh map anyway. A
-  /// duplicate column name (`SELECT 1 AS x, 2 AS x`) keeps the same result
-  /// either way: `Row`'s map resolves via `_columnNames.lastIndexOf(column)`
-  /// (last occurrence wins), and a forward positional write into the map
-  /// comprehension below also ends on the last occurrence — pinned by a test.
+  /// Builds each map from [ResultSet.rows] (positional, 1:1 with
+  /// [ResultSet.columnNames]) by direct indexing rather than iterating `Row`
+  /// objects, each of which pays a defensive copy and a String-keyed probe per
+  /// lookup — both wasted when every row is materialized into a fresh map
+  /// anyway. A duplicate column name (`SELECT 1 AS x, 2 AS x`) resolves to the
+  /// last occurrence either way, which a test pins.
   List<Map<String, Object?>> rawQuery(String sql, List<Object?> params) =>
       _translating(() {
         final result = _db.select(sql, params);

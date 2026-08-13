@@ -18,10 +18,9 @@ typedef OtlpSender = Future<void> Function(String jsonPayload);
 /// the queue overflowed. The signature mirrors `Log.warn`'s `(message,
 /// fields)` so a caller can wire this straight to their own logger (e.g.
 /// `c.log.warn`) without this package depending on `package:keta`'s `Log`
-/// type. This replaces `enqueue`'s old per-call `onError` callback: once a
-/// batch can hold spans from many `enqueue` calls, a failure is no longer
-/// attributable to any one of them, so the seam moves to the exporter itself
-/// (set once, at construction) instead.
+/// type. The seam is on the exporter, set once at construction, rather than
+/// per-`enqueue`: a batch holds spans from many `enqueue` calls, so a failed
+/// send is not attributable to any one of them.
 typedef OtlpWarn = void Function(String message, Map<String, Object?> fields);
 
 /// A minimal OTLP/HTTP exporter. It encodes spans as OTLP/JSON and hands the

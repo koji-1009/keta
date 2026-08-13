@@ -59,24 +59,20 @@ class const MigrationResult(
 /// step writes the ledger — reading the freshly-written rows off a lagging
 /// replica would see the migration as still pending and re-apply it.
 ///
-/// **Single-applier contract (2026-07-17 adjudication)**: this function
-/// assumes exactly one concurrent applier. It takes no advisory lock and
-/// arbitrates nothing between callers — two processes racing this function
-/// against the same database can both read the ledger as "0003 pending" and
-/// both attempt to apply it. Multi-node deployments must serialize
-/// application externally (a CI/CD step, an init container, a dedicated job
-/// that runs once before the fleet boots) — keta ships no such arbitration.
-/// The division of labour is: apply is externally serialized (this
-/// function, run once); [VerifyMigrations.verifyMigrations] is what each
-/// node/isolate runs at boot, and it only reads. If the single-applier
-/// assumption is broken anyway, the race still fails loudly rather than
-/// corrupting the schema silently — but not as a ledger primary-key
-/// violation. Measured on SQLite: `BEGIN` takes the file lock, so the loser
-/// serializes there and fails with `SQLITE_BUSY`/lock-timeout, or with the
-/// migration body's own conflict (e.g. "table already exists") if it gets
-/// that far — the ledger's per-version primary key is only the last line of
-/// defense, reached only on an engine with transactional DDL that lets both
-/// racers complete the migration body and reach the ledger insert.
+/// **Single-applier contract (2026-07-17 adjudication)**: this function assumes
+/// exactly one concurrent applier. It takes no advisory lock and arbitrates
+/// nothing between callers, so two processes racing it against the same database
+/// can both read the ledger as "0003 pending" and both attempt to apply it.
+/// Multi-node deployments must serialize application externally (a CI/CD step,
+/// an init container, a job that runs once before the fleet boots). The division
+/// of labour is: apply runs once, externally serialized; each node runs
+/// [VerifyMigrations.verifyMigrations] at boot, which only reads.
+///
+/// Broken anyway, the race still fails loudly rather than corrupting the schema:
+/// on SQLite the loser serializes at `BEGIN` and fails with
+/// `SQLITE_BUSY`/lock-timeout, or on the migration body's own conflict. The
+/// ledger's per-version primary key is the last line of defense, reached only on
+/// an engine with transactional DDL that lets both racers get that far.
 Future<MigrationResult> applyMigrations(
   Db db, {
   String directory = 'migrations',

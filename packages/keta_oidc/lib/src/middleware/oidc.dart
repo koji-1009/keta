@@ -145,10 +145,10 @@ Middleware<E> requireScopes<E>(List<String> scopes) {
     _checkScopeToken(scope);
   }
   // Authorization, so inside [oidc]'s authenticate rank: the principal this
-  // reads has to exist before it runs. `App.compile` now rejects the reversed
-  // registration outright, ahead of the request-time StateError below, which
-  // stays for the cases a rank cannot see (a hand-composed chain, an oidc()
-  // that never ran because it sits on another route).
+  // reads has to exist before it runs. `App.compile` rejects the reversed
+  // registration outright; the request-time StateError below covers what a rank
+  // cannot see (a hand-composed chain, or an oidc() that never ran because it
+  // sits on another route).
   return ordered((Context<E> c, Handler<E> next) {
     final principal = c.tryGet(oidcPrincipal);
     if (principal == null) {

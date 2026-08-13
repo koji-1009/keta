@@ -1,15 +1,14 @@
 /// The single source of truth for *recognizing* a canonical-form DTO, shared by
 /// the diagnostic layer (canonical.dart) and the materializing fixer (fix.dart).
 ///
-/// Before this module the two duplicated their recognizers (the toJson/fromJson
-/// key extractors, the field-type resolver) and — worse — their *decisions*:
-/// canonical.dart never looked at the Schema constant or at whether the fixer
-/// could actually act, so `check` and `fix` disagreed (a stale Schema passed
-/// check while fix would rewrite it; a positional-ctor DTO was told to run a fix
-/// that silently refused it). Having both call [CanonicalUnit]/[CanonicalClass]
-/// makes them decide identically by construction: whatever the fixer would
-/// touch is exactly what the check reports, and whatever the fixer refuses the
-/// check refuses to recommend.
+/// Duplicating the recognizers (the toJson/fromJson key extractors, the
+/// field-type resolver) would let the two drift apart on their *decisions*, not
+/// just their code: a check that never looked at the Schema constant, or at
+/// whether the fixer could act, passes a stale Schema the fixer would rewrite,
+/// and tells a positional-ctor DTO to run a fix that silently refuses it. Both
+/// calling [CanonicalUnit]/[CanonicalClass] makes them decide identically by
+/// construction: whatever the fixer would touch is exactly what the check
+/// reports, and whatever the fixer refuses the check refuses to recommend.
 library;
 
 import 'package:analyzer/dart/ast/ast.dart';
@@ -510,9 +509,9 @@ bool isDeclaringField(FormalParameter p) => p.isFinal && p.type != null;
 /// field AND every constant carrying a single string-literal argument; requiring
 /// both keeps an ordinary value-carrying enum (a different field, numeric args,
 /// a partially-annotated constant list) from being misread as wire-mapped — such
-/// an enum stays plain, its constant names taken as the wire strings, exactly as
-/// before D-1. This is the sole place either check or fix learns an enum's wire
-/// vocabulary, so both agree by construction.
+/// an enum stays plain, its constant names taken as the wire strings. This is
+/// the sole place either check or fix learns an enum's wire vocabulary, so both
+/// agree by construction.
 EnumInfo _readEnumInfo(EnumDeclaration declaration) {
   final constants = declaration.body.constants;
   final names = [for (final c in constants) c.name.lexeme];
@@ -733,19 +732,18 @@ class _IndexKeyVisitor(final Set<String> keys)
 /// `field.map(...)…`. A value NOT rooted at a final field — a getter read
 /// (`'fullName': fullName`), a literal (`'legacy': 1`), a computed expression
 /// (`'total': a + b`) — is data the field model cannot express, so the fixer
-/// must not delete it. Reading such a literal as an enumerable key set produced
-/// a false drift *and* let the fixer flatten the member, dropping that value's
-/// contribution to the wire with no warning. Returning null instead routes both
+/// must not delete it. Reading such a literal as an enumerable key set would be
+/// a false drift *and* would let the fixer flatten the member, dropping that
+/// value's contribution to the wire with no warning. Returning null routes both
 /// check and fix to the same "leave it alone" posture as the other hand-modified
 /// gates. Conditional entries (`if (x != null) 'k': v`) are the one composite
 /// the fixer itself emits, so they (and their field-rooted value) are recognized.
 ///
-/// [fieldNames] is passed in rather than derived here (or returned as structure
-/// for callers to judge) so the value-vs-field decision lives in ONE place: all
-/// callers already hold the final-field set and would otherwise each re-implement
-/// this test, the exact divergence between check and fix this module exists to
-/// prevent. Callers pass the FULL final-field set (`allFinalFieldNames`), the
-/// desired key set drift is measured against.
+/// [fieldNames] is passed in rather than derived here so the value-vs-field
+/// decision lives in ONE place: every caller already holds the final-field set
+/// and would otherwise re-implement this test, which is the check/fix divergence
+/// this module exists to prevent. Callers pass the FULL set
+/// (`allFinalFieldNames`) — the desired key set drift is measured against.
 Set<String>? toJsonKeys(MethodDeclaration toJson, Set<String> fieldNames) {
   final returned = _returnedMap(toJson);
   if (returned == null) return null;
@@ -852,7 +850,7 @@ class const _EnumType(
   /// The wire strings — the Schema `enum:` list and what fromWire matches on.
   final List<String>? values,
 
-  /// A D-1 enhanced (wire-mapped) enum, whose constant names are not the wire
+  /// An enhanced (wire-mapped) enum, whose constant names are not the wire
   /// strings, so the mappers route through `fromWire`/`.wire` instead of the
   /// name-based `values.byName`/`.name`.
   final bool enhanced,

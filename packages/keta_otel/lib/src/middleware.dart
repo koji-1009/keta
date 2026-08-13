@@ -128,12 +128,10 @@ Middleware<E> otel<E>({
         method: method,
         route: template ?? unmatchedRoute,
         status: status,
-        // Seconds (Prometheus's base time unit), fractional: most in-process
-        // handlers finish in well under a millisecond, so `elapsedMilliseconds`
-        // would truncate to 0 for nearly every fast route and systematically
-        // undercount the duration sum. `elapsedMicroseconds` carries the same
-        // resolution the wall-clock span timestamps below use, divided down to
-        // seconds so `keta_request_duration_seconds_sum` reads in base units.
+        // Seconds (Prometheus's base unit), fractional: most in-process
+        // handlers finish well under a millisecond, so `elapsedMilliseconds`
+        // would truncate to 0 for nearly every fast route and undercount the
+        // duration sum.
         durationSeconds: watch.elapsedMicroseconds / 1e6,
       );
       final export = exporter;
@@ -154,13 +152,10 @@ Middleware<E> otel<E>({
           // (a 4xx is a client problem, not a server error).
           status: status >= 500 ? SpanStatus.error : SpanStatus.unset,
         );
-        // Enqueued off the response hot path: this only appends to the
-        // exporter's own bounded queue (see `OtlpExporter.enqueue`), never
-        // sends synchronously. The exporter drains it on its own timer (or
-        // `flush()`), so a failing collector — or a queue overflowing under
-        // sustained load — is no longer tied to any one request's `Context`;
-        // it is reported through the exporter's own `onWarn` hook (wired
-        // once, when the exporter is constructed) instead of `c.log` here.
+        // Appends to the exporter's own bounded queue; never sends
+        // synchronously. The exporter drains on its own timer, so a failing
+        // collector or an overflowing queue is reported through its `onWarn`
+        // hook rather than tied to any one request's `Context`.
         export.enqueue([span]);
       }
     }

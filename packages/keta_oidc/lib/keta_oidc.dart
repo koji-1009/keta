@@ -2,8 +2,7 @@
 /// Bearer JWTs an identity provider issues, and never issues or brokers tokens
 /// itself.
 ///
-/// This wave ships the JWT decode-and-validate core plus the
-/// [SignatureVerifier] seam:
+/// The JWT decode-and-validate core, plus the [SignatureVerifier] seam:
 ///
 /// * [Jws.parse] — strict RFC 7515 compact-JWS parsing into a [JoseHeader], a
 ///   raw claims payload, the exact signing-input bytes, and the signature.

@@ -39,8 +39,7 @@ Map<String, Object?> mapRow(ResultRow row) {
 ///   binary_codec/text_codec: both tag the value UTC). So [type] disambiguates:
 ///
 ///   - `timestamptz` names a real instant, so it is emitted as UTC with a `Z`
-///     (`2026-07-17T10:30:00.000Z`) — the honest, unambiguous form. This is
-///     also the pre-existing behaviour, preserved deliberately.
+///     (`2026-07-17T10:30:00.000Z`) — the honest, unambiguous form.
 ///   - `timestamp` (WITHOUT time zone) is a wall-clock reading the database
 ///     stores with NO zone attached. The driver's UTC tag is a fiction, so we
 ///     emit it WITHOUT any offset designator (`2026-07-17T10:30:00.000`): the
@@ -48,9 +47,9 @@ Map<String, Object?> mapRow(ResultRow row) {
 ///     ambiguity is the COLUMN TYPE's, not keta's — a bare `timestamp` genuinely
 ///     does not know its zone. The fix at the schema level is to use
 ///     `timestamptz`; keta reports the value as honestly as the column allows
-///     and invents nothing. (This is why `toIso8601String()` alone was wrong: on
-///     a UTC-tagged DateTime it always appends `Z`, silently upgrading an
-///     unzoned reading to a false instant.)
+///     and invents nothing. `toIso8601String()` alone will not do here: on a
+///     UTC-tagged DateTime it always appends `Z`, upgrading an unzoned reading
+///     to a false instant.
 ///   - `date` carries no time-of-day at all, so it is emitted as `yyyy-MM-dd`
 ///     (`2026-07-17`), not the full datetime string `toIso8601String()` would
 ///     leak (`2026-07-17T00:00:00.000Z`) — a spurious midnight-UTC instant.
@@ -82,14 +81,12 @@ Object? mapValue(Object? value, Type type) {
 ///
 /// Delegates the year formatting to [DateTime.toIso8601String] and slices off
 /// everything before its `T`, rather than hand-padding `year.toString()`: a
-/// hand-padded year breaks on the two cases ISO 8601 itself has rules for — a
-/// BC year (`(-44).toString()` is `-44`, and `padLeft(4, '0')` counts the `-`
-/// as one of the four characters and prepends a bare `0` ahead of it, giving
-/// `0-44` instead of the `-0044` ISO 8601 requires — hence the observed
-/// `0-44-03-15`) and a >9999 year (`12345` needs a leading `+` and six digits,
-/// neither of which `padLeft(4)` adds). `toIso8601String()` already gets both
-/// right — it is the same call the timestamp paths above rely on — so reuse it
-/// instead of re-deriving the rule.
+/// hand-padded year breaks on the two cases ISO 8601 itself has rules for: a
+/// BC year (`padLeft(4, '0')` counts the `-` as one of the four characters, so
+/// `-44` becomes `0-44` instead of the `-0044` ISO 8601 requires) and a >9999
+/// year (`12345` needs a leading `+` and six digits, neither of which
+/// `padLeft(4)` adds). `toIso8601String()` already gets both right, so reuse it
+/// rather than re-deriving the rule.
 String _formatDate(DateTime value) {
   final iso = value.toIso8601String();
   return iso.substring(0, iso.indexOf('T'));

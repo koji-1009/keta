@@ -8,10 +8,10 @@ library;
 ///
 /// ## Why a type per reason, not a `String`
 ///
-/// The reason has to be machine-readable, not a log line. The oidc() middleware
-/// (a later wave) maps these to RFC 6750 `WWW-Authenticate` responses — a
-/// malformed or unverifiable token is `error="invalid_token"`, and the reason
-/// decides the human-readable `error_description`. Encoding the reason as the
+/// The reason has to be machine-readable, not a log line. The `oidc()`
+/// middleware maps these to RFC 6750 `WWW-Authenticate` responses — a malformed
+/// or unverifiable token is `error="invalid_token"`, and the reason decides the
+/// human-readable `error_description`. Encoding the reason as the
 /// *type* (the same posture keta core takes with `TransientFailure`: "the
 /// retryability is the type") means the mapping is an exhaustive `switch` the
 /// compiler checks, and a new reason cannot be added without every mapper being
@@ -74,9 +74,7 @@ final class const JwtBadSignature(super.message) extends JwtRejection;
 /// that never has to be reissued, defeating that model. So an absent `exp` is a
 /// rejection, symmetric with the already-required `iss`/`aud`.
 ///
-/// This is the **default and only** behavior: there is deliberately no
-/// "allow non-expiring tokens" knob. A concrete use case for one is a future
-/// ruling, not a speculative option added now. It is a distinct sealed reason
+/// There is no "allow non-expiring tokens" knob. It is a distinct sealed reason
 /// (not folded into [JwtExpired]) so a middleware's exhaustive `switch` is
 /// forced to map "no expiry" rather than silently defaulting it.
 final class const JwtExpirationRequired(super.message) extends JwtRejection;
@@ -100,8 +98,7 @@ final class const JwtAudienceMismatch(super.message) extends JwtRejection;
 /// No key could be resolved for the token — the header names a `kid` the key
 /// source does not hold, or names none and the source is ambiguous.
 ///
-/// Key resolution (matching a `kid` against a JWKS) is the JWKS wave's job, not
-/// this one's; [JwtUnknownKey] is defined here so the failure model is complete
-/// and enumerable now, and so the JWKS wave raises a reason that already lives
-/// in this sealed set rather than inventing its own.
+/// Key resolution (matching a `kid` against a JWKS) belongs to a [JwksSource],
+/// not to the validator; the reason lives here so the failure model stays one
+/// closed set rather than each resolver inventing its own.
 final class const JwtUnknownKey(super.message) extends JwtRejection;

@@ -65,10 +65,9 @@ class _RouteVisitor(final String file, final List<Diagnostic> diagnostics)
         args[0] is SimpleStringLiteral &&
         args[1] is FunctionExpression) {
       // The registration's full template is the group prefix plus the literal.
-      // Reading the literal alone reported `c.param('tid')` — a capture the
-      // core documents as readable from a captured group prefix — as unknown
-      // on correct code, and gave two routes under different prefixes but the
-      // same relative path one shared stable id.
+      // The literal alone is not it: a capture in the prefix is readable via
+      // `c.param` and would be reported as unknown, and two routes under
+      // different prefixes sharing a relative path would collide on one id.
       _check(
         node.methodName.name,
         _prefixOfTarget(node),

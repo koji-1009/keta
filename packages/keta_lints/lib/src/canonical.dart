@@ -183,8 +183,8 @@ void _checkClass(
   // Drift is reported against the FULL final-field set (not the fixer's
   // resolvable subset): a broken round-trip is a real bug the user must see
   // even when a positional ctor or an exotic field type means the auto-fixer
-  // will decline it — the same posture the mapper-drift check has always had.
-  // Each present mapper is verified against the fields (toJson writes exactly
+  // will decline it. Each present mapper is verified against the fields (toJson
+  // writes exactly
   // them; fromJson reads exactly them, catching a half-done rename that toJson
   // alone would miss); an absent mapper adds nothing, since a one-way shape is
   // not a round-trip whose other direction could disagree.
