@@ -28,6 +28,7 @@ import '../key_lint.dart';
 import '../middleware_order_lint.dart';
 import '../package_path.dart';
 import '../query_lint.dart';
+import '../request_body_lint.dart';
 import '../routes_lint.dart';
 import '../tx_order.dart';
 
@@ -52,6 +53,16 @@ const _queryUndeclared = LintCode(
 );
 const _queryDrift = LintCode(
   'keta_query_drift',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
+const _requestBodyUnvalidated = LintCode(
+  'keta_request_body_unvalidated',
+  '{0}',
+  severity: DiagnosticSeverity.WARNING,
+);
+const _requestBodyDrift = LintCode(
+  'keta_request_body_drift',
   '{0}',
   severity: DiagnosticSeverity.WARNING,
 );
@@ -187,6 +198,31 @@ class KetaQueryRule extends _KetaRule {
   Map<String, LintCode> get _codes => const {
     'keta_query_undeclared': _queryUndeclared,
     'keta_query_drift': _queryDrift,
+  };
+}
+
+/// `keta_request_body_unvalidated` + `keta_request_body_drift` — a declared
+/// `RouteDoc(requestBody: …)` the handler never gates the body against, or gates
+/// against a different schema. The declaration reaches OpenAPI and nothing
+/// reads it at runtime, so the handler's own `require`/`requireMap` is what
+/// makes the document true.
+class KetaRequestBodyRule extends _KetaRule {
+  new()
+    : super(
+        name: 'keta_request_body',
+        description:
+            'A route that declares RouteDoc.requestBody and reads the body must '
+            'validate it against that same schema.',
+      );
+
+  @override
+  List<Diagnostic> _analyze(RuleContextUnit unit, String file) =>
+      requestBodyDiagnosticsUnit(unit.unit, file: file);
+
+  @override
+  Map<String, LintCode> get _codes => const {
+    'keta_request_body_unvalidated': _requestBodyUnvalidated,
+    'keta_request_body_drift': _requestBodyDrift,
   };
 }
 

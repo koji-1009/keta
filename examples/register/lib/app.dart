@@ -11,12 +11,10 @@ import 'routes.dart';
 ///
 /// The middleware stack shows the common cross-cutting concerns: access logging,
 /// CORS, a request deadline, request metrics, error recovery, and
-/// authentication. `tx()` is NOT here — it used to be, app-wide, but that taxed
-/// every read (and would have pinned a writer-pool connection for the whole
-/// open-ended lifetime of `/users/events`' SSE stream) for no reason. It is
-/// scoped instead to the `/users` write group inside [register] — see that
-/// function's comment and keta_db's `tx()` doc for why that is the approved
-/// shape.
+/// authentication. `tx()` is NOT here: app-wide it would tax every read and pin
+/// a writer-pool connection for the whole open-ended lifetime of
+/// `/users/events`' SSE stream. It is scoped instead to the `/users` write group
+/// inside [register] — see that function's comment and keta_db's `tx()` doc.
 ///
 /// Order is not decoration, and the rule is one line: everything that can throw
 /// must sit BELOW recover, and everything that decorates a response must sit

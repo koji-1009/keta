@@ -7,19 +7,17 @@ import 'dart:io';
 ///
 /// Both CLI entry points (`check`, `fix`) are run as CI gates, and the failure
 /// that matters for a gate is not "it found a problem" — it is "it found
-/// nothing, said so, and exited 0". Three ways in used to reach that:
+/// nothing, said so, and exited 0". Three inputs would otherwise reach that:
 ///
-/// * a path that does not exist was skipped in silence, so a typo'd or moved
-///   directory in a workflow printed `no issues` and passed forever;
-/// * a named file that does not exist was passed through to be read, which
-///   threw an unhandled `FileSystemException` — noisy, but as a *crash* rather
-///   than a diagnostic exit code;
-/// * arguments that resolved to zero `.dart` files were indistinguishable from
-///   arguments that resolved to clean ones.
+/// * a path that does not exist — a typo'd or moved directory in a workflow
+///   would print `no issues` and pass forever;
+/// * a named file that does not exist — read straight through, it throws an
+///   unhandled `FileSystemException`, a crash rather than a diagnostic exit;
+/// * arguments that resolve to zero `.dart` files, indistinguishable from
+///   arguments that resolve to clean ones.
 ///
-/// All three are usage errors, and all three now exit 64 (`EX_USAGE`) with a
-/// message naming the path. Shared rather than copied because it was copied,
-/// and the copies had already drifted apart.
+/// All three are usage errors and all three exit 64 (`EX_USAGE`) with a message
+/// naming the path. Shared by both entry points so the two cannot drift.
 List<String> resolveDartFiles(List<String> paths) {
   final files = <String>[];
   for (final path in paths) {

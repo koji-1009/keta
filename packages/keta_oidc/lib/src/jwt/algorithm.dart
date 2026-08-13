@@ -43,10 +43,9 @@ enum JwkKeyType(
 ///   code path can be tricked into HMAC verification.
 /// * **`alg: none` is rejected by design** for the obvious reason — an
 ///   unsigned token is not a credential.
-/// * **`PS256` / `PS384` / `PS512` are not supported initially.** RSASSA-PSS is
-///   a legitimate algorithm; it is simply out of scope for this wave and can be
-///   added to the allowlist later without changing the model. Its absence is a
-///   judged omission, not an oversight.
+/// * **`PS256` / `PS384` / `PS512` are not supported.** RSASSA-PSS is a
+///   legitimate algorithm, out of scope here; it can be added to the allowlist
+///   later without changing the model.
 ///
 /// Any `alg` string outside this set — `none`, an `HS*`, a `PS*`, or anything
 /// unrecognised — never resolves to a value: [fromJose] returns `null` and the

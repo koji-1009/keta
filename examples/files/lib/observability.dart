@@ -5,11 +5,10 @@ import 'env.dart';
 
 /// The request-store key the per-`buildApp` metrics registry travels under.
 ///
-/// Scoped per `buildApp`, not a top-level global — the change from what this
-/// file used to hold. A single global registry is shared across every
-/// `buildApp()` in one isolate: two apps (every test that builds one, and any
-/// multi-app host) would count into the SAME registry, so one test's requests
-/// leak into the next's assertions and a real multi-tenant isolate conflates
+/// Scoped per `buildApp`, not a top-level global: a single global registry is
+/// shared across every `buildApp()` in one isolate, so two apps (every test that
+/// builds one, and any multi-app host) count into the SAME registry — one test's
+/// requests leak into the next's assertions and a multi-tenant isolate conflates
 /// tenants. examples/register scopes its registry the same way — a `buildApp`
 /// local captured by the handlers that need it.
 ///

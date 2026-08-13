@@ -9,38 +9,30 @@ import 'transport.dart';
 import 'upgrade.dart';
 
 /// The default HTTP/1.1 transport, built on `dart:io`. Uses only the SDK, so
-/// the core's zero-dependency rule holds even with a transport bundled — and
-/// that holds for the TLS and idle-timeout knobs below too: [SecurityContext]
-/// and `HttpServer.idleTimeout` are `dart:io`, not a new dependency.
+/// the core's zero-dependency rule holds even with a transport bundled —
+/// [SecurityContext] and `HttpServer.idleTimeout` included.
 ///
 /// No path lets an error escape to the root zone: request handling, response
 /// writing, and connection acceptance all report failures through [onError]
-/// instead of terminating the isolate — and that holds even when the
-/// caller-supplied [onError] itself throws, since [bind] wraps it (see
-/// [_guardedOnError]) so a broken reporter falls back to stderr rather than
-/// escaping from one of its own call sites.
+/// instead of terminating the isolate, and [bind] wraps [onError] itself (see
+/// [_guardedOnError]) so a reporter that throws falls back to stderr.
 ///
-/// One defense this transport cannot offer, stated plainly as a boundary and
-/// not an omission: there is no accept-level cap on concurrent connections,
-/// because `dart:io`'s [HttpServer] exposes no accept hook to gate on — a
-/// connection is only visible to us once its request head has parsed, which is
-/// already past the point an accept cap would act. Connection-count defense
-/// therefore stays at the OS (fd limits), and post-parse admission stays with
-/// the `rateLimit()` / `concurrencyLimit()` middleware in `admission.dart`.
-/// [idleTimeout] bounds the pre-parse slow-header hold (below), but the raw
-/// count of open sockets is not this transport's to cap.
+/// There is no accept-level cap on concurrent connections: `dart:io`'s
+/// [HttpServer] exposes no accept hook to gate on — a connection first becomes
+/// visible once its request head has parsed, past the point an accept cap would
+/// act. Connection-count defense therefore stays at the OS (fd limits), and
+/// post-parse admission with the `rateLimit()` / `concurrencyLimit()`
+/// middleware in `admission.dart`. [idleTimeout] bounds the pre-parse
+/// slow-header hold; the raw count of open sockets is not this transport's to
+/// cap.
 class const H1Transport({
   /// The bind address; defaults to all IPv4 interfaces when null.
   final Object? address,
 
   /// Reports transport-level failures (write errors, accept errors) instead of
-  /// letting them reach the root zone. Falls back to stderr when null.
-  ///
-  /// A reporter that itself throws is an authoring defect, not a case this
-  /// transport lets escalate: [bind] wraps it (see [_guardedOnError]) so the
-  /// throw is caught and reported to stderr alongside the original error,
-  /// instead of rejecting a future nothing awaits or reaching the root zone
-  /// from inside a catch clause.
+  /// letting them reach the root zone. Falls back to stderr when null, and a
+  /// reporter that itself throws is contained the same way (see
+  /// [_guardedOnError]).
   final void Function(Object error, StackTrace stack)? onError,
 
   /// A TLS context that switches [bind] from `HttpServer.bind` to

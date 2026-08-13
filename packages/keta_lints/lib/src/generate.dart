@@ -798,11 +798,9 @@ Object? _sample(
 ) {
   final required = _requiredOf(schema, name);
   final properties = _propertiesOf(schema, name);
-  // A required key with no matching property was previously dropped from the
-  // sample silently, so the generated contract test fed the DTO a map missing a
-  // field its fromJson reads — an undescriptive `type Null is not a subtype`
-  // crash at test time. Reject it here with the same descriptive-error standard
-  // the rest of the oracle audit holds to, naming the offending schema.field.
+  // A required key with no matching property would otherwise be dropped from
+  // the sample silently, feeding the DTO a map missing a field its fromJson
+  // reads — an undescriptive `type Null is not a subtype` crash at test time.
   for (final key in required) {
     if (properties[key] == null) {
       throw ScaffoldError(

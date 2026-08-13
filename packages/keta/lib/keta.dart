@@ -71,7 +71,8 @@ export 'src/response.dart'
         NotImplementedYet,
         Unavailable,
         TransientFailure,
-        GatewayTimeout;
+        GatewayTimeout,
+        StatusException;
 export 'src/route_doc.dart'
     show
         RouteDoc,

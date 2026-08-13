@@ -8,11 +8,11 @@
 /// worker isolate boots its own middleware with its own buckets and its own
 /// in-flight counter, so the *effective* limit is multiplied by `n`: a
 /// `capacity: 100` rate limit under 4 isolates admits up to 400 concurrent
-/// bursts across the process, and a `maxInFlight: 50` cap admits up to 200. This
-/// is stated plainly rather than papered over — process-wide or cluster-wide
-/// coordination needs shared state (a store, a broker) that Ring 0 does not
-/// have. Size the per-isolate limit as `desired / isolates`, or run these behind
-/// a single-isolate front if an exact global bound is required.
+/// bursts across the process, and a `maxInFlight: 50` cap admits up to 200.
+/// Process-wide or cluster-wide coordination needs shared state (a store, a
+/// broker) that Ring 0 does not have. Size the per-isolate limit as
+/// `desired / isolates`, or run these behind a single-isolate front if an exact
+/// global bound is required.
 library;
 
 import 'dart:math' as math;

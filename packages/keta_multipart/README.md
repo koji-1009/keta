@@ -31,6 +31,8 @@ A `Part` exposes `headers` (lower-cased by the MIME parser), `name` (the form fi
 
 A part's body may be requested **at most once**, via exactly one of the three paths; a second request throws `StateError` (the backing MIME stream is single-subscription). `name` and `filename` come from a memoized `Content-Disposition` parse using the platform's RFC-compliant `HeaderValue` parser: backslash-escaped quotes inside a quoted `filename` are preserved, bare unquoted tokens (legal, emitted by non-browser clients) are read, parameter names match case-insensitively, and a duplicated parameter is last-wins. A malformed disposition header degrades to null on every read rather than tearing down the stream from a synchronous getter. RFC 5987 extended values (`filename*=`) are unsupported **by design**: they land under the distinct key `filename*`, so a percent-encoded name reads as absent rather than being mis-decoded.
 
+**`filename` is untrusted input.** It is whatever the client sent — `../../etc/passwd`, an absolute path, a Windows path, control characters, megabytes of it — and this package does not sanitize it. `File('uploads/${part.filename}')` is a traversal write primitive. Treat it as a display label, derive the storage name yourself (a generated id, or a hard allowlist), and keep the client's spelling only as metadata beside it. keta does not sanitize because a safe name depends on the store it is going to, and a sanitizer that guessed would be trusted for more than it can deliver.
+
 ## Limits
 
 Reception rides the deliberate `c.bodyStream()` escape, so **`App.maxBodyBytes` does not apply here — this layer owns the limits**, via `MultipartLimits`:

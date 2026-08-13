@@ -138,10 +138,8 @@ class OtlpExporter implements Disposable {
     // it) is the simplest bound that is still correct: `timeout` is already
     // the ceiling for the *entire* attempt (connect + request + response),
     // so letting connect alone consume up to all of it changes nothing about
-    // the outer bound — it only closes the gap where connect could
-    // previously run unbounded beneath it. A smaller derived fraction would
-    // add a second tunable with no failure it prevents that `timeout` alone
-    // doesn't already prevent.
+    // the outer bound. A smaller derived fraction would add a second tunable
+    // with no failure it prevents that `timeout` alone doesn't already prevent.
     final client = HttpClient()..connectionTimeout = timeout;
     // Completed by `close()` the instant shutdown begins (before it awaits
     // in-flight work). Retry sleeps race this so a mid-retry batch bails
@@ -492,16 +490,14 @@ Duration _retryDelay(String? retryAfter, Duration fallback, Duration maxDelay) {
 /// `true` if the sleep was aborted (the caller should give up), `false` if
 /// the full delay elapsed.
 ///
-/// This registers nothing on `closing.future` itself — no `.then`, no
-/// listener. An earlier version raced a `.then` callback on the shared
-/// `closing.future` for every single sleep; a Dart [Future] never releases a
-/// `.then` listener until it completes, and `closing` completes exactly once,
-/// at [close] — so under sustained 429/503 throttling, every retry sleep left
-/// one of these behind for the exporter's entire remaining lifetime. Instead:
-/// a sleep already too late to matter (`closing` is already complete) bails
-/// immediately, and one started in time is tracked in [activeSleeps] so
-/// [close] can reach in and cancel/resolve it directly — zero listeners
-/// accumulate either way.
+/// This registers nothing on `closing.future` itself — no `.then`, no listener.
+/// A Dart [Future] never releases a `.then` listener until it completes, and
+/// `closing` completes exactly once, at [close], so a per-sleep `.then` would
+/// leave one listener behind per retry for the exporter's remaining lifetime
+/// under sustained 429/503 throttling. Instead: a sleep already too late to
+/// matter (`closing` is already complete) bails immediately, and one started in
+/// time is tracked in [activeSleeps] so [close] can reach in and cancel/resolve
+/// it directly — zero listeners accumulate either way.
 Future<bool> _sleepUnless(
   Duration delay,
   Completer<void> closing,

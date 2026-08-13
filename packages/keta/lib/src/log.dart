@@ -127,12 +127,9 @@ class StdoutLog implements Log {
   // (from withFields) shares the timer and must never dispose it.
   final bool _ownsTimer;
 
-  /// Lines written per event-loop turn. Chosen by measurement, not derivation:
-  /// against 256 and 2048 it halved the worst stall under a 50k lines/s
-  /// synthetic load (5.0ms vs 10.7ms and 10.5ms) and cost no throughput over
-  /// HTTP. The stall is not proportional to this — 256 and 2048 measured the
-  /// same — so the remainder comes from somewhere else and a smaller batch does
-  /// not keep paying off.
+  /// Lines written per event-loop turn. Chosen by measurement, not derivation —
+  /// the residual stall is not proportional to this value, so a smaller batch
+  /// buys nothing beyond it.
   static const _maxBatch = 32;
 
   @override
@@ -242,16 +239,13 @@ class StdoutLog implements Log {
     // One synchronous loop over the whole snapshot holds the loop for a time
     // proportional to how many lines accumulated -- that is, proportional to
     // throughput, so the harder the server worked the longer it stopped
-    // serving. Measured at a 1s interval: 5k lines/s froze it 5.9ms, 20k froze
-    // it 12.7ms, 50k froze it 33.7ms; over HTTP the worst response went to
-    // 15ms. Slicing cuts that to ~2.5ms over HTTP at the same throughput, with
-    // every line still written.
+    // serving.
     //
     // Duration.zero, not an await on the sink: an await only reaches timers and
     // IO if the future is not already complete, and awaiting the sink every
-    // slice paces the drain to the sink instead of to the producer -- which
-    // measured 18% less throughput and left 87% of lines unwritten under load.
-    // The sink is therefore flushed once, at the end.
+    // slice paces the drain to the sink instead of to the producer, which costs
+    // throughput and leaves lines unwritten under load. The sink is therefore
+    // flushed once, at the end.
     for (var i = 0; i < pending.length; i += _maxBatch) {
       final end = i + _maxBatch < pending.length
           ? i + _maxBatch

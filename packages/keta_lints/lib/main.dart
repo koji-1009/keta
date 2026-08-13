@@ -14,9 +14,9 @@
 ///   #       keta_internal_await: true
 /// ```
 ///
-/// The six route/query/canonical/tx/middleware-order/key rules are warnings —
-/// enabled by default once the plugin is on. They surface the same ids and messages as
-/// `dart run keta_lints:check`. Cross-file checks (route conflicts, contract
+/// The seven route/query/request-body/canonical/tx/middleware-order/key rules
+/// are warnings — enabled by default once the plugin is on. They surface the same
+/// ids and messages as `dart run keta_lints:check`. Cross-file checks (route conflicts, contract
 /// drift) remain CLI-authoritative and are not part of the plugin.
 library;
 
@@ -37,6 +37,7 @@ class KetaPlugin extends Plugin {
     // Enabled by default (analyzer "warnings").
     registry.registerWarningRule(KetaRouteRule());
     registry.registerWarningRule(KetaQueryRule());
+    registry.registerWarningRule(KetaRequestBodyRule());
     registry.registerWarningRule(KetaCanonicalRule());
     registry.registerWarningRule(KetaTxOrderRule());
     registry.registerWarningRule(KetaMiddlewareOrderRule());

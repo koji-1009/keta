@@ -21,6 +21,7 @@ void main() {
   defineReflectiveSuite(() {
     defineReflectiveTests(KetaRouteRuleTest);
     defineReflectiveTests(KetaQueryRuleTest);
+    defineReflectiveTests(KetaRequestBodyRuleTest);
     defineReflectiveTests(KetaCanonicalRuleTest);
     defineReflectiveTests(KetaTxOrderRuleTest);
     defineReflectiveTests(KetaMiddlewareOrderRuleTest);
@@ -168,6 +169,89 @@ void f(dynamic app) {
   app.get('/s', (c) {
     c.query('page');
   }, doc: RouteDoc(query: [QueryParam('page', required: true)]));
+}
+''');
+  }
+}
+
+@reflectiveTest
+class KetaRequestBodyRuleTest extends AnalysisRuleTest {
+  @override
+  void setUp() {
+    rule = KetaRequestBodyRule();
+    super.setUp();
+  }
+
+  static const _stubs = '''
+class RouteDoc {
+  const RouteDoc({this.requestBody});
+  final Object? requestBody;
+}
+
+class Schema {
+  const Schema();
+  Map<String, Object?> requireMap(Object? v) => const {};
+}
+
+const userSchema = Schema();
+const otherSchema = Schema();
+''';
+
+  Future<void> test_unvalidated_fires() async {
+    await assertDiagnostics(
+      '''
+$_stubs
+void f(dynamic app) {
+  app.post('/u', (c) async {
+    return c.json(await c.body());
+  }, doc: RouteDoc(requestBody: userSchema));
+}
+''',
+      [
+        // The finding points at the body read, which is the line to change.
+        lint(
+          316,
+          8,
+          name: 'keta_request_body_unvalidated',
+          messageContainsAll: [
+            _idPrefix,
+            'RouteDoc declares requestBody: userSchema',
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> test_drift_fires() async {
+    await assertDiagnostics(
+      '''
+$_stubs
+void f(dynamic app) {
+  app.post('/u', (c) async {
+    return c.json(otherSchema.requireMap(await c.body()));
+  }, doc: RouteDoc(requestBody: userSchema));
+}
+''',
+      [
+        // Drift points at the declaration instead: the handler did validate,
+        // so what has to be reconciled is which schema the two sides name.
+        lint(
+          383,
+          10,
+          name: 'keta_request_body_drift',
+          messageContainsAll: [_idPrefix, 'validates with otherSchema'],
+        ),
+      ],
+    );
+  }
+
+  Future<void> test_validated_isClean() async {
+    await assertNoDiagnostics('''
+$_stubs
+void f(dynamic app) {
+  app.post('/u', (c) async {
+    return c.json(userSchema.requireMap(await c.body()));
+  }, doc: RouteDoc(requestBody: userSchema));
 }
 ''');
   }

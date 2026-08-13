@@ -27,7 +27,7 @@ Verbs are `get post put delete patch head options`, each taking an optional `doc
 
 ## Errors
 
-`KetaException` is sealed: `BadRequest` (400), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `PayloadTooLarge` (413), `UnprocessableEntity` (422), `NotImplementedYet` (501), `Unavailable`/`TransientFailure` (both 503 — the latter names a lost concurrency race, so `is TransientFailure` is the retry check), `GatewayTimeout` (504), plus the `KetaException.status` factory for anything else. Throw one and the response carries its status with `{"error": message}`; every other exception is a defect → 500, logged, no detail leaked. `recover()` is the customizable middleware form (it also logs a `KetaException`'s operator-only `detail`), but a non-removable last-resort fallback in the router applies the same conversion regardless — safety is not conditional on registering it.
+`KetaException` is sealed: `BadRequest` (400), `Unauthorized` (401), `Forbidden` (403), `NotFound` (404), `Conflict` (409), `PayloadTooLarge` (413), `UnprocessableEntity` (422), `NotImplementedYet` (501), `Unavailable`/`TransientFailure` (both 503 — the latter names a lost concurrency race, so `is TransientFailure` is the retry check), `GatewayTimeout` (504), plus `StatusException` for anything else (built by the `KetaException.status` factory). Every member is public, so a `switch` over `KetaException` is exhaustive without a wildcard — use `StatusException()` as the "any other status" case rather than `_`, which would silently absorb a subtype added later. Throw one and the response carries its status with `{"error": message}`; every other exception is a defect → 500, logged, no detail leaked. `recover()` is the customizable middleware form (it also logs a `KetaException`'s operator-only `detail`), but a non-removable last-resort fallback in the router applies the same conversion regardless — safety is not conditional on registering it.
 
 ## Middleware
 
@@ -38,6 +38,8 @@ Verbs are `get post put delete patch head options`, each taking an optional `doc
 `rateLimit(key:, capacity:, refillPeriod:)` is a per-key token bucket: a `null` key exempts the request entirely, a refusal is a bare 429 `Response` (deliberately no 429 `KetaException` member) with an always-honest `Retry-After` in whole seconds, and full buckets are swept so memory stays proportional to the keys currently being throttled, not to a hostile key space. `concurrencyLimit(maxInFlight:)` sheds past an in-flight ceiling with a bare 503 and no `Retry-After` (a free-slot time is unknowable); a slot spans request entry to the `Response` value being produced — never a streamed body's or upgraded socket's lifetime, so idle SSE/WS clients cannot pin every slot. Both are per-isolate by design: under `serve(isolates: n)` the effective limit is the configured value × `n` — size it as `desired / isolates`.
 
 `timeout()` bounds time-to-response only: it arms no timer for a synchronously produced response, which SSE and upgrades both are. Long-lived streams bound themselves instead, via the opt-in `maxIdle`/`maxLifetime` on `c.sse` and `Response.upgrade` — null by default, because keta never starts a timer the caller did not ask for.
+
+`Schema.validate` carries three absolute backstops for the schema that declares no bound of its own, each reporting a violation instead of doing the expensive thing: a string over 4096 code points never reaches a `pattern` regex (which has no ReDoS guard), an array over 8192 items never reaches the O(n²) `uniqueItems` scan, and a body nested past 512 levels is never descended into. The last is what keeps a `$ref`-recursive schema (a comment thread, a category tree) from letting a client choose the recursion depth: a few tens of KB of `{"next":` would otherwise overflow the stack. An explicit `maxLength` / `maxItems` gates the first two on the author's own terms; the backstops are for the schema that declares neither.
 
 ## SSE and WebSocket upgrade as a value
 
@@ -68,7 +70,7 @@ The project gate is that each documented invariant has a test. The map:
 | `Key` store, `c.param` coercion and 400s, transport `closed` → `c.aborted` | `test/context_test.dart` |
 | body limit 413 and bad-JSON 400 sticky across re-reads; caching; stream consumable once | `test/request_body_test.dart` |
 | cookie parsing (malformed pairs, duplicates) and `SetCookie` rendering + injection guards | `test/cookie_test.dart` |
-| `recover()`: incidents vs expected outcomes, operator-only `detail` logged, never leaked | `test/recover_test.dart` |
+| `recover()`: incidents vs expected outcomes, operator-only `detail` logged, never leaked; the sealed set matched exhaustively with no wildcard | `test/recover_test.dart` |
 | `accessLog()` honesty markers, bounded `route` field, emit-then-rethrow | `test/access_log_test.dart` |
 | `cors()` preflight and `Vary: Origin` union | `test/cors_test.dart` |
 | `etag()`/`gzip()`: 304 semantics, negotiation, threshold, Vary union, composition, framing | `test/etag_gzip_test.dart` |
@@ -83,3 +85,5 @@ The project gate is that each documented invariant has a test. The map:
 | bounded log backlog, oldest-first eviction, honest dropped-count reporting | `test/log_test.dart` |
 | data-shaped path form (`List<Segment>`) binds, reads via `c.param`, unbounded arity | `test/data_path_test.dart` |
 | `conflictKey`: capture names/types irrelevant to the key, literals must match verbatim, method distinguishes otherwise-identical shapes | `test/routing_test.dart` |
+| `Schema` two-posture rule (violation vs authoring `StateError`), shape and `oneOf`/discriminator checks | `test/schema_validation_test.dart` |
+| every enforced value keyword, the unenforced-keyword refusal, and the `pattern` / `uniqueItems` / nesting ceilings | `test/schema_value_keywords_test.dart` |

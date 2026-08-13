@@ -211,8 +211,8 @@ String templateOf(List<Segment> segments) {
 /// would reject and merge into one document path item everything `App.compile`
 /// would treat as one route — `/users/:id` and `/users/:userId` are one
 /// conflict, not two OpenAPI paths, because a request can only ever match one
-/// of them. This is the single public source both read; there is no longer a
-/// copy anywhere to drift.
+/// of them. This is the single public source both read, so there is no copy to
+/// drift.
 String conflictKey(String method, List<Segment> segments) {
   final buf = StringBuffer(method);
   for (final s in segments) {

@@ -474,7 +474,7 @@ void main() {
       expect(ok.headers['x-tabbed'], ['a\tb']);
 
       // CR, LF, and the other controls remain rejected (response splitting).
-      for (final bad in ['a\rb', 'a\nb', 'a b', 'ab']) {
+      for (final bad in ['a\rb', 'a\nb', 'a\u{0}b', 'a\u{7f}b']) {
         expect(
           () => Response(
             200,

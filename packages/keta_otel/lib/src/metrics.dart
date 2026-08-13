@@ -55,13 +55,10 @@ class MetricsRegistry({List<double> buckets = defaultBuckets}) {
 
   /// One entry per distinct (method, route, status) key, holding its request
   /// count, summed duration, and per-bucket histogram counts together — a
-  /// single map, not three parallel ones keyed the same way. [record] used
-  /// to do three map operations per call (each recomputing [_Key.hashCode]
-  /// and re-walking the bucket for that key); now it is one lookup followed
-  /// by plain field mutations on the resolved [_Series]. [prometheus] walks
-  /// this map once per metric family, in first-seen key order — the same
-  /// order the old `_count` map (updated first in [record]) used to
-  /// determine, so exposition ordering is unchanged.
+  /// single map, not three parallel ones keyed the same way, so [record] is one
+  /// lookup followed by plain field mutations on the resolved [_Series] rather
+  /// than three hash lookups. [prometheus] walks this map once per metric
+  /// family, in first-seen key order.
   final Map<_Key, _Series> _series = {};
 
   void record({

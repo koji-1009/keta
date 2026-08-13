@@ -52,9 +52,9 @@ class RequestCtx<E>({
 }) {
   this : _resolveRemoteAddress = remoteAddress, _bodySource = body;
 
-  /// Resolved on first [remoteAddress] read and cached, because most handlers
-  /// never read it and resolving it eagerly cost a measured 10.6% of hot-path
-  /// CPU (the transport's peer-address syscall). See [Context.remoteAddress].
+  /// Resolved on first [remoteAddress] read and cached: most handlers never read
+  /// it, and the transport resolves it with a per-call syscall. See
+  /// [Context.remoteAddress].
   final String Function() _resolveRemoteAddress;
   String? _remoteAddressResolved;
 
@@ -270,14 +270,11 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// The peer address as seen by the Transport. Resolving the real client
   /// behind a proxy (X-Forwarded-For) is the application's responsibility.
   ///
-  /// Resolved lazily on first read and cached: most handlers never read it, and
-  /// resolving it eagerly for every request cost a measured 10.6% of hot-path
-  /// CPU (the H1 transport reads it via a per-call `connectionInfo` syscall). A
-  /// handler that never touches it pays nothing; one that reads it repeatedly
-  /// pays the resolve once and sees a consistent value thereafter. If the
-  /// connection has already been torn down when it is first read, it may resolve
-  /// to `''` — the transport's existing `?? ''` fallback — which is then the
-  /// cached value.
+  /// Resolved lazily on first read and cached: the H1 transport reads it via a
+  /// per-call `connectionInfo` syscall, so a handler that never touches it pays
+  /// nothing and one that reads it repeatedly pays once. If the connection has
+  /// already been torn down when it is first read, it may resolve to `''` — the
+  /// transport's `?? ''` fallback — which is then the cached value.
   String get remoteAddress => _raw.remoteAddress;
 
   Log get log => _raw.log;
@@ -354,7 +351,7 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// you call — [query] declares the parameter mandatory, [tryQuery] declares it
   /// optional — rather than by a separate flag, so a handler that reads [query]
   /// has said "this must be here", and a missing one is a malformed request that
-  /// earns the same 400 a bad value does. By design, not an oversight.
+  /// earns the same 400 a bad value does.
   T query<T>(String name) => _raw.query<T>(name);
 
   /// The query parameter [name] as `T`, or null when absent (the optional form).
@@ -379,8 +376,8 @@ extension type Context<E>(RequestCtx<E> _raw) {
   /// The raw request body, subject to the same size limit as [body]. Typed
   /// [Uint8List] rather than `List<int>` deliberately: the buffer is already
   /// contiguous bytes, and the concrete static type is what lets an AOT-compiled
-  /// consumer loop read it unboxed (measured ~30% faster than the same loop
-  /// dispatching through the `List<int>` interface).
+  /// consumer loop read it unboxed instead of dispatching through the
+  /// `List<int>` interface.
   Future<Uint8List> bodyBytes() => _raw.bodyBytes();
 
   /// The request body as an unbuffered stream. Enforcing a size limit is the
