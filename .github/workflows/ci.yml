@@ -19,8 +19,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1 # v1.8.0
         with:
           # Stable is what users install; if a new stable's formatter reformats, the format gate fails loudly and a one-off reformat commit fixes it.
           sdk: stable
@@ -93,8 +93,8 @@ jobs:
     # list is inline.
     runs-on: ${{ contains(' packages/keta_rds packages/keta_lints packages/keta_native packages/keta_oidc packages/keta_oidc_boringssl examples/oidc ', format(' {0} ', matrix.dir)) && 'ubuntu-latest' || 'ubuntu-slim' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1 # v1.8.0
         with:
           sdk: stable
       # package:sqlite3 loads the system libsqlite3.
