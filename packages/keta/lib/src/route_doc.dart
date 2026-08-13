@@ -26,10 +26,10 @@ const apiKey = SecurityScheme('apiKey', {
 /// has one to document.
 ///
 /// Required on every [RouteDoc], so a contract declaring no success cannot be
-/// written — the shape carries what a check would otherwise have to. The
-/// emitter used to fabricate a 200 whenever nothing was declared, and a guess is
-/// right only by luck: `POST /users` answers 201 and `DELETE /users/:id`
-/// answers 204, and both were documented as 200 with nothing to say so.
+/// written — the shape carries what a check would otherwise have to. Nothing
+/// may fabricate a default: `POST /users` answers 201 and `DELETE /users/:id`
+/// answers 204, and a guessed 200 would document both wrongly with nothing to
+/// say so.
 final class const Success({
   /// The status this route answers with — 201 for a create, 204 for a delete.
   final int status = 200,
@@ -150,6 +150,14 @@ class RouteDoc {
   final SwitchingProtocols? upgrade;
 
   /// The schema of the request body.
+  ///
+  /// Declaration only: it is projected into the OpenAPI document, and no
+  /// middleware validates an incoming body against it. The handler does, with
+  /// `schema.requireMap(await c.body())`. ([security] is the one field a
+  /// shipped middleware reads from a `RouteDoc` — `enforceSecurity`, which the
+  /// application registers like any other.) So declaring this does not make the
+  /// boundary enforce it: a handler that omits `requireMap` ships a document
+  /// promising more than the route checks.
   final Schema? requestBody;
 
   /// The media type of [requestBody], projected as-is onto OpenAPI's

@@ -70,6 +70,16 @@ class Part._(final _RawPart _raw, final int _maxBytes) {
   String? get name => _disposition('name');
 
   /// The `filename` for a file part, or null for a plain field.
+  ///
+  /// Entirely client-supplied and never sanitized here: it may be `../../etc/
+  /// passwd`, an absolute path, a Windows path, a name that is only control
+  /// characters, or megabytes long. Using it to build a path — `File('uploads/
+  /// ${part.filename}')` — is a traversal write primitive. Treat it as a display
+  /// label; derive the storage name yourself (a generated id, or a hard
+  /// allowlist), and keep this value only as metadata beside it. keta does not
+  /// sanitize it because what a safe name is depends on the store it is going
+  /// to, and a sanitizer that guessed would be trusted for more than it can
+  /// deliver.
   String? get filename => _disposition('filename');
 
   /// Memoized result of parsing `content-disposition`, computed at most once
@@ -257,9 +267,9 @@ class _RawPart(final Map<String, String> headers, final Stream<List<int>> body);
 /// for a plain `transform` is the root zone, where it is an unhandled error
 /// that terminates the isolate. `recover()` cannot see it (it is not on any
 /// future the handler awaits) and neither can the transport's defensive catch.
-/// One unauthenticated POST with a malformed part header was therefore enough
-/// to take down a server; under `serve(isolates: n)` it took down one worker at
-/// a time, silently, until it hit the one whose death ends the process.
+/// Without the zone below, one unauthenticated POST carrying a malformed part
+/// header takes the server down — under `serve(isolates: n)`, one worker at a
+/// time and silently, until it reaches the one whose death ends the process.
 ///
 /// Registering the subscription inside a guarded zone routes that throw here
 /// instead, where it becomes an ordinary stream error — a [BadRequest], since a
@@ -271,7 +281,7 @@ class _RawPart(final Map<String, String> headers, final Stream<List<int>> body);
 /// handed out wrapped, and the same failure that ends the part stream also
 /// errors whichever body is being read.
 ///
-/// The third half — the one a parse error alone does not cover — is the peer
+/// The third piece — the one a parse error alone does not cover — is the peer
 /// that stops sending. A client that opens an upload, sends half a part, and
 /// walks away produces NO event at all: dart:io leaves the request body stream
 /// stalled rather than erroring it, so the parser never advances and never
