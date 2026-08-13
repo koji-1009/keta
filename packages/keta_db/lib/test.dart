@@ -202,9 +202,8 @@ create table keta_conformance (
       final row = (await db.reader.query('select id from keta_conformance'));
       await insertAndRead(id: 'a', flag: null, amount: null, at: null);
       expect(row, isEmpty);
-      final one = (await db.reader.query(
-        'select id from keta_conformance',
-      )).single;
+      final one = (await db.reader.query('select id from keta_conformance'))
+          .single;
       expect(() => one.boolAt('flag'), throwsStateError);
       expect(() => one.tryBoolAt('flag'), throwsStateError);
     });

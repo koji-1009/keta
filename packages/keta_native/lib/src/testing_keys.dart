@@ -17,12 +17,18 @@ import 'rsa.dart';
 /// Holds the private key natively (used by the `sign*` methods) and exposes the
 /// public components as big-endian, unsigned bytes so a JWKS `n`/`e` can be
 /// built directly. The native key is freed on garbage collection.
-final class RsaKeyPair implements Finalizable {
-  RsaKeyPair._(this._pkey, this.modulus, this.exponent);
+final class RsaKeyPair._(
+  final Pointer<EVP_PKEY> _pkey,
 
+  /// The public modulus (JWK `n`), big-endian unsigned.
+  final Uint8List modulus,
+
+  /// The public exponent (JWK `e`), big-endian unsigned (65537 → `AQAB`).
+  final Uint8List exponent,
+) implements Finalizable {
   /// Generates a new RSA key of [bits] modulus size (default 2048) with the
   /// standard public exponent F4 (65537).
-  factory RsaKeyPair.generate([int bits = 2048]) {
+  factory generate([int bits = 2048]) {
     if (bits < 512) {
       throw ArgumentError.value(bits, 'bits', 'must be at least 512');
     }
@@ -68,14 +74,6 @@ final class RsaKeyPair implements Finalizable {
     }
   }
 
-  final Pointer<EVP_PKEY> _pkey;
-
-  /// The public modulus (JWK `n`), big-endian unsigned.
-  final Uint8List modulus;
-
-  /// The public exponent (JWK `e`), big-endian unsigned (65537 → `AQAB`).
-  final Uint8List exponent;
-
   /// Signs [message] as `RS256` (RSASSA-PKCS1-v1_5 over SHA-256).
   Uint8List signPkcs1Sha256(Uint8List message) =>
       signDigest(_pkey, EVP_sha256(), message);
@@ -99,14 +97,21 @@ final class RsaKeyPair implements Finalizable {
 /// Exposes the public affine coordinates as fixed-width big-endian values (JWK
 /// `x`/`y`) — 32 bytes on P-256, 48 on P-384. The native key is freed on
 /// garbage collection.
-final class EcKeyPair implements Finalizable {
-  EcKeyPair._(this._pkey, this._fieldSize, this.x, this.y);
+final class EcKeyPair._(
+  final Pointer<EVP_PKEY> _pkey,
+  final int _fieldSize,
 
+  /// The public key's affine x-coordinate (JWK `x`), big-endian.
+  final Uint8List x,
+
+  /// The public key's affine y-coordinate (JWK `y`), big-endian.
+  final Uint8List y,
+) implements Finalizable {
   /// Generates a new P-256 key pair (for `ES256`).
-  factory EcKeyPair.generateP256() => _generate(NID_X9_62_prime256v1, 32);
+  factory generateP256() => _generate(NID_X9_62_prime256v1, 32);
 
   /// Generates a new P-384 key pair (for `ES384`).
-  factory EcKeyPair.generateP384() => _generate(NID_secp384r1, 48);
+  factory generateP384() => _generate(NID_secp384r1, 48);
 
   static EcKeyPair _generate(int nid, int fieldSize) {
     Pointer<EC_KEY> ec = EC_KEY_new_by_curve_name(nid);
@@ -171,15 +176,6 @@ final class EcKeyPair implements Finalizable {
       }
     }
   }
-
-  final Pointer<EVP_PKEY> _pkey;
-  final int _fieldSize;
-
-  /// The public key's affine x-coordinate (JWK `x`), big-endian.
-  final Uint8List x;
-
-  /// The public key's affine y-coordinate (JWK `y`), big-endian.
-  final Uint8List y;
 
   /// Signs [message] with ECDSA over SHA-256, returning a DER-encoded
   /// signature. On a P-256 pair this is `ES256`.

@@ -9,8 +9,8 @@ import 'package:keta/keta.dart';
 /// exactly what a middleware wrote. `withFields` returns a view that keeps
 /// recording into the same store, the way a real per-request logger does.
 class MemLog implements Log {
-  MemLog([this.lines = const []]) : _baked = const {};
-  MemLog._(this.lines, this._baked);
+  new([this.lines = const []]) : _baked = const {};
+  new _(this.lines, this._baked);
   final List<Map<String, Object?>> lines;
   final Map<String, Object?> _baked;
 
@@ -41,11 +41,7 @@ class MemLog implements Log {
 }
 
 /// The minimal environment keta's generic parameter needs: it carries a [Log].
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-}
+class Env(@override final Log log) implements HasLog;
 
 /// A fresh environment whose log is an inspectable [MemLog]. Tests that never
 /// read the log simply ignore it; those that do cast `env.log as MemLog`.

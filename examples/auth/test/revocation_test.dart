@@ -25,14 +25,16 @@ import 'package:test/test.dart';
 /// shape `../register`'s test/streaming_test.dart uses for its SSE feed,
 /// since `TestClient` has no dedicated SSE helper and would hang forever
 /// draining an open one.
-class _Req implements TransportRequest {
-  _Req(this.method, String path, {Map<String, String> headers = const {}})
+class _Req(
+  @override final String method,
+  String path, {
+  Map<String, String> headers = const {},
+}) implements TransportRequest {
+  this
     : uri = Uri.parse(path),
       headers = {
         for (final e in headers.entries) e.key.toLowerCase(): [e.value],
       };
-  @override
-  final String method;
   @override
   final Uri uri;
   @override
@@ -61,9 +63,9 @@ void main() {
       json: {'username': 'admin', 'password': 'admin-pass'},
     );
     expect(login.status, 200);
-    final sid = RegExp(
-      r'sid=([^;]+)',
-    ).firstMatch(login.headers['set-cookie']!)!.group(1)!;
+    final sid = RegExp(r'sid=([^;]+)')
+        .firstMatch(login.headers['set-cookie']!)!
+        .group(1)!;
     final cookieHeader = {'cookie': 'sid=$sid'};
 
     // Open the feed and hold its raw body stream — draining it via
@@ -118,9 +120,9 @@ void main() {
       '/login',
       json: {'username': 'member', 'password': 'member-pass'},
     );
-    final sid = RegExp(
-      r'sid=([^;]+)',
-    ).firstMatch(login.headers['set-cookie']!)!.group(1)!;
+    final sid = RegExp(r'sid=([^;]+)')
+        .firstMatch(login.headers['set-cookie']!)!
+        .group(1)!;
 
     final streamResponse = await router.dispatch(
       _Req('GET', '/me/events', headers: {'cookie': 'sid=$sid'}),

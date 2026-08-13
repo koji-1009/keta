@@ -42,12 +42,7 @@ String applyCanonicalFix(String source) {
   return _applyEdits(source, edits);
 }
 
-class _Edit {
-  _Edit(this.start, this.end, this.replacement);
-  final int start;
-  final int end;
-  final String replacement;
-}
+class _Edit(final int start, final int end, final String replacement);
 
 String _applyEdits(String source, List<_Edit> edits) {
   edits.sort((a, b) => b.start.compareTo(a.start));
@@ -178,8 +173,17 @@ void _fixClass(
   if (fromJsonDrifted) member(fromJson, _fromJsonSource(className, fields));
   if (toJsonDrifted) member(toJson, _toJsonSource(fields));
   if (insertions.isNotEmpty) {
-    final at = node.body.end - 1; // before the class's closing brace
-    edits.add(_Edit(at, at, '\n${insertions.join('\n\n')}\n'));
+    final body = node.body;
+    if (body is BlockClassBody) {
+      final at = body.rightBracket.offset; // before the class's closing brace
+      edits.add(_Edit(at, at, '\n${insertions.join('\n\n')}\n'));
+    } else {
+      // A class whose primary constructor left it bodyless (`class Foo(…);`)
+      // has no braces to insert into: the `;` becomes the body.
+      edits.add(
+        _Edit(body.offset, body.end, ' {\n${insertions.join('\n\n')}\n}'),
+      );
+    }
   }
 }
 
@@ -257,8 +261,11 @@ String _schemaSource(
 // --- mapper generation ----------------------------------------------------
 
 String _fromJsonSource(String className, List<CanonicalField> fields) {
+  // The Dart 3.13 constructor shorthand: inside the class, `factory fromJson`
+  // needs no class name. Emitting the long form here would regenerate code
+  // that `unnecessary_type_name_in_constructor` immediately flags.
   final buffer = StringBuffer(
-    '  factory $className.fromJson(Map<String, Object?> json) => $className(\n',
+    '  factory fromJson(Map<String, Object?> json) => $className(\n',
   );
   for (final f in fields) {
     buffer.writeln('        ${f.name}: ${f.fromJsonExpr()},');

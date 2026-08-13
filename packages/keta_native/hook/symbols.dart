@@ -24,9 +24,10 @@ typedef Binding = ({String dartName, String symbol});
 List<Binding> readBindings(Uri packageRoot) {
   final bindings = File.fromUri(packageRoot.resolve(bindingsPath));
   final source = bindings.readAsStringSync();
-  final symbols = RegExp(
-    r"symbol: '([A-Za-z0-9_]+)'",
-  ).allMatches(source).map((match) => match.group(1)!).toList();
+  final symbols = RegExp(r"symbol: '([A-Za-z0-9_]+)'")
+      .allMatches(source)
+      .map((match) => match.group(1)!)
+      .toList();
   final dartNames = RegExp(
     r'^external\s[^(]*?(\w+)\(',
     multiLine: true,

@@ -69,10 +69,8 @@ List<Diagnostic> internalAwaitDiagnosticsUnit(
   return diagnostics;
 }
 
-class _AwaitVisitor extends RecursiveAstVisitor<void> {
-  _AwaitVisitor(this.report);
-  final void Function(int offset, int length) report;
-
+class _AwaitVisitor(final void Function(int offset, int length) report)
+    extends RecursiveAstVisitor<void> {
   @override
   void visitAwaitExpression(AwaitExpression node) {
     report(node.awaitKeyword.offset, node.awaitKeyword.length);

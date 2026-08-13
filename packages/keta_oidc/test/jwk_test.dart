@@ -79,15 +79,12 @@ void main() {
       expect(() => Jwk.fromJson({'n': 'x'}), throwsA(isA<JwtMalformed>()));
     });
 
-    test(
-      'a declared alg outside the allowlist is retained as null, not fatal',
-      () {
-        // HS256 is not an accepted algorithm, but a key declaring it still parses
-        // — key parsing is not the policy gate; the token's own alg is.
-        final jwk = Jwk.fromJson(rsaJwkJson(alg: 'HS256'));
-        expect(jwk.algorithm, isNull);
-      },
-    );
+    test('a declared alg outside the allowlist is retained as null, not fatal', () {
+      // HS256 is not an accepted algorithm, but a key declaring it still parses
+      // — key parsing is not the policy gate; the token's own alg is.
+      final jwk = Jwk.fromJson(rsaJwkJson(alg: 'HS256'));
+      expect(jwk.algorithm, isNull);
+    });
 
     test('key_ops is carried, and a non-array key_ops is malformed', () {
       final jwk = Jwk.fromJson({

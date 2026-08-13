@@ -15,17 +15,39 @@ import 'rejection.dart';
 /// about whether the token is expired, from the right issuer, or for the right
 /// audience. That temporal/issuer/audience judgement is the validator's, which
 /// needs a clock and the caller's expectations to make it.
-final class JwtClaims {
-  const JwtClaims._({
-    required this.issuer,
-    required this.subject,
-    required this.audience,
-    required this.expiration,
-    required this.notBefore,
-    required this.issuedAt,
-    required this.raw,
-  });
+final class const JwtClaims._({
+  /// The issuer (`iss`), or `null` if absent.
+  required final String? issuer,
 
+  /// The subject (`sub`), or `null` if absent. Surfaced but never *required* by
+  /// this layer — a token without a `sub` is not rejected here.
+  required final String? subject,
+
+  /// The audience (`aud`) as a list, always. RFC 7519 allows `aud` to be either
+  /// a single string or an array of strings; both are normalised to a list here,
+  /// empty when `aud` is absent, so callers never branch on the wire shape.
+  required final List<String> audience,
+
+  /// The expiration time (`exp`) as UTC, or `null` if absent. Whether the token
+  /// is past it is the validator's judgement, not a property of this value.
+  required final DateTime? expiration,
+
+  /// The not-before time (`nbf`) as UTC, or `null` if absent.
+  required final DateTime? notBefore,
+
+  /// The issued-at time (`iat`) as UTC, or `null` if absent.
+  ///
+  /// **Surfaced but not validated for age.** RFC 7519 makes `iat` informational
+  /// — it is not a validity boundary the way `exp`/`nbf` are — so this layer
+  /// does not reject a token for being "too old" by default. A maximum-age knob
+  /// is a deliberate non-feature here rather than a forgotten one; it can be
+  /// added when a concrete need appears, without changing this shape.
+  required final DateTime? issuedAt,
+
+  /// The full decoded payload, including registered claims. Read application
+  /// claims (`scope`, roles, …) from here.
+  required final Map<String, Object?> raw,
+}) {
   /// Extracts the registered claims from a decoded-JSON payload [map].
   ///
   /// Throws [JwtMalformed] when a registered claim is present with the wrong
@@ -34,7 +56,7 @@ final class JwtClaims {
   /// wrong-typed registered claim is a structurally broken token, not merely an
   /// invalid one — surfacing it here means the validator only ever sees
   /// well-typed claims.
-  factory JwtClaims.fromJson(Map<String, Object?> map) {
+  factory fromJson(Map<String, Object?> map) {
     return JwtClaims._(
       issuer: _string(map, 'iss'),
       subject: _string(map, 'sub'),
@@ -45,38 +67,6 @@ final class JwtClaims {
       raw: map,
     );
   }
-
-  /// The issuer (`iss`), or `null` if absent.
-  final String? issuer;
-
-  /// The subject (`sub`), or `null` if absent. Surfaced but never *required* by
-  /// this layer — a token without a `sub` is not rejected here.
-  final String? subject;
-
-  /// The audience (`aud`) as a list, always. RFC 7519 allows `aud` to be either
-  /// a single string or an array of strings; both are normalised to a list here,
-  /// empty when `aud` is absent, so callers never branch on the wire shape.
-  final List<String> audience;
-
-  /// The expiration time (`exp`) as UTC, or `null` if absent. Whether the token
-  /// is past it is the validator's judgement, not a property of this value.
-  final DateTime? expiration;
-
-  /// The not-before time (`nbf`) as UTC, or `null` if absent.
-  final DateTime? notBefore;
-
-  /// The issued-at time (`iat`) as UTC, or `null` if absent.
-  ///
-  /// **Surfaced but not validated for age.** RFC 7519 makes `iat` informational
-  /// — it is not a validity boundary the way `exp`/`nbf` are — so this layer
-  /// does not reject a token for being "too old" by default. A maximum-age knob
-  /// is a deliberate non-feature here rather than a forgotten one; it can be
-  /// added when a concrete need appears, without changing this shape.
-  final DateTime? issuedAt;
-
-  /// The full decoded payload, including registered claims. Read application
-  /// claims (`scope`, roles, …) from here.
-  final Map<String, Object?> raw;
 
   static String? _string(Map<String, Object?> map, String key) {
     final v = map[key];

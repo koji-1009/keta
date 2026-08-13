@@ -19,9 +19,7 @@ import 'support.dart';
 final _fixedNow = DateTime.utc(2026, 7, 19, 12);
 
 /// A JwksSource that always throws — for the non-token failure paths.
-class _ThrowingJwks implements JwksSource {
-  _ThrowingJwks(this.error);
-  final Exception error;
+class _ThrowingJwks(final Exception error) implements JwksSource {
   @override
   Future<Jwk> resolve(JoseHeader header) async => throw error;
 }
@@ -29,11 +27,10 @@ class _ThrowingJwks implements JwksSource {
 /// A [Log] that records emitted lines in memory, so a test can assert exactly
 /// what the middleware wrote (mirrors keta's own test MemLog). `withFields`
 /// keeps recording into the same store, as a real per-request logger does.
-class _MemLog implements Log {
-  _MemLog(this.lines, [this._baked = const {}]);
-  final List<Map<String, Object?>> lines;
-  final Map<String, Object?> _baked;
-
+class _MemLog(
+  final List<Map<String, Object?>> lines, [
+  final Map<String, Object?> _baked = const {},
+]) implements Log {
   void _add(String level, String msg, Map<String, Object?> fields) =>
       lines.add({'level': level, 'msg': msg, ..._baked, ...fields});
 
@@ -61,11 +58,7 @@ class _MemLog implements Log {
 }
 
 /// A minimal env carrying an inspectable [_MemLog].
-class _LogEnv implements HasLog {
-  _LogEnv(this.log);
-  @override
-  final Log log;
-}
+class _LogEnv(@override final Log log) implements HasLog;
 
 Response _meHandler(Context<Object?> c) {
   final p = c.get(oidcPrincipal);
@@ -132,9 +125,8 @@ void main() {
     });
 
     test('a different scheme (Basic) is not Bearer credentials', () async {
-      final res = await _client(
-        validator: _stubValidator(),
-      ).get('/me', headers: {'authorization': 'Basic dXNlcjpwYXNz'});
+      final res = await _client(validator: _stubValidator())
+          .get('/me', headers: {'authorization': 'Basic dXNlcjpwYXNz'});
       expect(res.status, 401);
       expect(res.headers['www-authenticate'], 'Bearer');
     });
@@ -142,9 +134,8 @@ void main() {
 
   group('bad Bearer credentials → invalid_token (401)', () {
     test('an empty token ("Bearer ")', () async {
-      final res = await _client(
-        validator: _stubValidator(),
-      ).get('/me', headers: {'authorization': 'Bearer '});
+      final res = await _client(validator: _stubValidator())
+          .get('/me', headers: {'authorization': 'Bearer '});
       expect(res.status, 401);
       expect(
         res.headers['www-authenticate'],
@@ -153,9 +144,8 @@ void main() {
     });
 
     test('more than one token ("Bearer a b")', () async {
-      final res = await _client(
-        validator: _stubValidator(),
-      ).get('/me', headers: {'authorization': 'Bearer a b'});
+      final res = await _client(validator: _stubValidator())
+          .get('/me', headers: {'authorization': 'Bearer a b'});
       expect(res.status, 401);
       expect(
         res.headers['www-authenticate'],
@@ -165,9 +155,8 @@ void main() {
   });
 
   test('a lowercase "bearer" scheme is accepted', () async {
-    final res = await _client(
-      validator: _stubValidator(),
-    ).get('/me', headers: {'authorization': 'bearer ${_token()}'});
+    final res = await _client(validator: _stubValidator())
+        .get('/me', headers: {'authorization': 'bearer ${_token()}'});
     expect(res.status, 200);
     expect(res.json(), {'sub': 'user-1', 'scopes': <String>[]});
   });
@@ -343,9 +332,8 @@ void main() {
 
   group('principal injection', () {
     test('the handler sees sub, claims, and scopes', () async {
-      final res = await _client(
-        validator: _stubValidator(),
-      ).get('/me', headers: _auth(_token(claims: {'scope': 'read write'})));
+      final res = await _client(validator: _stubValidator())
+          .get('/me', headers: _auth(_token(claims: {'scope': 'read write'})));
       expect(res.status, 200);
       expect(res.json(), {
         'sub': 'user-1',
@@ -378,9 +366,8 @@ void main() {
 
   group('scope-claim union', () {
     Future<Object?> scopesFor(Map<String, Object?> claims) async {
-      final res = await _client(
-        validator: _stubValidator(),
-      ).get('/me', headers: _auth(_token(claims: claims)));
+      final res = await _client(validator: _stubValidator())
+          .get('/me', headers: _auth(_token(claims: claims)));
       return (res.json()! as Map)['scopes'];
     }
 

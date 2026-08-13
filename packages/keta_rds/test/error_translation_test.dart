@@ -285,78 +285,75 @@ void main() {
     });
   });
 
-  group(
-    'conditions left raw (the floor is not a ceiling in the wrong direction)',
-    () {
-      test('a syntax error (42601) passes through untranslated', () async {
-        // The app wrote broken SQL: not a condition any client can act on, so
-        // it stays the driver's own ServerException and earns its 500. (23502
-        // NOT NULL and 23503 FK, once left raw here, are now translated — see
-        // the "translated conditions" group above; this pins that the floor did
-        // not swallow *everything* on the way up.)
-        await expectLater(
-          throwing<void>(serverException('42601', message: 'syntax error')),
-          throwsA(
-            isA<ServerException>()
-                .having((e) => e.code, 'code', '42601')
-                // Emphatically NOT a KetaException: narrowing to ServerException
-                // alone would still pass if translation had swallowed it.
-                .having((e) => e, 'not keta', isNot(isA<KetaException>())),
-          ),
-        );
-      });
-
-      test(
-        'an undefined-column error (42703) passes through untranslated',
-        () async {
-          await expectLater(
-            throwing<void>(serverException('42703')),
-            throwsA(
-              isA<ServerException>().having((e) => e.code, 'code', '42703'),
-            ),
-          );
-        },
+  group('conditions left raw (the floor is not a ceiling in the wrong direction)', () {
+    test('a syntax error (42601) passes through untranslated', () async {
+      // The app wrote broken SQL: not a condition any client can act on, so
+      // it stays the driver's own ServerException and earns its 500. (23502
+      // NOT NULL and 23503 FK, once left raw here, are now translated — see
+      // the "translated conditions" group above; this pins that the floor did
+      // not swallow *everything* on the way up.)
+      await expectLater(
+        throwing<void>(serverException('42601', message: 'syntax error')),
+        throwsA(
+          isA<ServerException>()
+              .having((e) => e.code, 'code', '42601')
+              // Emphatically NOT a KetaException: narrowing to ServerException
+              // alone would still pass if translation had swallowed it.
+              .having((e) => e, 'not keta', isNot(isA<KetaException>())),
+        ),
       );
+    });
 
-      test('a non-fatal query-level PgException passes through', () async {
+    test(
+      'an undefined-column error (42703) passes through untranslated',
+      () async {
         await expectLater(
-          throwing<void>(PgException('some client-side error')),
+          throwing<void>(serverException('42703')),
           throwsA(
-            isA<PgException>().having(
-              (e) => e,
-              'not keta',
-              isNot(isA<KetaException>()),
-            ),
+            isA<ServerException>().having((e) => e.code, 'code', '42703'),
           ),
         );
-      });
+      },
+    );
 
-      test('a client-side encoding PgException is not mistaken for a dead '
-          'connection', () async {
-        // The exact shape package:postgres throws when a parameter's type
-        // cannot be inferred (lib/src/types/type_registry.dart:293) — a
-        // plain, default-severity PgException with the connection perfectly
-        // healthy. It must NOT be swept up by the connection-lost check just
-        // because it, too, is "a PgException that is not a ServerException".
-        await expectLater(
-          throwing<void>(PgException("Could not infer type of value 'x'.")),
-          throwsA(
-            isA<PgException>().having(
-              (e) => e,
-              'not keta',
-              isNot(isA<KetaException>()),
-            ),
+    test('a non-fatal query-level PgException passes through', () async {
+      await expectLater(
+        throwing<void>(PgException('some client-side error')),
+        throwsA(
+          isA<PgException>().having(
+            (e) => e,
+            'not keta',
+            isNot(isA<KetaException>()),
           ),
-        );
-      });
-
-      test(
-        'a keta exception thrown from within passes through unchanged',
-        () async {
-          const original = Unavailable('pool exhausted');
-          await expectLater(throwing<void>(original), throwsA(same(original)));
-        },
+        ),
       );
-    },
-  );
+    });
+
+    test('a client-side encoding PgException is not mistaken for a dead '
+        'connection', () async {
+      // The exact shape package:postgres throws when a parameter's type
+      // cannot be inferred (lib/src/types/type_registry.dart:293) — a
+      // plain, default-severity PgException with the connection perfectly
+      // healthy. It must NOT be swept up by the connection-lost check just
+      // because it, too, is "a PgException that is not a ServerException".
+      await expectLater(
+        throwing<void>(PgException("Could not infer type of value 'x'.")),
+        throwsA(
+          isA<PgException>().having(
+            (e) => e,
+            'not keta',
+            isNot(isA<KetaException>()),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'a keta exception thrown from within passes through unchanged',
+      () async {
+        const original = Unavailable('pool exhausted');
+        await expectLater(throwing<void>(original), throwsA(same(original)));
+      },
+    );
+  });
 }

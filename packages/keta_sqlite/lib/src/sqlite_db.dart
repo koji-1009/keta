@@ -24,9 +24,14 @@ import 'package:sqlite3/sqlite3.dart';
 /// whole process) and keeping queries indexed and small. [SqliteDb.open]'s
 /// [lockTimeout] doc states this constraint's sharpest edge: the
 /// `busy_timeout` PRAGMA's own retry is one such "slow query".
-class SqliteDb implements Db {
-  SqliteDb._(this._db, this._lockTimeout);
-
+class SqliteDb._(
+  final Database _db,
+  // How long a call may wait to acquire the serialization lock before giving up
+  // with a 503. A transaction that awaits unbounded work would otherwise hold
+  // the lock forever and hang every other DB access silently; this bounds the
+  // wait so the failure is loud (503 + log) instead of a deadlock.
+  final Duration _lockTimeout,
+) implements Db {
   /// Opens (creating if absent) the database at [path]. [lockTimeout] bounds how
   /// long a statement waits to acquire the single-writer lock (default 30s), and
   /// is also used as this connection's `busy_timeout` PRAGMA (see [_open]).
@@ -52,7 +57,7 @@ class SqliteDb implements Db {
   /// [_enableWal] reads the mode back and fails loudly if the switch did not
   /// take. Left off, the file uses SQLite's default rollback journal — the
   /// prior behavior, unchanged. WAL is a no-op for [memory] (see there).
-  factory SqliteDb.open(
+  factory open(
     String path, {
     Duration lockTimeout = const Duration(seconds: 30),
     bool wal = false,
@@ -67,7 +72,7 @@ class SqliteDb implements Db {
   /// `memory` and the mode stays `memory` (measured). Rather than issue a pragma
   /// whose result we would have to special-case, [memory] never asks for WAL, so
   /// `memory(wal: true)` opens a normal in-memory database.
-  factory SqliteDb.memory({
+  factory memory({
     Duration lockTimeout = const Duration(seconds: 30),
     bool wal = false,
   }) => SqliteDb._(_open(sqlite3.openInMemory(), lockTimeout), lockTimeout);
@@ -112,7 +117,6 @@ class SqliteDb implements Db {
     }
   }
 
-  final Database _db;
   final Object _txZoneKey = Object();
   // The token of the transaction currently executing, or null between them. Each
   // transaction stamps a fresh token into its zone; the no-relock shortcut fires
@@ -120,11 +124,6 @@ class SqliteDb implements Db {
   // inside one transaction and reused after it (or during a different one) does
   // not bypass the lock and dirty-read another open transaction.
   Object? _currentTx;
-  // How long a call may wait to acquire the serialization lock before giving up
-  // with a 503. A transaction that awaits unbounded work would otherwise hold
-  // the lock forever and hang every other DB access silently; this bounds the
-  // wait so the failure is loud (503 + log) instead of a deadlock.
-  final Duration _lockTimeout;
   late final _Conn _conn = _Conn(this);
   Future<void> _tail = Future<void>.value();
 
@@ -376,10 +375,7 @@ T _translating<T>(T Function() action) {
   }
 }
 
-class _Conn implements DbConn {
-  _Conn(this._db);
-  final SqliteDb _db;
-
+class _Conn(final SqliteDb _db) implements DbConn {
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [

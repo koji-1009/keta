@@ -47,18 +47,15 @@ void main() {
       expect(pair.publicKey().verifyEcdsaSha384(message, reEncoded), isTrue);
     });
 
-    test(
-      'many P-256 signatures round-trip (covers random leading-zero/high-bit r,s)',
-      () {
-        final pair = EcKeyPair.generateP256();
-        for (var i = 0; i < 50; i++) {
-          final message = Uint8List.fromList(utf8.encode('msg-$i'));
-          final der = pair.signEcdsaSha256(message);
-          final reEncoded = joseEcdsaSignatureToDer(derToRawRS(der, 32), 32)!;
-          expect(reEncoded, der, reason: 'signature #$i did not round-trip');
-        }
-      },
-    );
+    test('many P-256 signatures round-trip (covers random leading-zero/high-bit r,s)', () {
+      final pair = EcKeyPair.generateP256();
+      for (var i = 0; i < 50; i++) {
+        final message = Uint8List.fromList(utf8.encode('msg-$i'));
+        final der = pair.signEcdsaSha256(message);
+        final reEncoded = joseEcdsaSignatureToDer(derToRawRS(der, 32), 32)!;
+        expect(reEncoded, der, reason: 'signature #$i did not round-trip');
+      }
+    });
   });
 
   group('INTEGER encoding edge cases', () {

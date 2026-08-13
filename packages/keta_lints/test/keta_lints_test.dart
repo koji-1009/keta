@@ -55,9 +55,9 @@ void register(app) {
   app.post('/u', (c) => c.text(c.param('id')));
 }
 ''';
-      final d = routeDiagnostics(
-        source,
-      ).where((e) => e.rule == 'keta_param_unknown').toList();
+      final d = routeDiagnostics(source)
+          .where((e) => e.rule == 'keta_param_unknown')
+          .toList();
       expect(d, hasLength(2));
       expect(d.map((e) => e.id).toSet(), hasLength(2));
     });
@@ -89,9 +89,9 @@ void register(app) {
   tenants.get('/users/:id', (c) => c.text(c.param('nope')));
 }
 ''';
-        final d = routeDiagnostics(
-          source,
-        ).where((e) => e.rule == 'keta_param_unknown').toList();
+        final d = routeDiagnostics(source)
+            .where((e) => e.rule == 'keta_param_unknown')
+            .toList();
         expect(d, hasLength(1));
         expect(d.single.message, contains('/tenants/:tid/users/:id'));
       });
@@ -134,9 +134,9 @@ void register(app) {
   b.get('/x', (c) => c.text(c.param('nope')));
 }
 ''';
-        final d = routeDiagnostics(
-          source,
-        ).where((e) => e.rule == 'keta_param_unknown').toList();
+        final d = routeDiagnostics(source)
+            .where((e) => e.rule == 'keta_param_unknown')
+            .toList();
         expect(d, hasLength(2));
         expect(d.map((e) => e.id).toSet(), hasLength(2));
       });
@@ -322,13 +322,11 @@ void register(app) { app..use(etag())..use(gzip())..use(accessLog()); }
         b.deleteSync(recursive: true);
       });
       for (final dir in [a, b]) {
-        File(
-          p.join(dir.path, 'pubspec.yaml'),
-        ).writeAsStringSync('name: fixture\n');
+        File(p.join(dir.path, 'pubspec.yaml'))
+            .writeAsStringSync('name: fixture\n');
         Directory(p.join(dir.path, 'lib')).createSync();
-        File(
-          p.join(dir.path, 'lib', 'foo.dart'),
-        ).writeAsStringSync('class X {}');
+        File(p.join(dir.path, 'lib', 'foo.dart'))
+            .writeAsStringSync('class X {}');
       }
       final relA = packageRelativePath(p.join(a.path, 'lib', 'foo.dart'));
       final relB = packageRelativePath(p.join(b.path, 'lib', 'foo.dart'));

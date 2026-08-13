@@ -8,11 +8,7 @@ enum ReadinessStatus { ready, degraded, notReady }
 /// What [readinessPolicy] decided, and why — the `why` matters for a human
 /// reading a probe failure at 3am, not for the load balancer, which only reads
 /// [httpStatus].
-class Readiness {
-  const Readiness(this.status, [this.reason]);
-  final ReadinessStatus status;
-  final String? reason;
-
+class const Readiness(final ReadinessStatus status, [final String? reason]) {
   int get httpStatus => status == ReadinessStatus.notReady ? 503 : 200;
 
   Map<String, Object?> toJson() => {

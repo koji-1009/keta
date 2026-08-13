@@ -103,7 +103,7 @@ Middleware<E> oidc<E>({
           return Response.json({'error': 'internal server error'}, status: 500);
         }
         c.set(oidcPrincipal, principal);
-        return next(c);
+        return await next(c);
     }
   }, KetaOrder.authenticate);
 }
@@ -193,27 +193,21 @@ void _checkScopeToken(String scope) {
 
 /// The result of reading the `Authorization` header for a Bearer token.
 sealed class _Bearer {
-  const _Bearer();
+  const new();
 }
 
 /// No Bearer credentials were presented (absent header, or a non-Bearer scheme)
 /// → the bare challenge.
 final class _NoBearer extends _Bearer {
-  const _NoBearer();
+  const new();
 }
 
 /// Bearer scheme was used but the credentials are unusable (empty, or more than
 /// one token) → `invalid_token` with [description].
-final class _BadBearer extends _Bearer {
-  const _BadBearer(this.description);
-  final String description;
-}
+final class const _BadBearer(final String description) extends _Bearer;
 
 /// A single well-formed Bearer token was extracted (not yet validated).
-final class _Token extends _Bearer {
-  const _Token(this.value);
-  final String value;
-}
+final class const _Token(final String value) extends _Bearer;
 
 /// Parses an `Authorization` header value into a [_Bearer] result (RFC 6750
 /// §2.1): the scheme match is case-insensitive, and the credentials are exactly

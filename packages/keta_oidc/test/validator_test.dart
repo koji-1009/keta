@@ -69,9 +69,9 @@ void main() {
         ),
       );
       expect(
-        () => validator(
-          algorithms: {JwsAlgorithm.rs256},
-        ).validate(jws, Jwk.fromJson(ecJwkJson())),
+        () =>
+            validator(algorithms: {JwsAlgorithm.rs256})
+                .validate(jws, Jwk.fromJson(ecJwkJson())),
         throwsA(isA<JwtAlgorithmNotAllowed>()),
       );
     });
@@ -119,9 +119,9 @@ void main() {
     test('a failing signature surfaces as JwtBadSignature', () {
       final verifier = StubVerifier(result: false);
       expect(
-        () => validator(
-          verifier: verifier,
-        ).validate(rs256Token(), Jwk.fromJson(rsaJwkJson())),
+        () =>
+            validator(verifier: verifier)
+                .validate(rs256Token(), Jwk.fromJson(rsaJwkJson())),
         throwsA(isA<JwtBadSignature>()),
       );
     });

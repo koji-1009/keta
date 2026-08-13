@@ -133,36 +133,33 @@ void main() {
       expect(survived + (report['dropped']! as int), 200);
     });
 
-    test(
-      'a line larger than the whole budget does not evict the rest',
-      () async {
-        // The oversized line is an error's stack trace far more often than not,
-        // and the lines it would evict are the ones explaining how that error
-        // was reached. Dropping the giant loses one line; admitting it loses all
-        // the context and overshoots the bound anyway.
-        final sink = _CaptureSink();
-        addTearDown(sink.close);
-        final log = StdoutLog(
-          sink: sink,
-          flushInterval: Duration.zero,
-          maxBufferedBytes: 4000,
-        );
-        for (var i = 0; i < 20; i++) {
-          log.info('keep-$i');
-        }
-        log.error('boom', StateError('x'), StackTrace.fromString('T' * 8000));
-        await log.flush();
+    test('a line larger than the whole budget does not evict the rest', () async {
+      // The oversized line is an error's stack trace far more often than not,
+      // and the lines it would evict are the ones explaining how that error
+      // was reached. Dropping the giant loses one line; admitting it loses all
+      // the context and overshoots the bound anyway.
+      final sink = _CaptureSink();
+      addTearDown(sink.close);
+      final log = StdoutLog(
+        sink: sink,
+        flushInterval: Duration.zero,
+        maxBufferedBytes: 4000,
+      );
+      for (var i = 0; i < 20; i++) {
+        log.info('keep-$i');
+      }
+      log.error('boom', StateError('x'), StackTrace.fromString('T' * 8000));
+      await log.flush();
 
-        for (var i = 0; i < 20; i++) {
-          expect(sink.text, contains('keep-$i'));
-        }
-        final report = const LineSplitter()
-            .convert(sink.text)
-            .map((l) => jsonDecode(l) as Map<String, Object?>)
-            .firstWhere((l) => l['msg'] == _overflowMsg);
-        expect(report['dropped'], 1); // the giant, and only the giant
-      },
-    );
+      for (var i = 0; i < 20; i++) {
+        expect(sink.text, contains('keep-$i'));
+      }
+      final report = const LineSplitter()
+          .convert(sink.text)
+          .map((l) => jsonDecode(l) as Map<String, Object?>)
+          .firstWhere((l) => l['msg'] == _overflowMsg);
+      expect(report['dropped'], 1); // the giant, and only the giant
+    });
 
     test('the count resets once reported, and does not double-count', () async {
       final sink = _CaptureSink();

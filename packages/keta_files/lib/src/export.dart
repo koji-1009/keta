@@ -33,18 +33,21 @@ const scopedDeclaration = 'scoped';
 /// is the truth, the same way no route file names its own URL. The list is
 /// ordered outer-to-inner within the file — the first entry wraps the rest —
 /// matching keta's own `..use(...)` discipline.
-final class ScopedMiddleware<E> {
+final class const ScopedMiddleware<E>(
+  /// The middleware this directory contributes, outermost first.
+  final List<Middleware<E>> middleware,
+) {
   /// Const, because it only holds the list the file wrote; there is nothing to
   /// check until [Exported.bind] composes it around a handler.
-  const ScopedMiddleware(this.middleware);
-
-  /// The middleware this directory contributes, outermost first.
-  final List<Middleware<E>> middleware;
+  this;
 }
 
 /// One of [App]'s verb methods, torn off to be paired with the slot it serves.
-typedef _Bind<E> =
-    void Function(Object path, Handler<E> handler, {RouteDoc? doc});
+typedef _Bind<E> = void Function(
+  Object path,
+  Handler<E> handler, {
+  RouteDoc? doc,
+});
 
 /// What one method of a URL does: the handler, and the document describing it.
 ///
@@ -56,15 +59,13 @@ typedef _Bind<E> =
 ///
 /// Which method this answers is the slot it occupies on [Exported], so it does
 /// not say.
-final class Serve<E> {
-  const Serve(this.handler, {this.doc});
-
+final class const Serve<E>(
   /// What answers the request.
-  final Handler<E> handler;
+  final Handler<E> handler, {
 
   /// What the contract says about it — the route's [RouteDoc], or null.
-  final RouteDoc? doc;
-}
+  final RouteDoc? doc,
+});
 
 /// Everything a route file contributes, under the one name the tree looks for.
 ///
@@ -81,34 +82,18 @@ final class Serve<E> {
 /// Every mistake this shape can make is now a compile error: a misspelled
 /// `captures:` is an unknown named argument, a handler of the wrong shape is a
 /// type error, a doc attached to a method the file does not serve is unwritable.
-class Exported<E> {
-  /// Const, because it has nothing to check here.
-  ///
-  /// Serving nothing is caught by [bind], which costs nothing: a lazy `final`
-  /// only runs its initializer when something first touches it, and the first
-  /// touch is the bind.
-  const Exported({
-    this.get,
-    this.post,
-    this.put,
-    this.delete,
-    this.patch,
-    this.head,
-    this.options,
-    this.captures = const {},
-  });
-
+class const Exported<E>({
   /// What this URL does for each method it answers. `/users` fills [get] and
   /// [post]; `/health` fills [get] alone. An empty slot is a method this URL
   /// does not answer — the slots are the seven keta binds, which is the whole
   /// closed set.
-  final Serve<E>? get;
-  final Serve<E>? post;
-  final Serve<E>? put;
-  final Serve<E>? delete;
-  final Serve<E>? patch;
-  final Serve<E>? head;
-  final Serve<E>? options;
+  final Serve<E>? get,
+  final Serve<E>? post,
+  final Serve<E>? put,
+  final Serve<E>? delete,
+  final Serve<E>? patch,
+  final Serve<E>? head,
+  final Serve<E>? options,
 
   /// The types of the captures its location declares — `{'index': integer}` for
   /// `routes/users/_uid/tags/_index.dart`. A capture absent here is a [string],
@@ -122,7 +107,14 @@ class Exported<E> {
   /// It belongs to the file rather than to a slot because a capture belongs to
   /// the URL: `/users/:id` has an `id` whether it is being fetched, replaced or
   /// deleted, and every method's document carries the same parameter.
-  final Map<String, Capture<Object?>> captures;
+  final Map<String, Capture<Object?>> captures = const {},
+}) {
+  /// Const, because it has nothing to check here.
+  ///
+  /// Serving nothing is caught by [bind], which costs nothing: a lazy `final`
+  /// only runs its initializer when something first touches it, and the first
+  /// touch is the bind.
+  this;
 
   /// Binds every method this file serves at [template] — the URL its location
   /// denotes, handed in by the generated manifest — wrapped in the directory

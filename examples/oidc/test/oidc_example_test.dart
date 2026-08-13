@@ -204,14 +204,16 @@ void main() {
 /// streaming [Response] directly — the same shape
 /// ../auth/test/revocation_test.dart uses, since `TestClient` has no dedicated
 /// SSE helper and would hang forever draining an open one.
-class _Req implements TransportRequest {
-  _Req(this.method, String path, {Map<String, String> headers = const {}})
+class _Req(
+  @override final String method,
+  String path, {
+  Map<String, String> headers = const {},
+}) implements TransportRequest {
+  this
     : uri = Uri.parse(path),
       headers = {
         for (final e in headers.entries) e.key.toLowerCase(): [e.value],
       };
-  @override
-  final String method;
   @override
   final Uri uri;
   @override

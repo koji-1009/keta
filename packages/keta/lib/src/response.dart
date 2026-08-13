@@ -16,7 +16,7 @@ final _jsonUtf8 = JsonUtf8Encoder();
 /// Wire framing (Content-Length, chunked, H2/H3 frames) belongs to the
 /// Transport, not here.
 class Response {
-  Response(
+  new(
     this.status, {
     Map<String, List<String>>? headers,
     this.body = '',
@@ -40,7 +40,7 @@ class Response {
   /// header state — [status] and [body] can change across a copy — so they DO
   /// re-run here: a copy that would hand an upgrade response a body, or move it
   /// off 101, still throws rather than mint a malformed value.
-  Response._trusted(this.status, this.headers, this.body, this.upgrade) {
+  new _trusted(this.status, this.headers, this.body, this.upgrade) {
     _checkBody(status, body, upgrade);
   }
 
@@ -52,7 +52,7 @@ class Response {
   /// never wanted, so producing it is pure waste — [JsonUtf8Encoder] writes the
   /// bytes the socket needs in one pass. The output is byte-identical, and the
   /// default `toEncodable` (`object.toJson()`) is the same for both.
-  factory Response.json(
+  factory json(
     Object? body, {
     int status = 200,
     Map<String, List<String>>? headers,
@@ -67,7 +67,7 @@ class Response {
 
   /// A `text/plain; charset=utf-8` response. [headers] merge over the content
   /// type (which they may override).
-  factory Response.text(
+  factory text(
     String body, {
     int status = 200,
     Map<String, List<String>>? headers,
@@ -101,7 +101,7 @@ class Response {
   /// (`TestClient` routes it to an in-process channel or a rejection).
   /// Handshake response headers belong to the
   /// realizing transport, not to this value, so none are accepted here.
-  factory Response.upgrade(
+  factory upgrade(
     FutureOr<void> Function(UpgradedChannel channel) onConnected, {
     String? subprotocol,
     Duration? maxIdle,
@@ -339,83 +339,77 @@ class Response {
 /// The wildcard is not a gap to be tolerated silently: an arbitrary-status
 /// exception carries a [status] and nothing more specific to match on, which is
 /// exactly what the wildcard branch should key on.
-sealed class KetaException implements Exception {
-  const KetaException(this.message, [this.detail]);
-
+sealed class const KetaException(final String message, [final Object? detail])
+    implements Exception {
   /// An arbitrary-status exception, for a code without a named subtype.
-  const factory KetaException.status(
-    int status,
-    String message, [
-    Object? detail,
-  ]) = _StatusException;
+  const factory status(int status, String message, [Object? detail]) =
+      _StatusException;
 
   int get status;
-  final String message;
-  final Object? detail;
 
   @override
   String toString() => 'KetaException($status, $message)';
 }
 
 /// 400 — the canonical parse/validation failure.
-final class BadRequest extends KetaException {
-  const BadRequest(super.message, [super.detail]);
+final class const BadRequest(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 400;
 }
 
 /// 401.
-final class Unauthorized extends KetaException {
-  const Unauthorized(super.message, [super.detail]);
+final class const Unauthorized(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 401;
 }
 
 /// 403.
-final class Forbidden extends KetaException {
-  const Forbidden(super.message, [super.detail]);
+final class const Forbidden(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 403;
 }
 
 /// 404.
-final class NotFound extends KetaException {
-  const NotFound(super.message, [super.detail]);
+final class const NotFound(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 404;
 }
 
 /// 409.
-final class Conflict extends KetaException {
-  const Conflict(super.message, [super.detail]);
+final class const Conflict(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 409;
 }
 
 /// 413 — `maxBodyBytes` exceeded.
-final class PayloadTooLarge extends KetaException {
-  const PayloadTooLarge(super.message, [super.detail]);
+final class const PayloadTooLarge(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 413;
 }
 
 /// 422.
-final class UnprocessableEntity extends KetaException {
-  const UnprocessableEntity(super.message, [super.detail]);
+final class const UnprocessableEntity(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 422;
 }
 
 /// 501 — scaffold stubs.
-final class NotImplementedYet extends KetaException {
-  const NotImplementedYet(super.message, [super.detail]);
+final class const NotImplementedYet(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 501;
 }
 
 /// 503 — lockTimeout and other transient unavailability.
-final class Unavailable extends KetaException {
-  const Unavailable(super.message, [super.detail]);
+final class const Unavailable(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 503;
 }
@@ -440,21 +434,21 @@ final class Unavailable extends KetaException {
 /// system is momentarily unusable. [TransientFailure] means the request *did*
 /// reach a working database and lost a concurrency race there; the system is
 /// healthy and the very same request may well succeed on a second try.
-final class TransientFailure extends KetaException {
-  const TransientFailure(super.message, [super.detail]);
+final class const TransientFailure(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 503;
 }
 
 /// 504 — `timeout()`.
-final class GatewayTimeout extends KetaException {
-  const GatewayTimeout(super.message, [super.detail]);
+final class const GatewayTimeout(super.message, [super.detail])
+    extends KetaException {
   @override
   int get status => 504;
 }
 
-final class _StatusException extends KetaException {
-  const _StatusException(this.status, super.message, [super.detail]);
-  @override
-  final int status;
-}
+final class const _StatusException(
+  @override final int status,
+  super.message, [
+  super.detail,
+]) extends KetaException;

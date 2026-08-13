@@ -33,7 +33,23 @@ import 'signature_verifier.dart';
 ///
 /// Each failure is the corresponding [JwtRejection] subtype; a success returns
 /// the [JwtClaims].
-final class JwtValidator {
+final class JwtValidator({
+  /// The cryptographic backend that checks signatures.
+  required final SignatureVerifier verifier,
+
+  /// The permitted algorithms; a token's `alg` must be one of these.
+  required final Set<JwsAlgorithm> algorithms,
+
+  /// The exact issuer (`iss`) a token must carry.
+  required final String issuer,
+
+  /// The audience (`aud`) a token must include.
+  required final String audience,
+
+  /// Clock skew tolerance applied to `exp` and `nbf`.
+  final Duration leeway = const Duration(seconds: 60),
+  DateTime Function()? now,
+}) {
   /// Creates a validator.
   ///
   /// [algorithms] is the allowlist: the token's `alg` must be one of these. It
@@ -48,14 +64,7 @@ final class JwtValidator {
   /// [leeway] absorbs small clock skew between this server and the issuer when
   /// checking `exp`/`nbf` (default 60s). [now] is the clock, injectable for
   /// tests; it defaults to [DateTime.now] and is read once per [validate] call.
-  JwtValidator({
-    required this.verifier,
-    required this.algorithms,
-    required this.issuer,
-    required this.audience,
-    this.leeway = const Duration(seconds: 60),
-    DateTime Function()? now,
-  }) : _now = now ?? DateTime.now {
+  this : _now = now ?? DateTime.now {
     if (algorithms.isEmpty) {
       throw ArgumentError.value(
         algorithms,
@@ -65,21 +74,6 @@ final class JwtValidator {
       );
     }
   }
-
-  /// The cryptographic backend that checks signatures.
-  final SignatureVerifier verifier;
-
-  /// The permitted algorithms; a token's `alg` must be one of these.
-  final Set<JwsAlgorithm> algorithms;
-
-  /// The exact issuer (`iss`) a token must carry.
-  final String issuer;
-
-  /// The audience (`aud`) a token must include.
-  final String audience;
-
-  /// Clock skew tolerance applied to `exp` and `nbf`.
-  final Duration leeway;
 
   final DateTime Function() _now;
 

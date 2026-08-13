@@ -10,22 +10,17 @@ import 'package:test/test.dart';
 /// stack stays exhaustive and a stage can carry a value — `Shed` appears twice
 /// at different depths because a rate limiter keyed by IP belongs before
 /// authentication and one keyed by principal after it.
-sealed class Stage implements MiddlewareOrder {
-  const Stage(this.name, this.rank);
-  @override
-  final String name;
-  @override
-  final int rank;
-}
+sealed class const Stage(@override final String name, @override final int rank)
+    implements MiddlewareOrder;
 
-final class Shed extends Stage {
-  const Shed(int rank) : super('shed', rank);
+final class const Shed(int rank) extends Stage {
+  this : super('shed', rank);
 }
 
 final class Audit extends Stage {
   // Between keta's `authenticate` (7000) and `authorize` (8000): the app's own
   // stage interleaves in the gap rather than renumbering keta's.
-  const Audit() : super('audit', 7500);
+  const new() : super('audit', 7500);
 }
 
 Middleware<void> noop() =>

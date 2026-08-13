@@ -13,17 +13,15 @@ import 'route_doc.dart';
 /// verification itself is app code — keta owns only the plumbing that matches a
 /// route's declared schemes against these verifiers, so "keta ships no auth"
 /// stands.
-class SecurityPolicy<E> {
-  const SecurityPolicy({this.defaults = const [], this.verifiers = const {}});
-
+class const SecurityPolicy<E>({
   /// Schemes required for a route whose `RouteDoc.security` is null (mirrors the
   /// `OpenApi.fromRoutes(security:)` default).
-  final List<SecurityScheme> defaults;
+  final List<SecurityScheme> defaults = const [],
 
   /// Per-scheme-name credential check: return true to admit. A verifier may set
   /// request state (e.g. `c.set(principal, ...)`) as a side effect on success.
-  final Map<String, FutureOr<bool> Function(Context<E>)> verifiers;
-}
+  final Map<String, FutureOr<bool> Function(Context<E>)> verifiers = const {},
+});
 
 /// Middleware that enforces a route's declared security. Wire it once, upstream
 /// (`app.use(enforceSecurity(policy))`).

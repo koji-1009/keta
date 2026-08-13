@@ -49,9 +49,7 @@ Spans accumulate in a bounded queue that a periodic timer drains in batches, mir
 `OtlpExporter` implements keta's `Disposable`: when your `Env` implements `Disposable` and closes the exporter from its `close()`, `Server.shutdown` drains in-flight requests and then drives that close, so pending spans land before the process exits — the same Env-owned lifecycle keta_bus's connection uses.
 
 ```dart
-class Env implements Disposable {
-  Env(this.exporter);
-  final OtlpExporter exporter;
+class Env(final OtlpExporter exporter) implements Disposable {
   @override
   Future<void> close() => exporter.close(); // Server.shutdown drives this
 }

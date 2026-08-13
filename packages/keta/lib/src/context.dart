@@ -26,34 +26,31 @@ const String unmatchedRoute = '(unmatched)';
 /// Keys compare by identity, so a `const` constructor is forbidden: const
 /// canonicalization would fuse separate declarations into one instance and
 /// collide. [name] appears in logs and error messages only.
-final class Key<T> {
-  Key(this.name);
-  final String name;
-}
+final class Key<T>(final String name);
 
 /// The mutable per-request state behind [Context].
 ///
 /// Public within the package so the router and middleware can populate it, but
 /// never exported: user code reaches it only through [Context].
-class RequestCtx<E> {
-  RequestCtx({
-    required this.env,
-    required this.method,
-    required this.uri,
-    required this.headers,
-    required String Function() remoteAddress,
-    required this.params,
-    required this.orderedCaptures,
-    required this.log,
-    required this.maxBodyBytes,
-    required Stream<List<int>> body,
-  }) : _resolveRemoteAddress = remoteAddress,
-       _bodySource = body;
-  final E env;
-  final String method;
-  final Uri uri;
+class RequestCtx<E>({
+  required final E env,
+  required final String method,
+  required final Uri uri,
+  required final Map<String, List<String>> headers,
+  required String Function() remoteAddress,
 
-  final Map<String, List<String>> headers;
+  /// Captured parameters by name, for `c.param`.
+  required final Map<String, String> params,
+
+  /// Captured parameters in path order, for typed-DSL tuple construction.
+  required final List<String> orderedCaptures,
+
+  /// Per-request logger: `env.log` with reqId and route already baked in.
+  required final Log log,
+  required final int maxBodyBytes,
+  required Stream<List<int>> body,
+}) {
+  this : _resolveRemoteAddress = remoteAddress, _bodySource = body;
 
   /// Resolved on first [remoteAddress] read and cached, because most handlers
   /// never read it and resolving it eagerly cost a measured 10.6% of hot-path
@@ -67,17 +64,6 @@ class RequestCtx<E> {
   /// repeated reads within one request always agree.
   String get remoteAddress =>
       _remoteAddressResolved ??= _resolveRemoteAddress();
-
-  /// Captured parameters by name, for `c.param`.
-  final Map<String, String> params;
-
-  /// Captured parameters in path order, for typed-DSL tuple construction.
-  final List<String> orderedCaptures;
-
-  /// Per-request logger: `env.log` with reqId and route already baked in.
-  final Log log;
-
-  final int maxBodyBytes;
 
   final Stream<List<int>> _bodySource;
   final Map<Key<Object?>, Object?> _store = {};

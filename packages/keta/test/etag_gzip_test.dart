@@ -339,7 +339,7 @@ void main() {
     final big = 'y' * 2000;
 
     Future<Response> stack(Context<Env> c, Response handler) async =>
-        gzip<Env>()(c, (c2) => etag<Env>()(c2, (_) => handler));
+        await gzip<Env>()(c, (c2) => etag<Env>()(c2, (_) => handler));
 
     test(
       'etag over identity body, gzip encodes; both headers present',

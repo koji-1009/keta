@@ -94,12 +94,10 @@ abstract final class KetaOrder {
   static const MiddlewareOrder resource = _KetaRank('resource', 9000);
 }
 
-final class _KetaRank implements MiddlewareOrder {
-  const _KetaRank(this.name, this.rank);
-  @override
-  final String name;
-  @override
-  final int rank;
+final class const _KetaRank(
+  @override final String name,
+  @override final int rank,
+) implements MiddlewareOrder {
   @override
   String toString() => 'MiddlewareOrder($name, rank: $rank)';
 }

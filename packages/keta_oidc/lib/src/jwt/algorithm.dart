@@ -4,17 +4,15 @@ library;
 /// verifies with: RSA and elliptic-curve. Symmetric keys (`oct`) have no place
 /// here — HMAC verification is rejected by design (see [JwsAlgorithm]), so the
 /// key type that would carry a shared secret is simply not modelled.
-enum JwkKeyType {
+enum JwkKeyType(
+  /// The `kty` value as it appears in JWK JSON (`"RSA"` / `"EC"`).
+  final String joseName,
+) {
   /// An RSA public key: components `n` (modulus) and `e` (exponent).
   rsa('RSA'),
 
   /// An elliptic-curve public key: components `crv`, `x`, `y`.
   ec('EC');
-
-  const JwkKeyType(this.joseName);
-
-  /// The `kty` value as it appears in JWK JSON (`"RSA"` / `"EC"`).
-  final String joseName;
 
   /// The [JwkKeyType] for a JWK `kty` string, or `null` if it is neither of the
   /// two verifiable families (e.g. `"oct"`, or any unknown value).
@@ -54,7 +52,21 @@ enum JwkKeyType {
 /// unrecognised — never resolves to a value: [fromJose] returns `null` and the
 /// header parser rejects the token as malformed. The rejection therefore
 /// happens at the earliest possible point, before a key is ever consulted.
-enum JwsAlgorithm {
+enum JwsAlgorithm(
+  /// The `alg` value as it appears in a JOSE header (`"RS256"`, `"ES256"`, …).
+  final String joseName,
+
+  /// The key family this algorithm verifies with — the `kty` a matching JWK
+  /// must declare.
+  final JwkKeyType keyType, {
+
+  /// For an EC algorithm, the exact curve (`crv`) the key must use — `"P-256"`
+  /// for [es256], `"P-384"` for [es384]. `null` for RSA algorithms, whose keys
+  /// carry no curve. Binding the curve to the algorithm closes the EC analogue
+  /// of key confusion: an `ES256` token can only be verified against a P-256
+  /// key.
+  final String? curve,
+}) {
   /// RSASSA-PKCS1-v1_5 using SHA-256.
   rs256('RS256', JwkKeyType.rsa),
 
@@ -69,22 +81,6 @@ enum JwsAlgorithm {
 
   /// ECDSA using P-384 and SHA-384.
   es384('ES384', JwkKeyType.ec, curve: 'P-384');
-
-  const JwsAlgorithm(this.joseName, this.keyType, {this.curve});
-
-  /// The `alg` value as it appears in a JOSE header (`"RS256"`, `"ES256"`, …).
-  final String joseName;
-
-  /// The key family this algorithm verifies with — the `kty` a matching JWK
-  /// must declare.
-  final JwkKeyType keyType;
-
-  /// For an EC algorithm, the exact curve (`crv`) the key must use — `"P-256"`
-  /// for [es256], `"P-384"` for [es384]. `null` for RSA algorithms, whose keys
-  /// carry no curve. Binding the curve to the algorithm closes the EC analogue
-  /// of key confusion: an `ES256` token can only be verified against a P-256
-  /// key.
-  final String? curve;
 
   /// The [JwsAlgorithm] for a JOSE `alg` string, or `null` when the value is
   /// outside the allowlist — including `none`, every `HS*`, every `PS*`, and any

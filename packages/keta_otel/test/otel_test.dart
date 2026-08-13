@@ -16,12 +16,9 @@ class Env {}
 /// A minimal, directly-constructed request bypassing [TestClient] — its
 /// verb helpers (`get`/`post`/...) only ever send the seven known keta
 /// verbs, so a bogus/lowercase method needs the transport seam directly.
-class _RawRequest implements TransportRequest {
-  _RawRequest(this.method, String path)
-    : uri = Uri.parse(path),
-      headers = const {};
-  @override
-  final String method;
+class _RawRequest(@override final String method, String path)
+    implements TransportRequest {
+  this : uri = Uri.parse(path), headers = const {};
   @override
   final Uri uri;
   @override

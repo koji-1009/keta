@@ -52,9 +52,7 @@ class _HangingJwks implements JwksSource {
 
 /// A JwksSource that records every resolve, so a test can prove oidc() never
 /// ran when an earlier gate refused the request.
-class _RecordingJwks implements JwksSource {
-  _RecordingJwks(this._delegate);
-  final JwksSource _delegate;
+class _RecordingJwks(final JwksSource _delegate) implements JwksSource {
   int resolveCalls = 0;
   @override
   Future<Jwk> resolve(JoseHeader header) {
@@ -66,19 +64,18 @@ class _RecordingJwks implements JwksSource {
 /// A [TransportRequest] with a caller-controlled `closed` signal and no body —
 /// the same shape examples/oidc uses to reach a raw streaming Response, plus a
 /// way to fire the client-disconnect / going-away seam on demand.
-class _Req implements TransportRequest {
-  _Req(
-    this.method,
-    String path, {
-    Map<String, String> headers = const {},
-    Future<void>? closed,
-  }) : uri = Uri.parse(path),
-       headers = {
-         for (final e in headers.entries) e.key.toLowerCase(): [e.value],
-       },
-       closed = closed ?? Completer<void>().future;
-  @override
-  final String method;
+class _Req(
+  @override final String method,
+  String path, {
+  Map<String, String> headers = const {},
+  Future<void>? closed,
+}) implements TransportRequest {
+  this
+    : uri = Uri.parse(path),
+      headers = {
+        for (final e in headers.entries) e.key.toLowerCase(): [e.value],
+      },
+      closed = closed ?? Completer<void>().future;
   @override
   final Uri uri;
   @override
@@ -125,41 +122,36 @@ void main() {
       },
     );
 
-    test(
-      'once auth+handler produce the SSE Response, timeout() releases and the '
-      'stream is NOT cut at the deadline',
-      () async {
-        // A short timeout, a fast (cached) resolve, and a long-lived SSE stream.
-        // The timer must be cancelled when the Response is produced, so the
-        // stream keeps flowing well past the timeout window.
-        final ticks = StreamController<SseEvent>();
-        final app = App<Object?>()
-          ..use(timeout(const Duration(milliseconds: 30)))
-          ..use(oidc(jwks: _stubJwks(), validator: _stubValidator()))
-          ..get('/events', (c) => c.sse(ticks.stream));
-        final router = app.compile(null);
-        final res = await router.dispatch(
-          _Req('GET', '/events', headers: _auth(_token())),
-        );
-        expect(res.status, 200);
-        expect(res.headers['content-type'], [
-          'text/event-stream; charset=utf-8',
-        ]);
+    test('once auth+handler produce the SSE Response, timeout() releases and the '
+        'stream is NOT cut at the deadline', () async {
+      // A short timeout, a fast (cached) resolve, and a long-lived SSE stream.
+      // The timer must be cancelled when the Response is produced, so the
+      // stream keeps flowing well past the timeout window.
+      final ticks = StreamController<SseEvent>();
+      final app = App<Object?>()
+        ..use(timeout(const Duration(milliseconds: 30)))
+        ..use(oidc(jwks: _stubJwks(), validator: _stubValidator()))
+        ..get('/events', (c) => c.sse(ticks.stream));
+      final router = app.compile(null);
+      final res = await router.dispatch(
+        _Req('GET', '/events', headers: _auth(_token())),
+      );
+      expect(res.status, 200);
+      expect(res.headers['content-type'], ['text/event-stream; charset=utf-8']);
 
-        final seen = <String>[];
-        final sub = (res.body as Stream<List<int>>).listen(
-          (b) => seen.add(String.fromCharCodes(b)),
-        );
-        // Well past the 30ms timeout: if timeout() had cut the stream, no event
-        // added now would ever arrive.
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        ticks.add(SseEvent('after-timeout-window'));
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        expect(seen.join(), contains('after-timeout-window'));
-        await ticks.close();
-        await sub.cancel();
-      },
-    );
+      final seen = <String>[];
+      final sub = (res.body as Stream<List<int>>).listen(
+        (b) => seen.add(String.fromCharCodes(b)),
+      );
+      // Well past the 30ms timeout: if timeout() had cut the stream, no event
+      // added now would ever arrive.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      ticks.add(SseEvent('after-timeout-window'));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(seen.join(), contains('after-timeout-window'));
+      await ticks.close();
+      await sub.cancel();
+    });
   });
 
   group('concern 2 — oidc() with rateLimit()/admission', () {
@@ -239,45 +231,37 @@ void main() {
   });
 
   group('concern 3 — shutdown / client-disconnect drains an SSE under oidc()', () {
-    test(
-      'firing the request\'s going-away seam ends an authenticated SSE stream '
-      'cleanly (onDone), tearing down its source subscription',
-      () async {
-        final going = Completer<void>();
-        var sourceCancelled = false;
-        // A source that never completes on its own — only an abort can end it.
-        final source = StreamController<SseEvent>(
-          onCancel: () => sourceCancelled = true,
-        );
-        final app = App<Object?>()
-          ..use(oidc(jwks: _stubJwks(), validator: _stubValidator()))
-          ..get('/events', (c) => c.sse(source.stream));
-        final router = app.compile(null);
-        final res = await router.dispatch(
-          _Req(
-            'GET',
-            '/events',
-            headers: _auth(_token()),
-            closed: going.future,
-          ),
-        );
-        expect(res.status, 200);
+    test('firing the request\'s going-away seam ends an authenticated SSE stream '
+        'cleanly (onDone), tearing down its source subscription', () async {
+      final going = Completer<void>();
+      var sourceCancelled = false;
+      // A source that never completes on its own — only an abort can end it.
+      final source = StreamController<SseEvent>(
+        onCancel: () => sourceCancelled = true,
+      );
+      final app = App<Object?>()
+        ..use(oidc(jwks: _stubJwks(), validator: _stubValidator()))
+        ..get('/events', (c) => c.sse(source.stream));
+      final router = app.compile(null);
+      final res = await router.dispatch(
+        _Req('GET', '/events', headers: _auth(_token()), closed: going.future),
+      );
+      expect(res.status, 200);
 
-        var done = false;
-        final sub = (res.body as Stream<List<int>>).listen(
-          (_) {},
-          onDone: () => done = true,
-        );
-        // Simulate graceful shutdown / client disconnect: dispatch wired
-        // request.closed → ctx.abort(), which the SSE body observes and ends on.
-        going.complete();
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        expect(done, isTrue, reason: 'the stream wound down on abort');
-        expect(sourceCancelled, isTrue, reason: 'the source sub was cancelled');
-        await sub.cancel();
-        await source.close();
-      },
-    );
+      var done = false;
+      final sub = (res.body as Stream<List<int>>).listen(
+        (_) {},
+        onDone: () => done = true,
+      );
+      // Simulate graceful shutdown / client disconnect: dispatch wired
+      // request.closed → ctx.abort(), which the SSE body observes and ends on.
+      going.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(done, isTrue, reason: 'the stream wound down on abort');
+      expect(sourceCancelled, isTrue, reason: 'the source sub was cancelled');
+      await sub.cancel();
+      await source.close();
+    });
   });
 
   group('concern 5 — contract consistency across packages', () {
@@ -364,9 +348,7 @@ void _unreachableEntry(Object message) {}
 
 /// A JwksSource that always throws — for the non-token failure path in the
 /// contract-consistency group.
-class _ThrowingJwks implements JwksSource {
-  const _ThrowingJwks(this.error);
-  final Exception error;
+class const _ThrowingJwks(final Exception error) implements JwksSource {
   @override
   Future<Jwk> resolve(JoseHeader header) async => throw error;
 }

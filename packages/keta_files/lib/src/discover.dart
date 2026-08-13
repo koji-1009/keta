@@ -11,31 +11,24 @@ import 'package:path/path.dart' as p;
 /// one place that uses it. A generator that inspected the file to find out what
 /// it serves would be re-deriving, by string matching, what the type system
 /// already guarantees — and getting it wrong quietly when it missed.
-class RouteFile {
-  const RouteFile({
-    required this.importPath,
-    required this.prefix,
-    required this.template,
-    this.middleware = const [],
-  });
-
+class const RouteFile({
   /// The import path relative to the manifest, e.g. `routes/users/_id.dart`.
-  final String importPath;
+  required final String importPath,
 
   /// The import alias, e.g. `$users_id`.
-  final String prefix;
+  required final String prefix,
 
   /// The URL this file's location denotes, as parts: `['users', ':id']`. A
   /// `:`-prefixed part is a capture. Empty means `/`.
-  final List<String> template;
+  required final List<String> template,
 
   /// The directory-scoped middleware this file falls under, outermost first:
   /// the `_middleware.dart` files on the path from `routes/` down to this file,
   /// root-first. Empty for a route under no middleware directory. The generator
   /// hands this to [Exported.bind] so each scope wraps the leaf in nesting
   /// order.
-  final List<MiddlewareFile> middleware;
-
+  final List<MiddlewareFile> middleware = const [],
+}) {
   /// The URL, for humans and for error messages.
   String get url => template.isEmpty ? '/' : '/${template.join('/')}';
 }
@@ -50,32 +43,25 @@ class RouteFile {
 /// value, and the compiler checks its shape at the binding line the generator
 /// emits. A generator that parsed the file to find the middleware would be
 /// re-deriving by string matching what the type system already guarantees.
-class MiddlewareFile {
-  const MiddlewareFile({
-    required this.importPath,
-    required this.prefix,
-    required this.dir,
-    required this.scope,
-  });
-
+class const MiddlewareFile({
   /// The import path relative to the manifest, e.g. `routes/admin/_middleware.dart`.
-  final String importPath;
+  required final String importPath,
 
   /// The import alias, e.g. `$mw$admin`. Two `$`s, so it lives in a namespace no
   /// route alias (one `$`, then identifier characters) can ever reach — a route
   /// file and a middleware file are aliased apart by construction, not by luck.
-  final String prefix;
+  required final String prefix,
 
   /// The raw directory segments this file sits in — `['users', '_id']` for
   /// `routes/users/_id/_middleware.dart`, `const []` for the root. Raw (the
   /// `_id` form, not `:id`) because scoping is a prefix test against a route's
   /// raw directory, and both sides must speak the same alphabet.
-  final List<String> dir;
+  required final List<String> dir,
 
   /// The subtree this scopes, as URL parts: `['users', ':id']`. For humans and
   /// for the check that names a middleware file scoping nothing.
-  final List<String> scope;
-
+  required final List<String> scope,
+}) {
   /// The subtree URL this scopes, for messages.
   String get url => scope.isEmpty ? '/' : '/${scope.join('/')}';
 }
@@ -84,15 +70,13 @@ class MiddlewareFile {
 /// files that scope middleware over them. One walk produces both, so a route's
 /// [RouteFile.middleware] chain and the [middleware] list share object identity
 /// — the same alias travels to the import and to every binding that uses it.
-class Discovery {
-  const Discovery({required this.routes, required this.middleware});
-
+class const Discovery({
   /// The route files, sorted by URL.
-  final List<RouteFile> routes;
+  required final List<RouteFile> routes,
 
   /// Every `_middleware.dart` file, sorted by the subtree it scopes.
-  final List<MiddlewareFile> middleware;
-}
+  required final List<MiddlewareFile> middleware,
+});
 
 /// The reserved filename that marks a directory-scoped middleware file rather
 /// than a route. It must be carved out *before* capture interpretation: a

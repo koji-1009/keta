@@ -36,11 +36,8 @@ List<Diagnostic> routeDiagnosticsUnit(
   return diagnostics;
 }
 
-class _RouteVisitor extends RecursiveAstVisitor<void> {
-  _RouteVisitor(this.file, this.diagnostics);
-  final String file;
-  final List<Diagnostic> diagnostics;
-
+class _RouteVisitor(final String file, final List<Diagnostic> diagnostics)
+    extends RecursiveAstVisitor<void> {
   /// Prefixes of names bound to a group in this file:
   /// `final api = app.group('/api')` records `api -> '/api'`.
   ///
@@ -179,13 +176,11 @@ class _RouteVisitor extends RecursiveAstVisitor<void> {
   }
 }
 
-class _ParamCollector extends RecursiveAstVisitor<void> {
-  _ParamCollector(this.names);
-
+class _ParamCollector(
   /// Each read name mapped to the string literal of its first `c.param('...')`
   /// occurrence, so an unknown-param diagnostic points at the offending call.
-  final Map<String, SimpleStringLiteral> names;
-
+  final Map<String, SimpleStringLiteral> names,
+) extends RecursiveAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     if (node.methodName.name == 'param' &&

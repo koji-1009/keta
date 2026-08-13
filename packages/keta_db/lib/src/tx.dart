@@ -101,10 +101,7 @@ Middleware<E> tx<E extends HasDb>() => ordered((Context<E> c, Handler<E> next) {
 /// a loud [StateError] instead. The failure is a programming error (a leaked
 /// connection, a streaming body reaching back into the request's transaction),
 /// so it is thrown synchronously.
-class _CompletedGuard implements DbConn {
-  _CompletedGuard(this._conn);
-
-  final DbConn _conn;
+class _CompletedGuard(final DbConn _conn) implements DbConn {
   bool _completed = false;
 
   void _close() => _completed = true;

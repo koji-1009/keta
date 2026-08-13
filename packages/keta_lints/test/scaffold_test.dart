@@ -17,8 +17,12 @@ void main() {
     test('materializes the canonical DTO shape', () {
       final dtos = scaffold.dtos;
       expect(dtos, contains('enum Role { admin, member }'));
-      expect(dtos, contains('class UserDto {'));
-      expect(dtos, contains('  const UserDto({'));
+      // The field set lives in the primary constructor's header, so there is
+      // no separate field block to drift from the constructor signature.
+      expect(dtos, contains('class const UserDto({'));
+      expect(dtos, contains('  required final String id,'));
+      expect(dtos, contains('  final int? age,'));
+      expect(dtos, contains('}) {'));
       expect(dtos, contains("id: json['id'] as String,"));
       expect(dtos, contains("age: json['age'] as int?,"));
       expect(
@@ -300,9 +304,11 @@ void main() {
       };
       final dtos = generateScaffold(doc).dtos;
       parseString(content: dtos, throwIfDiagnostics: true); // parses cleanly
-      expect(dtos, contains('String class_;')); // reserved word sanitized
+      // reserved word sanitized, as a declaring parameter
+      expect(dtos, contains('final String class_,'));
       expect(dtos, contains("'class': ")); // original wire key preserved
-      expect(dtos, contains('Empty();')); // empty ctor, not `Empty({})`
+      // empty primary constructor, not `Empty({})`
+      expect(dtos, contains('class const Empty() {'));
     });
 
     test('scaffold rejects recursion, name collision, and colliding enum wire '
@@ -556,8 +562,9 @@ void main() {
       expect(dtos, contains('sealed class Event {'));
       expect(dtos, contains("'created' => Created.fromJson(json)"));
       expect(dtos, contains("'deleted' => Deleted.fromJson(json)"));
-      expect(dtos, contains('class Created implements Event {'));
-      expect(dtos, contains('class Deleted implements Event {'));
+      expect(dtos, contains('class const Created({'));
+      expect(dtos, contains('}) implements Event {'));
+      expect(dtos, contains('class const Deleted({'));
       expect(
         dtos,
         contains('@override'),
@@ -702,13 +709,12 @@ void main() {
       parseString(content: dtos, throwIfDiagnostics: true);
       // fromWire throws BadRequest, so keta is imported.
       expect(dtos, contains("import 'package:keta/keta.dart';"));
-      expect(dtos, contains('enum Role {'));
+      // The wire field is the enum's primary constructor parameter.
+      expect(dtos, contains('enum Role(final String wire) {'));
       // A legal value keeps its name; the kebab value is lower-camel-derived and
       // carries its wire string.
       expect(dtos, contains("  admin('admin'),"));
       expect(dtos, contains("  superUser('super-user');"));
-      expect(dtos, contains('  const Role(this.wire);'));
-      expect(dtos, contains('  final String wire;'));
       expect(dtos, contains('  static Role fromWire(String wire) =>'));
       expect(dtos, contains('v.wire == wire'));
       // fromJson reads via fromWire; toJson writes the wire field.
@@ -735,19 +741,22 @@ void main() {
       },
     );
 
-    test('a plain enum (all values are identifiers) stays byte-identical to the '
-        'pre-D-1 form — no wire field, no churn (requirement D-1.a)', () {
-      final dtos = generateScaffold(docWith(['admin', 'member'])).dtos;
-      expect(dtos, contains('enum Role { admin, member }'));
-      expect(dtos, isNot(contains('final String wire')));
-      expect(dtos, isNot(contains('fromWire')));
-      // The plain form maps name<->wire, so the field mappers use .name/.byName.
-      expect(
-        dtos,
-        contains("role: Role.values.byName(json['role'] as String),"),
-      );
-      expect(dtos, contains("'role': role.name,"));
-    });
+    test(
+      'a plain enum (all values are identifiers) stays byte-identical to the '
+      'pre-D-1 form — no wire field, no churn (requirement D-1.a)',
+      () {
+        final dtos = generateScaffold(docWith(['admin', 'member'])).dtos;
+        expect(dtos, contains('enum Role { admin, member }'));
+        expect(dtos, isNot(contains('final String wire')));
+        expect(dtos, isNot(contains('fromWire')));
+        // The plain form maps name<->wire, so the field mappers use .name/.byName.
+        expect(
+          dtos,
+          contains("role: Role.values.byName(json['role'] as String),"),
+        );
+        expect(dtos, contains("'role': role.name,"));
+      },
+    );
 
     test('two wire values that derive one identifier is a ScaffoldError naming '
         'both and the identifier (requirement D-1.b)', () {
@@ -799,9 +808,8 @@ void main() {
     test('scaffold -> check -> fix round-trips clean over an enhanced enum: the '
         'materialized DTO is not flagged non-canonical and the fix is a byte-'
         'identical no-op (requirement D-1.c)', () {
-      final dtos = generateScaffold(
-        docWith(['admin', 'super-user', 'default']),
-      ).dtos;
+      final dtos = generateScaffold(docWith(['admin', 'super-user', 'default']))
+          .dtos;
       // check: the enum is not a DTO, and the DTO that uses it round-trips, so
       // nothing is flagged.
       expect(canonicalDiagnostics(dtos), isEmpty);
@@ -811,9 +819,8 @@ void main() {
 
     test('the generated contract-test sample feeds a wire value fromWire '
         'accepts', () {
-      final test = generateScaffold(
-        docWith(['super-user', 'admin']),
-      ).contractTest;
+      final test = generateScaffold(docWith(['super-user', 'admin']))
+          .contractTest;
       // The sample uses the first enum value verbatim (a wire string), which is
       // exactly what Role.fromWire matches on.
       expect(test, contains("'role': 'super-user'"));

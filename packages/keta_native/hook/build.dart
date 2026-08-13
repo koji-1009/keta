@@ -66,13 +66,10 @@ void main(List<String> args) async {
     // unit plus its per-arch asm) and `crypto` (everything else). Compiling
     // bcm.srcs + bcm.asm + crypto.srcs + crypto.asm together reproduces the
     // non-FIPS `crypto` library CMakeLists.txt builds from the same lists.
-    final sources =
-        jsonDecode(
-              await File.fromUri(
-                checkout.uri.resolve('gen/sources.json'),
-              ).readAsString(),
-            )
-            as Map<String, Object?>;
+    final sources = jsonDecode(
+      await File.fromUri(checkout.uri.resolve('gen/sources.json'))
+          .readAsString(),
+    ) as Map<String, Object?>;
 
     List<String> filesOf(String target, String key) => [
       for (final path

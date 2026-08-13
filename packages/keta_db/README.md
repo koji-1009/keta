@@ -39,10 +39,10 @@ The value published under `txConn` is a completion guard, never the raw adapter 
 `HasDb` is one getter — `Db get db` — and it is how `tx()` and the migration tools reach the database without the framework learning DB vocabulary. keta's `serve(boot, ...)` runs `boot` once per isolate, so every isolate owns its own env (and its own `Db`); implement keta's `Disposable` and `Server.shutdown()` calls `close()` after draining in-flight requests. The boot is where the read-only migration check belongs:
 
 ```dart
-class Env implements HasDb, Disposable {
-  Env(this.db);
+class Env(
   @override
-  final Db db;
+  final Db db,
+) implements HasDb, Disposable {
   @override
   Future<void> close() => db.close();
 }

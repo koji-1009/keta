@@ -29,9 +29,8 @@ library;
 /// more line per combination. Size [buckets] with that multiplier in mind —
 /// a wider bucket list is a proportionally wider `/metrics` payload for
 /// every route × method × status combination in play.
-class MetricsRegistry {
-  MetricsRegistry({List<double> buckets = defaultBuckets})
-    : _buckets = _validateBuckets(buckets);
+class MetricsRegistry({List<double> buckets = defaultBuckets}) {
+  this : _buckets = _validateBuckets(buckets);
 
   /// Prometheus' own conventional bucket boundaries (seconds), covering 5ms
   /// to 10s on a roughly log scale — a reasonable default for in-process HTTP
@@ -215,19 +214,14 @@ String _formatBucketEdge(double edge) {
 /// slots, in ascending `le` order, at render time. An observation greater
 /// than every configured edge increments no slot here: it is still captured
 /// by `count` (and so by the implicit `+Inf` bucket), just by no finite one.
-class _Series {
-  _Series(int bucketCount) : bucketCounts = List.filled(bucketCount, 0);
+class _Series(int bucketCount) {
+  this : bucketCounts = List.filled(bucketCount, 0);
   int count = 0;
   double durationSecondsSum = 0;
   final List<int> bucketCounts;
 }
 
-class _Key {
-  _Key(this.method, this.route, this.status);
-  final String method;
-  final String route;
-  final int status;
-
+class _Key(final String method, final String route, final int status) {
   /// Lazily-escaped, memoized `method="...",route="...",status="..."`
   /// fragment (everything inside the braces except a trailing `le=`).
   /// [labels] is called `buckets.length + 4` times per key on every

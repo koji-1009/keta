@@ -17,12 +17,12 @@ import 'package:keta_db/keta_db.dart';
 /// The reader and writer are distinct connection objects that tag every query
 /// with the side it came in on ([queries]); the runner routes all ledger reads
 /// through the writer (replica-lag safety), and tests assert on that here.
-class FakeDb implements Db {
+class FakeDb({List<String> legacyLedger = const []}) implements Db {
   /// [legacyLedger] pre-seeds rows written before the checksum column existed
   /// (NULL checksum) and marks the ledger as lacking that column, so the runner
   /// must `ALTER TABLE ... ADD COLUMN` before it can read checksums — the
   /// old-deployment upgrade path.
-  FakeDb({List<String> legacyLedger = const []}) {
+  this {
     if (legacyLedger.isNotEmpty) {
       hasChecksumColumn = false;
       for (final version in legacyLedger) {
@@ -136,11 +136,7 @@ class FakeDb implements Db {
 }
 
 /// Reader/writer connection outside a transaction: `execute` commits directly.
-class _DirectConn implements DbConn {
-  _DirectConn(this._db, this._side);
-  final FakeDb _db;
-  final String _side;
-
+class _DirectConn(final FakeDb _db, final String _side) implements DbConn {
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [
@@ -157,11 +153,8 @@ class _DirectConn implements DbConn {
 
 /// Transaction connection: `execute` stages the statement so a later throw
 /// discards it — mirroring how a real engine rolls the whole transaction back.
-class _StagedConn implements DbConn {
-  _StagedConn(this._db, this._staged);
-  final FakeDb _db;
-  final List<(String, List<Object?>)> _staged;
-
+class _StagedConn(final FakeDb _db, final List<(String, List<Object?>)> _staged)
+    implements DbConn {
   @override
   Future<List<Map<String, Object?>>> query(
     String sql, [

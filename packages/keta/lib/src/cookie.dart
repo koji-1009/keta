@@ -25,22 +25,26 @@ enum SameSite {
 /// carry a `;`, CR, LF, or other control character into a header — header
 /// injection is made unrepresentable, the same guarantee [Response] gives its
 /// header map.
-final class SetCookie {
+final class SetCookie(
+  final String name,
+  final String value, {
+
+  /// `Max-Age` in seconds. Independent of [expires]; both may be set.
+  final Duration? maxAge,
+
+  /// `Expires`, emitted as an IMF-fixdate in UTC (RFC 9110 §5.6.7).
+  final DateTime? expires,
+  final String? domain,
+  final String? path,
+  final bool secure = false,
+  final bool httpOnly = false,
+  final SameSite? sameSite,
+}) {
   /// Constructs and validates a cookie. Throws [ArgumentError] when [name] is
   /// not an RFC 6265 token, [value] is not a cookie-value, [domain] or [path]
   /// carry a control character or `;`, or [sameSite] is [SameSite.none] without
   /// [secure] (RFC 6265bis requires `Secure` for `SameSite=None`).
-  SetCookie(
-    this.name,
-    this.value, {
-    this.maxAge,
-    this.expires,
-    this.domain,
-    this.path,
-    this.secure = false,
-    this.httpOnly = false,
-    this.sameSite,
-  }) {
+  this {
     _checkName(name);
     _checkValue(value);
     if (domain != null) _checkAttr(domain!, 'domain');
@@ -55,21 +59,6 @@ final class SetCookie {
       );
     }
   }
-
-  final String name;
-  final String value;
-
-  /// `Max-Age` in seconds. Independent of [expires]; both may be set.
-  final Duration? maxAge;
-
-  /// `Expires`, emitted as an IMF-fixdate in UTC (RFC 9110 §5.6.7).
-  final DateTime? expires;
-
-  final String? domain;
-  final String? path;
-  final bool secure;
-  final bool httpOnly;
-  final SameSite? sameSite;
 
   /// Renders the `Set-Cookie` field value: `name=value` followed by each set
   /// attribute in RFC 6265 §4.1.1 order.

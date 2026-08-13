@@ -29,16 +29,9 @@ import 'upgrade.dart';
 /// the `rateLimit()` / `concurrencyLimit()` middleware in `admission.dart`.
 /// [idleTimeout] bounds the pre-parse slow-header hold (below), but the raw
 /// count of open sockets is not this transport's to cap.
-class H1Transport implements Transport {
-  const H1Transport({
-    this.address,
-    this.onError,
-    this.securityContext,
-    this.idleTimeout,
-  });
-
+class const H1Transport({
   /// The bind address; defaults to all IPv4 interfaces when null.
-  final Object? address;
+  final Object? address,
 
   /// Reports transport-level failures (write errors, accept errors) instead of
   /// letting them reach the root zone. Falls back to stderr when null.
@@ -48,7 +41,7 @@ class H1Transport implements Transport {
   /// throw is caught and reported to stderr alongside the original error,
   /// instead of rejecting a future nothing awaits or reaching the root zone
   /// from inside a catch clause.
-  final void Function(Object error, StackTrace stack)? onError;
+  final void Function(Object error, StackTrace stack)? onError,
 
   /// A TLS context that switches [bind] from `HttpServer.bind` to
   /// `HttpServer.bindSecure`, terminating TLS in-process. Null (the default)
@@ -61,7 +54,7 @@ class H1Transport implements Transport {
   /// pulling in a TLS package. `bindSecure` takes the same `shared: true`, so a
   /// TLS listener shares the accept queue across `serve(isolates: n)` exactly as
   /// the plaintext one does — the isolate-sharing story is unchanged by TLS.
-  final SecurityContext? securityContext;
+  final SecurityContext? securityContext,
 
   /// Bounds how long a connection may sit idle before the server reaps it,
   /// assigned to `HttpServer.idleTimeout` on the bound server (both the plain
@@ -80,8 +73,8 @@ class H1Transport implements Transport {
   /// worst-case hold is ~2× idleTimeout. Under the 120 s default that is ~4
   /// minutes of a socket held on nothing; an operator who wants a tighter bound
   /// against slow-header holds sets this to something small.
-  final Duration? idleTimeout;
-
+  final Duration? idleTimeout,
+}) implements Transport {
   @override
   Future<TransportServer> bind(
     int port,
@@ -131,13 +124,14 @@ void Function(Object, StackTrace) _guardedOnError(
   };
 }
 
-class _H1Server implements TransportServer {
-  _H1Server(this._server, this._onRequest, this._onError) {
+class _H1Server(
+  final HttpServer _server,
+  final FutureOr<Response> Function(TransportRequest) _onRequest,
+  final void Function(Object, StackTrace) _onError,
+) implements TransportServer {
+  this {
     _server.listen(_accept, onError: _onError);
   }
-  final HttpServer _server;
-  final FutureOr<Response> Function(TransportRequest) _onRequest;
-  final void Function(Object, StackTrace) _onError;
   final Set<Future<void>> _inFlight = {};
 
   // The wrapped requests currently being handled, parallel to `_inFlight`.
@@ -348,9 +342,8 @@ class _H1Server implements TransportServer {
         for (final ws in _openSockets.toList())
           ws.close(WebSocketStatus.goingAway).catchError((_) {}),
       ];
-      await Future.wait(
-        closing,
-      ).timeout(const Duration(seconds: 2), onTimeout: () => const []);
+      await Future.wait(closing)
+          .timeout(const Duration(seconds: 2), onTimeout: () => const []);
     }
     await _server.close(force: true).catchError((_) {});
     await stopped.catchError((_) {});
@@ -388,8 +381,8 @@ class _H1Server implements TransportServer {
 /// its `onConnected` (which runs before any frame can be delivered), so a
 /// normal handler loses nothing; only a genuinely push-only or late-listening
 /// handler discards inbound frames, which is exactly its intent.
-class _IoWebSocketChannel implements UpgradedChannel {
-  _IoWebSocketChannel(this._ws) {
+class _IoWebSocketChannel(final WebSocket _ws) implements UpgradedChannel {
+  this {
     _sub = _ws.listen(
       (dynamic message) {
         // Forward only while a live `messages` subscriber wants the frame; with
@@ -433,7 +426,6 @@ class _IoWebSocketChannel implements UpgradedChannel {
       _subscribed = false;
     };
   }
-  final WebSocket _ws;
   final StreamController<Object> _incoming = StreamController<Object>();
   final Completer<void> _closed = Completer<void>();
 
@@ -480,8 +472,8 @@ class _IoWebSocketChannel implements UpgradedChannel {
   return (channel, () => channel._dropped);
 }
 
-class _H1Request implements TransportRequest {
-  _H1Request(this._request) {
+class _H1Request(final HttpRequest _request) implements TransportRequest {
+  this {
     // Client-disconnect detection is only partial on dart:io's HttpServer:
     // while a request is handled it pauses the socket's read subscription
     // (http_impl.dart), so a client that drops the connection *after* the full
@@ -503,7 +495,6 @@ class _H1Request implements TransportRequest {
       },
     );
   }
-  final HttpRequest _request;
   final Completer<void> _closed = Completer<void>();
 
   /// Fires the `closed` seam early, at graceful shutdown, so a cooperative

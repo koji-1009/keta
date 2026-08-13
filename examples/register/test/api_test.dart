@@ -184,36 +184,33 @@ void main() {
     expect((await client.get('/users/1', headers: admin)).status, 404);
   });
 
-  test(
-    'the custom Role capture parses a valid role and 400s a bad one',
-    () async {
-      final env = await bootTestEnv();
-      addTearDown(env.close);
-      final client = TestClient(buildApp(), env);
-      await client.post(
-        '/users',
-        headers: admin,
-        json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
-      );
-      await client.post(
-        '/users',
-        headers: admin,
-        json: {'id': '2', 'name': 'Bo', 'role': 'member', 'tags': <String>[]},
-      );
-      // Valid role → the capture parses `admin` and the route lists that role.
-      final admins =
-          (await client.get('/users/by-role/admin', headers: admin)).json()!
-              as Map;
-      expect(admins['total'], 1);
-      expect((admins['items'] as List).single, containsPair('id', '1'));
-      // Invalid role → the capture's parse throws BadRequest, so it is a 400 at
-      // the boundary, decided by the declaration and never reaching the handler.
-      expect(
-        (await client.get('/users/by-role/wizard', headers: admin)).status,
-        400,
-      );
-    },
-  );
+  test('the custom Role capture parses a valid role and 400s a bad one', () async {
+    final env = await bootTestEnv();
+    addTearDown(env.close);
+    final client = TestClient(buildApp(), env);
+    await client.post(
+      '/users',
+      headers: admin,
+      json: {'id': '1', 'name': 'Ada', 'role': 'admin', 'tags': <String>[]},
+    );
+    await client.post(
+      '/users',
+      headers: admin,
+      json: {'id': '2', 'name': 'Bo', 'role': 'member', 'tags': <String>[]},
+    );
+    // Valid role → the capture parses `admin` and the route lists that role.
+    final admins =
+        (await client.get('/users/by-role/admin', headers: admin)).json()!
+            as Map;
+    expect(admins['total'], 1);
+    expect((admins['items'] as List).single, containsPair('id', '1'));
+    // Invalid role → the capture's parse throws BadRequest, so it is a 400 at
+    // the boundary, decided by the declaration and never reaching the handler.
+    expect(
+      (await client.get('/users/by-role/wizard', headers: admin)).status,
+      400,
+    );
+  });
 
   test('update (PUT) and delete (DELETE) complete the CRUD surface', () async {
     final env = await bootTestEnv();

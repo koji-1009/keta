@@ -77,63 +77,58 @@ $snippet
 ''';
 
 void main() {
-  test(
-    'every dart block in the Testing section compiles',
-    () async {
-      // The package root, from the test's own location, so this works from any
-      // working directory the runner is launched in.
-      final packageRoot = Directory.current.path;
-      final doc = File('$packageRoot/../../llms.txt');
-      expect(
-        doc.existsSync(),
-        isTrue,
-        reason: 'llms.txt not found from $packageRoot',
-      );
+  test('every dart block in the Testing section compiles', () async {
+    // The package root, from the test's own location, so this works from any
+    // working directory the runner is launched in.
+    final packageRoot = Directory.current.path;
+    final doc = File('$packageRoot/../../llms.txt');
+    expect(
+      doc.existsSync(),
+      isTrue,
+      reason: 'llms.txt not found from $packageRoot',
+    );
 
-      final snippets = _testingSnippets(doc.readAsStringSync());
-      expect(
-        snippets,
-        isNotEmpty,
-        reason:
-            'the Testing section has no dart blocks — extraction is broken, '
-            'which would make this gate silently vacuous',
-      );
+    final snippets = _testingSnippets(doc.readAsStringSync());
+    expect(
+      snippets,
+      isNotEmpty,
+      reason:
+          'the Testing section has no dart blocks — extraction is broken, '
+          'which would make this gate silently vacuous',
+    );
 
-      // Written inside the package so `package:keta` resolves through its own
-      // package config, and under .dart_tool so it is never part of the tree the
-      // package's own analyze walks.
-      final scratch = Directory('$packageRoot/.dart_tool/llms_check');
-      if (scratch.existsSync()) scratch.deleteSync(recursive: true);
-      scratch.createSync(recursive: true);
-      addTearDown(() => scratch.deleteSync(recursive: true));
+    // Written inside the package so `package:keta` resolves through its own
+    // package config, and under .dart_tool so it is never part of the tree the
+    // package's own analyze walks.
+    final scratch = Directory('$packageRoot/.dart_tool/llms_check');
+    if (scratch.existsSync()) scratch.deleteSync(recursive: true);
+    scratch.createSync(recursive: true);
+    addTearDown(() => scratch.deleteSync(recursive: true));
 
-      final files = <String>[];
-      for (var i = 0; i < snippets.length; i++) {
-        final f = File('${scratch.path}/snippet_$i.dart')
-          ..writeAsStringSync(_harness(snippets[i]));
-        files.add(f.path);
-      }
+    final files = <String>[];
+    for (var i = 0; i < snippets.length; i++) {
+      final f = File('${scratch.path}/snippet_$i.dart')
+        ..writeAsStringSync(_harness(snippets[i]));
+      files.add(f.path);
+    }
 
-      final result = await Process.run(Platform.resolvedExecutable, [
-        'analyze',
-        '--no-fatal-warnings',
-        ...files,
-      ], workingDirectory: packageRoot);
+    final result = await Process.run(Platform.resolvedExecutable, [
+      'analyze',
+      '--no-fatal-warnings',
+      ...files,
+    ], workingDirectory: packageRoot);
 
-      // Errors only: a snippet is an excerpt, so unused imports and missing
-      // return types are noise, but an undefined name or a wrong argument is the
-      // doc being wrong.
-      final errors = '${result.stdout}'
-          .split('\n')
-          .where((l) => l.contains('error -'))
-          .toList();
-      expect(
-        errors,
-        isEmpty,
-        reason:
-            'llms.txt Testing snippets do not compile:\n${errors.join('\n')}',
-      );
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+    // Errors only: a snippet is an excerpt, so unused imports and missing
+    // return types are noise, but an undefined name or a wrong argument is the
+    // doc being wrong.
+    final errors = '${result.stdout}'
+        .split('\n')
+        .where((l) => l.contains('error -'))
+        .toList();
+    expect(
+      errors,
+      isEmpty,
+      reason: 'llms.txt Testing snippets do not compile:\n${errors.join('\n')}',
+    );
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }

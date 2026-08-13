@@ -99,9 +99,8 @@ const _keyInline = LintCode(
 /// Shared base: walk the compilation unit once, run [analyze] over its source,
 /// and report each [Diagnostic] at its `(offset, length)` under the matching
 /// lint code.
-abstract class _KetaRule extends MultiAnalysisRule {
-  _KetaRule({required super.name, required super.description});
-
+abstract class _KetaRule({required super.name, required super.description})
+    extends MultiAnalysisRule {
   /// Maps a keta rule id (e.g. `keta_param_unknown`) to its [LintCode].
   Map<String, LintCode> get _codes;
 
@@ -141,11 +140,8 @@ abstract class _KetaRule extends MultiAnalysisRule {
   }
 }
 
-class _KetaVisitor extends SimpleAstVisitor<void> {
-  _KetaVisitor(this.rule, this.context);
-  final _KetaRule rule;
-  final RuleContext context;
-
+class _KetaVisitor(final _KetaRule rule, final RuleContext context)
+    extends SimpleAstVisitor<void> {
   @override
   void visitCompilationUnit(CompilationUnit node) => rule._run(context);
 }
@@ -153,7 +149,7 @@ class _KetaVisitor extends SimpleAstVisitor<void> {
 /// `keta_param_unknown` + `keta_capture_unused` — string-route param/capture
 /// drift.
 class KetaRouteRule extends _KetaRule {
-  KetaRouteRule()
+  new()
     : super(
         name: 'keta_route',
         description:
@@ -175,7 +171,7 @@ class KetaRouteRule extends _KetaRule {
 /// `keta_query_undeclared` + `keta_query_drift` — query accessor vs
 /// `RouteDoc(query: …)` drift.
 class KetaQueryRule extends _KetaRule {
-  KetaQueryRule()
+  new()
     : super(
         name: 'keta_query',
         description:
@@ -201,7 +197,7 @@ class KetaQueryRule extends _KetaRule {
 /// drifted from a field's declared type, or its `Schema` constant has drifted
 /// from its field set (a wrong OpenAPI document).
 class KetaCanonicalRule extends _KetaRule {
-  KetaCanonicalRule()
+  new()
     : super(
         name: 'keta_canonical',
         description:
@@ -224,7 +220,7 @@ class KetaCanonicalRule extends _KetaRule {
 
 /// `keta_tx_outside_recover` — `use(tx())` registered outside `use(recover())`.
 class KetaTxOrderRule extends _KetaRule {
-  KetaTxOrderRule()
+  new()
     : super(
         name: 'keta_tx_outside_recover',
         description:
@@ -247,7 +243,7 @@ class KetaTxOrderRule extends _KetaRule {
 /// Editor-speed feedback over what one run of `use()` calls shows; `App.compile`
 /// checks the chain a request actually gets and is what guarantees the order.
 class KetaMiddlewareOrderRule extends _KetaRule {
-  KetaMiddlewareOrderRule()
+  new()
     : super(
         name: 'keta_middleware_order',
         description:
@@ -269,7 +265,7 @@ class KetaMiddlewareOrderRule extends _KetaRule {
 /// Context get/tryGet/set call. `Key` compares by identity, so an inline
 /// instance can never match a value stored under another instance.
 class KetaKeyRule extends _KetaRule {
-  KetaKeyRule()
+  new()
     : super(
         name: 'keta_key_inline',
         description:
@@ -289,7 +285,7 @@ class KetaKeyRule extends _KetaRule {
 /// (registered as a lint), because it is meaningful only over keta's own
 /// composition modules, not consumer code.
 class KetaInternalAwaitRule extends _KetaRule {
-  KetaInternalAwaitRule()
+  new()
     : super(
         name: 'keta_internal_await',
         description:

@@ -9,7 +9,7 @@ import 'package:keta_bus/keta_bus.dart';
 import 'package:test/test.dart';
 
 class _NotJson {
-  const _NotJson();
+  const new();
 }
 
 void main() {

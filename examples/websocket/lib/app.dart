@@ -4,11 +4,7 @@ import 'package:keta_openapi/keta_openapi.dart';
 /// The environment. This example needs nothing but a log, so [HasLog] is the
 /// whole contract — a realtime service with real dependencies would carry them
 /// here the way examples/register does.
-class Env implements HasLog {
-  Env(this.log);
-  @override
-  final Log log;
-
+class Env(@override final Log log) implements HasLog {
   static Future<Env> boot() async => Env(StdoutLog());
 }
 

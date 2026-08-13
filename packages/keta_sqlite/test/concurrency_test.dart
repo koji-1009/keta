@@ -30,9 +30,8 @@ void main() {
           }),
       ]);
 
-      final n = (await db.reader.query(
-        'select n from counter where id = 1',
-      )).single['n'];
+      final n = (await db.reader.query('select n from counter where id = 1'))
+          .single['n'];
       expect(n, 1000);
     },
   );

@@ -18,7 +18,24 @@ import 'response.dart';
 /// wrote — which is the SSE analogue of header-injection/response-splitting.
 /// Rejecting it here means every constructed [SseEvent] renders to exactly one
 /// event, the same posture [Response] gives its header map.
-final class SseEvent {
+final class SseEvent(
+  /// The event payload. May contain newlines (rendered as multiple `data:`
+  /// lines). CR, LF, and CRLF are all normalized to LF on the wire — a bare CR
+  /// can never leak into a `data:` line and break framing.
+  final String data, {
+
+  /// The `event:` type field (the `EventSource` listener name), or null for the
+  /// default `message` type. Single-line.
+  final String? event,
+
+  /// The `id:` field (becomes the connection's last-event-ID, echoed as
+  /// `Last-Event-ID` on reconnect), or null. Single-line, no NUL.
+  final String? id,
+
+  /// The `retry:` reconnection hint, rendered as whole milliseconds, or null to
+  /// leave the client's default in place. Non-negative.
+  final Duration? retry,
+}) {
   /// Constructs and validates an event. Throws [ArgumentError] when [event] or
   /// [id] contains CR or LF, when [id] contains a NUL (U+0000), or when [retry]
   /// is negative.
@@ -27,7 +44,7 @@ final class SseEvent {
   /// into one `data:` line per segment at render time (see [toWire]), so a
   /// multi-line payload is represented faithfully rather than truncated. The
   /// other fields are single-line by construction — hence the checks.
-  SseEvent(this.data, {this.event, this.id, this.retry}) {
+  this {
     // A field that could smuggle a line break would forge events: a CR/LF in a
     // single-line field either starts a bogus field or (via a blank line) ends
     // the current event and begins another. Make that unrepresentable.
@@ -49,23 +66,6 @@ final class SseEvent {
       throw ArgumentError.value(retry, 'retry', 'retry must not be negative');
     }
   }
-
-  /// The event payload. May contain newlines (rendered as multiple `data:`
-  /// lines). CR, LF, and CRLF are all normalized to LF on the wire — a bare CR
-  /// can never leak into a `data:` line and break framing.
-  final String data;
-
-  /// The `event:` type field (the `EventSource` listener name), or null for the
-  /// default `message` type. Single-line.
-  final String? event;
-
-  /// The `id:` field (becomes the connection's last-event-ID, echoed as
-  /// `Last-Event-ID` on reconnect), or null. Single-line, no NUL.
-  final String? id;
-
-  /// The `retry:` reconnection hint, rendered as whole milliseconds, or null to
-  /// leave the client's default in place. Non-negative.
-  final Duration? retry;
 
   /// Renders this event as its `text/event-stream` text, terminated by the
   /// blank line that dispatches it.

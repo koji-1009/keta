@@ -130,9 +130,9 @@ void main() {
           'exp': 'not-a-number', // would be JwtMalformed if read before the sig
         });
         expect(
-          () => _validator(
-            verifier: StubVerifier(result: false),
-          ).validate(jws, _rsaKeyNoAlg()),
+          () =>
+              _validator(verifier: StubVerifier(result: false))
+                  .validate(jws, _rsaKeyNoAlg()),
           throwsA(isA<JwtBadSignature>()),
         );
       },
@@ -203,30 +203,33 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  group('HARDENING: an embedded "jwk"/"jku" header is never used to resolve', () {
-    // The classic key-injection attack embeds a key (or a URL to one) in the
-    // token header. keta_oidc resolves keys ONLY from the configured JwksSource,
-    // keyed on `kid`; header-embedded key material is retained in `raw` but
-    // never consulted. A StaticJwks that does not hold the embedded key's kid
-    // therefore misses, rather than trusting the attacker's key.
-    test('resolution ignores an attacker-embedded jwk header', () async {
-      final source = StaticJwks.parse(jwksJson([rsaJwkJson(kid: 'trusted')]));
-      // The token names a kid the source does not hold, and smuggles a full jwk.
-      final jws = Jws.parse(
-        compactJws(
-          header: {
-            'alg': 'RS256',
-            'kid': 'attacker',
-            'jwk': rsaJwkJson(kid: 'attacker'),
-            'jku': 'https://attacker.example/keys',
-          },
-          payload: {'iss': 'https://issuer'},
-        ),
-      );
-      await expectLater(
-        source.resolve(jws.header),
-        throwsA(isA<JwtUnknownKey>()),
-      );
-    });
-  });
+  group(
+    'HARDENING: an embedded "jwk"/"jku" header is never used to resolve',
+    () {
+      // The classic key-injection attack embeds a key (or a URL to one) in the
+      // token header. keta_oidc resolves keys ONLY from the configured JwksSource,
+      // keyed on `kid`; header-embedded key material is retained in `raw` but
+      // never consulted. A StaticJwks that does not hold the embedded key's kid
+      // therefore misses, rather than trusting the attacker's key.
+      test('resolution ignores an attacker-embedded jwk header', () async {
+        final source = StaticJwks.parse(jwksJson([rsaJwkJson(kid: 'trusted')]));
+        // The token names a kid the source does not hold, and smuggles a full jwk.
+        final jws = Jws.parse(
+          compactJws(
+            header: {
+              'alg': 'RS256',
+              'kid': 'attacker',
+              'jwk': rsaJwkJson(kid: 'attacker'),
+              'jku': 'https://attacker.example/keys',
+            },
+            payload: {'iss': 'https://issuer'},
+          ),
+        );
+        await expectLater(
+          source.resolve(jws.header),
+          throwsA(isA<JwtUnknownKey>()),
+        );
+      });
+    },
+  );
 }

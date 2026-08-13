@@ -17,27 +17,20 @@ import 'package:yaml/yaml.dart';
 
 enum Role { admin, member }
 
-class UserDto {
-  UserDto({
-    required this.id,
-    required this.name,
-    this.age,
-    required this.role,
-    required this.tags,
-  });
-
-  factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
+class UserDto({
+  required final String id,
+  required final String name,
+  final int? age,
+  required final Role role,
+  required final List<String> tags,
+}) {
+  factory fromJson(Map<String, Object?> json) => UserDto(
     id: json['id'] as String,
     name: json['name'] as String,
     age: json['age'] as int?,
     role: Role.values.byName(json['role'] as String),
     tags: (json['tags'] as List).cast<String>(),
   );
-  final String id;
-  final String name;
-  final int? age;
-  final Role role;
-  final List<String> tags;
 
   Map<String, Object?> toJson() => {
     'id': id,

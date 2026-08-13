@@ -19,10 +19,19 @@ import 'package:analyzer/dart/ast/visitor.dart';
 /// Unit-scoped context: the `Schema` constants, enums, and DTO names visible in
 /// one compilation unit, plus the type resolver derived from them. Built once
 /// per unit and threaded into every [CanonicalClass].
-class CanonicalUnit {
-  CanonicalUnit._(this.schemas, this.enums, this.dtoNames, this.resolver);
+class CanonicalUnit._(
+  /// `Schema('Name', …)` initializer expressions, keyed by the DTO name.
+  final Map<String, Expression> schemas,
 
-  factory CanonicalUnit.of(CompilationUnit unit) {
+  /// Enum declarations in the unit, name → its constant/wire model.
+  final Map<String, EnumInfo> enums,
+
+  /// Every DTO name in the unit — Schema-declared or mapper-carrying — so a
+  /// field typed as one of them resolves to a `$ref`.
+  final Set<String> dtoNames,
+  final TypeResolver resolver,
+) {
+  factory of(CompilationUnit unit) {
     final schemas = schemaInitializers(unit);
     final enums = <String, EnumInfo>{};
     // A class is a DTO by signal: a Schema constant, a fromJson factory, or a
@@ -44,43 +53,19 @@ class CanonicalUnit {
       TypeResolver(enums, dtoNames),
     );
   }
-
-  /// `Schema('Name', …)` initializer expressions, keyed by the DTO name.
-  final Map<String, Expression> schemas;
-
-  /// Enum declarations in the unit, name → its constant/wire model.
-  final Map<String, EnumInfo> enums;
-
-  /// Every DTO name in the unit — Schema-declared or mapper-carrying — so a
-  /// field typed as one of them resolves to a `$ref`.
-  final Set<String> dtoNames;
-
-  final TypeResolver resolver;
 }
 
 /// One class analyzed against the canonical form: its DTO-signal field set, the
 /// mapper members, and — crucially — a single [refusalReason] that mirrors, in
 /// order, every bail condition in the fixer. Check and fix consult the same
 /// verdict, so they never diverge.
-class CanonicalClass {
-  CanonicalClass._({
-    required this.node,
-    required this.className,
-    required this.fields,
-    required this.allFinalFieldNames,
-    required this.declaredTypes,
-    required this.unresolvableField,
-    required this.genCtor,
-    required this.fromJson,
-    required this.toJson,
-  });
-
-  final ClassDeclaration node;
-  final String className;
+class CanonicalClass._({
+  required final ClassDeclaration node,
+  required final String className,
 
   /// The final, non-static, initializer-free fields whose type is inside the
   /// canonical subset — the fields the mappers and Schema must cover.
-  final List<CanonicalField> fields;
+  required final List<CanonicalField> fields,
 
   /// The names of ALL final, non-static, initializer-free fields — including
   /// any whose type is outside the canonical subset. This is the desired key
@@ -88,23 +73,26 @@ class CanonicalClass {
   /// materialize the field's type. Drift is reported against this set (a broken
   /// round-trip is a bug the user must know about even when the auto-fixer must
   /// decline); the resolvable [fields] subset is what the fixer generates from.
-  final Set<String> allFinalFieldNames;
-
-  /// True when some final, initializer-free field has a type *outside* the
-  /// canonical subset (a cross-file enum, `DateTime`, a nested collection).
-  /// The fixer refuses such a class rather than guess, so the check must too.
-  final bool unresolvableField;
+  required final Set<String> allFinalFieldNames,
 
   /// Each final, non-static, initializer-free field's *declared* type, verbatim
   /// from source (e.g. `int`, `String?`, `List<Role>`), keyed by field name. It
   /// is the syntactic ground truth the fromJson `as T` cast is checked against
   /// for type drift; a field with no written type annotation is simply absent.
-  final Map<String, String> declaredTypes;
+  required final Map<String, String> declaredTypes,
 
-  final ConstructorDeclaration? genCtor;
-  final ConstructorDeclaration? fromJson;
-  final MethodDeclaration? toJson;
+  /// True when some final, initializer-free field has a type *outside* the
+  /// canonical subset (a cross-file enum, `DateTime`, a nested collection).
+  /// The fixer refuses such a class rather than guess, so the check must too.
+  required final bool unresolvableField,
 
+  /// The generative constructor's parameter list — the body constructor's, or
+  /// the primary constructor's when the class declares its fields in the
+  /// header. Null when the class has no generative constructor at all.
+  required final FormalParameterList? genCtorParameters,
+  required final ConstructorDeclaration? fromJson,
+  required final MethodDeclaration? toJson,
+}) {
   /// The recognized DTO's field names — the desired key set for both mappers
   /// and the Schema's `properties`.
   Set<String> get fieldNames => {for (final f in fields) f.name};
@@ -128,9 +116,30 @@ class CanonicalClass {
     final allFinalFieldNames = <String>{};
     final declaredTypes = <String, String>{};
     var unresolvable = false;
-    ConstructorDeclaration? genCtor;
+    FormalParameterList? genCtorParameters;
     ConstructorDeclaration? fromJson;
     MethodDeclaration? toJson;
+
+    // A primary constructor declares the DTO's fields in the class header, so
+    // its declaring parameters (`final T x`) ARE the field set — read first, so
+    // the model's field order stays source order (header, then body).
+    final primary = node.namePart;
+    if (primary is PrimaryConstructorDeclaration) {
+      genCtorParameters = primary.formalParameters;
+      for (final p in primary.formalParameters.parameters) {
+        if (!isDeclaringField(p)) continue;
+        final name = p.name!.lexeme;
+        final declaredType = p.type?.toSource();
+        allFinalFieldNames.add(name);
+        if (declaredType != null) declaredTypes[name] = declaredType;
+        final type = unit.resolver.resolve(p.type);
+        if (type == null) {
+          unresolvable = true;
+        } else {
+          fields.add(CanonicalField(name, type));
+        }
+      }
+    }
 
     for (final member in node.body.members) {
       if (member is FieldDeclaration &&
@@ -151,7 +160,7 @@ class CanonicalClass {
         }
       } else if (member is ConstructorDeclaration) {
         if (member.factoryKeyword == null) {
-          genCtor = member;
+          genCtorParameters = member.parameters;
         } else if (member.name?.lexeme == 'fromJson') {
           fromJson = member;
         }
@@ -168,7 +177,7 @@ class CanonicalClass {
       allFinalFieldNames: allFinalFieldNames,
       declaredTypes: declaredTypes,
       unresolvableField: unresolvable,
-      genCtor: genCtor,
+      genCtorParameters: genCtorParameters,
       fromJson: fromJson,
       toJson: toJson,
     );
@@ -183,11 +192,11 @@ class CanonicalClass {
   String? get refusalReason {
     if (unresolvableField) return 'a field type outside the canonical subset';
     if (fields.isEmpty) return 'no mappable final fields';
-    if (genCtor == null) return 'no generative constructor';
+    if (genCtorParameters == null) return 'no generative constructor';
     // The generated fromJson calls the ctor with NAMED args, so every field
     // must be a named parameter; a positional ctor would be miscompiled.
     final named = {
-      for (final p in genCtor!.parameters.parameters)
+      for (final p in genCtorParameters!.parameters)
         if (p.isNamed) p.name?.lexeme,
     };
     if (!fields.every((f) => named.contains(f.name))) {
@@ -268,12 +277,11 @@ class CanonicalClass {
 
 /// A field whose fromJson cast type ([cast]) no longer matches its [declared]
 /// field type — one entry of the type-drift axis.
-class TypeDrift {
-  const TypeDrift(this.field, this.declared, this.cast);
-  final String field;
-  final String declared;
-  final String cast;
-}
+class const TypeDrift(
+  final String field,
+  final String declared,
+  final String cast,
+);
 
 /// The fromJson arguments whose `as T` cast has drifted from the field's
 /// declared type in [declaredTypes]. ONLY a named argument of the bare shape
@@ -315,17 +323,15 @@ List<TypeDrift> fromJsonTypeDrifts(
 /// call, and the fields whose toJson enum entry, use the wrong accessor for the
 /// enum's enhanced-ness. Kept per member so the fixer folds each side into
 /// fromJsonDrifted / toJsonDrifted independently.
-class EnumAccessorDrifts {
-  const EnumAccessorDrifts(this.fromJson, this.toJson);
-
+class const EnumAccessorDrifts(
   /// Field names whose fromJson uses the wrong accessor (`values.byName` on an
   /// enhanced enum, or `fromWire` on a plain one).
-  final Set<String> fromJson;
+  final Set<String> fromJson,
 
   /// Field names whose toJson uses the wrong accessor (`.name` on an enhanced
   /// enum, or `.wire` on a plain one).
-  final Set<String> toJson;
-
+  final Set<String> toJson,
+) {
   bool get isEmpty => fromJson.isEmpty && toJson.isEmpty;
 }
 
@@ -441,11 +447,7 @@ NodeList<Argument>? _fromJsonArguments(ConstructorDeclaration fromJson) {
 String _normalizeType(String type) => type.replaceAll(RegExp(r'\s+'), '');
 
 /// A resolved field: its Dart name and its place in the canonical type subset.
-class CanonicalField {
-  CanonicalField(this.name, this.type);
-  final String name;
-  final FieldType type;
-
+class CanonicalField(final String name, final FieldType type) {
   /// The field name escaped for embedding inside a generated single-quoted
   /// string literal — a name containing `$`, `'`, or `\` (all legal in a Dart
   /// identifier) must not become interpolation or an unterminated literal.
@@ -484,11 +486,10 @@ class CanonicalField {
 /// Dart side keeps whatever identifiers it derived — the two diverge exactly
 /// when a wire value is not a legal identifier, which is the whole reason the
 /// enhanced form exists.
-class EnumInfo {
-  const EnumInfo(this.constants, this.wireValues);
-  final List<String> constants;
-  final List<String>? wireValues;
-
+class const EnumInfo(
+  final List<String> constants,
+  final List<String>? wireValues,
+) {
   bool get isEnhanced => wireValues != null;
 
   /// The strings on the wire and in the Schema `enum:` — the wire values when
@@ -496,6 +497,13 @@ class EnumInfo {
   /// plain form, so drift is always compared against the same vocabulary).
   List<String> get schemaValues => wireValues ?? constants;
 }
+
+/// Whether [p] is a primary constructor's *declaring* parameter — `final T x`,
+/// which declares a final instance field — as opposed to an ordinary parameter
+/// (`T x`) that declares nothing. A `var T x` parameter declares a mutable
+/// field, which the canonical form excludes exactly as it excludes a non-final
+/// body field.
+bool isDeclaringField(FormalParameter p) => p.isFinal && p.type != null;
 
 /// Reads an [EnumDeclaration] into an [EnumInfo], recognizing the D-1 enhanced
 /// form. The enhanced form is signalled by BOTH a `final String wire;` instance
@@ -508,14 +516,23 @@ class EnumInfo {
 EnumInfo _readEnumInfo(EnumDeclaration declaration) {
   final constants = declaration.body.constants;
   final names = [for (final c in constants) c.name.lexeme];
-  final hasWireField = declaration.body.members.any(
-    (m) =>
-        m is FieldDeclaration &&
-        !m.isStatic &&
-        m.fields.isFinal &&
-        m.fields.type?.toSource() == 'String' &&
-        m.fields.variables.any((v) => v.name.lexeme == 'wire'),
-  );
+  final primary = declaration.namePart;
+  final hasWireField =
+      declaration.body.members.any(
+        (m) =>
+            m is FieldDeclaration &&
+            !m.isStatic &&
+            m.fields.isFinal &&
+            m.fields.type?.toSource() == 'String' &&
+            m.fields.variables.any((v) => v.name.lexeme == 'wire'),
+      ) ||
+      (primary is PrimaryConstructorDeclaration &&
+          primary.formalParameters.parameters.any(
+            (p) =>
+                isDeclaringField(p) &&
+                p.type?.toSource() == 'String' &&
+                p.name?.lexeme == 'wire',
+          ));
   if (!hasWireField) return EnumInfo(names, null);
   final wires = <String>[];
   for (final c in constants) {
@@ -693,9 +710,8 @@ Set<String> fromJsonKeys(ConstructorDeclaration fromJson) {
   return keys;
 }
 
-class _IndexKeyVisitor extends RecursiveAstVisitor<void> {
-  _IndexKeyVisitor(this.keys);
-  final Set<String> keys;
+class _IndexKeyVisitor(final Set<String> keys)
+    extends RecursiveAstVisitor<void> {
   @override
   void visitIndexExpression(IndexExpression node) {
     final index = node.index;
@@ -806,20 +822,14 @@ bool setEquals(Set<String> a, Set<String> b) =>
 
 // --- field / type model ---------------------------------------------------
 
-sealed class FieldType {
-  const FieldType(this.nullable);
-  final bool nullable;
-
+sealed class const FieldType(final bool nullable) {
   String fromJson(String access);
   String toJson(String name, {required bool nullable});
   Object? schemaJson();
   void collectDtoRefs(Set<String> into) {}
 }
 
-class _Prim extends FieldType {
-  const _Prim(this.dart, super.nullable);
-  final String dart;
-
+class const _Prim(final String dart, super.nullable) extends FieldType {
   @override
   String fromJson(String access) =>
       dart == 'double' ? '($access as num).toDouble()' : '$access as $dart';
@@ -836,18 +846,18 @@ class _Prim extends FieldType {
   };
 }
 
-class _EnumType extends FieldType {
-  const _EnumType(this.name, this.values, this.enhanced, super.nullable);
-  final String name;
+class const _EnumType(
+  final String name,
 
   /// The wire strings — the Schema `enum:` list and what fromWire matches on.
-  final List<String>? values;
+  final List<String>? values,
 
   /// A D-1 enhanced (wire-mapped) enum, whose constant names are not the wire
   /// strings, so the mappers route through `fromWire`/`.wire` instead of the
   /// name-based `values.byName`/`.name`.
-  final bool enhanced;
-
+  final bool enhanced,
+  super.nullable,
+) extends FieldType {
   @override
   String fromJson(String access) => enhanced
       ? '$name.fromWire($access as String)'
@@ -865,10 +875,7 @@ class _EnumType extends FieldType {
   };
 }
 
-class _DtoType extends FieldType {
-  const _DtoType(this.name, super.nullable);
-  final String name;
-
+class const _DtoType(final String name, super.nullable) extends FieldType {
   @override
   String fromJson(String access) =>
       '$name.fromJson($access as Map<String, Object?>)';
@@ -881,10 +888,7 @@ class _DtoType extends FieldType {
   void collectDtoRefs(Set<String> into) => into.add(name);
 }
 
-class _ListType extends FieldType {
-  const _ListType(this.item, super.nullable);
-  final FieldType item;
-
+class const _ListType(final FieldType item, super.nullable) extends FieldType {
   @override
   String fromJson(String access) => switch (item) {
     _Prim(dart: 'double') =>
@@ -916,10 +920,7 @@ class _ListType extends FieldType {
   void collectDtoRefs(Set<String> into) => item.collectDtoRefs(into);
 }
 
-class _MapType extends FieldType {
-  const _MapType(this.value, super.nullable);
-  final FieldType value;
-
+class const _MapType(final FieldType value, super.nullable) extends FieldType {
   @override
   String fromJson(String access) => switch (value) {
     _Prim(dart: 'double') =>
@@ -954,11 +955,10 @@ class _MapType extends FieldType {
   void collectDtoRefs(Set<String> into) => value.collectDtoRefs(into);
 }
 
-class TypeResolver {
-  TypeResolver(this.enums, this.dtoNames);
-  final Map<String, EnumInfo> enums;
-  final Set<String> dtoNames;
-
+class TypeResolver(
+  final Map<String, EnumInfo> enums,
+  final Set<String> dtoNames,
+) {
   /// Resolves a field's type within the canonical subset, or null when it can't
   /// be resolved from this file (a cross-file enum, or a non-canonical type).
   FieldType? resolve(TypeAnnotation? annotation) =>

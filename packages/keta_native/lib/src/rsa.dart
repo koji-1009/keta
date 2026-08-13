@@ -10,9 +10,8 @@ import 'pkey.dart';
 /// Construct one from JWK-shaped components with [RsaPublicKey.fromComponents].
 /// The underlying native key is freed automatically when this object is
 /// garbage-collected; there is no `close()` to call.
-final class RsaPublicKey implements Finalizable {
-  RsaPublicKey._(this._pkey);
-
+final class RsaPublicKey._(final Pointer<EVP_PKEY> _pkey)
+    implements Finalizable {
   /// Builds a public key from big-endian, unsigned modulus ([modulus], JWK `n`)
   /// and exponent ([exponent], JWK `e`) bytes.
   ///
@@ -20,7 +19,7 @@ final class RsaPublicKey implements Finalizable {
   /// components do not form a valid RSA public key. As a fast, explicit guard,
   /// an empty modulus or an all-zero exponent is rejected before BoringSSL is
   /// consulted.
-  factory RsaPublicKey.fromComponents(Uint8List modulus, Uint8List exponent) {
+  factory fromComponents(Uint8List modulus, Uint8List exponent) {
     if (modulus.isEmpty) {
       throw ArgumentError.value(modulus, 'modulus', 'must be non-empty');
     }
@@ -32,8 +31,6 @@ final class RsaPublicKey implements Finalizable {
     pkeyFinalizer.attach(key, pkey.cast(), detach: key);
     return key;
   }
-
-  final Pointer<EVP_PKEY> _pkey;
 
   /// Verifies an `RS256` signature: RSASSA-PKCS1-v1_5 over SHA-256 of
   /// [message]. Returns `true` iff [signature] is valid; never throws on a

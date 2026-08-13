@@ -509,12 +509,11 @@ List<String> _unionVary(List<String> existing, List<String> additions) {
 }
 
 /// A parsed W3C `traceparent` header.
-class TraceContext {
-  const TraceContext(this.traceId, this.parentId, this.flags);
-  final String traceId;
-  final String parentId;
-  final int flags;
-
+class const TraceContext(
+  final String traceId,
+  final String parentId,
+  final int flags,
+) {
   /// Parses `version-traceId-parentId-flags` (W3C Trace Context §3.2), returning
   /// null on *any* violation so the caller treats a bad header as absent — never
   /// as an error. A garbage header must never surface as a 500; and since

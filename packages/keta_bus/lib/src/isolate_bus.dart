@@ -48,15 +48,15 @@ import 'local_delivery.dart';
 /// ships no keepalive/liveness protocol; graceful [close] is the supported way
 /// to detach, and it is what `serve`'s orderly shutdown uses.
 abstract class IsolateBus implements Bus {
-  IsolateBus._();
+  new _();
 
   /// Creates the hub in the current (main) isolate. Read [connectPort] and hand
   /// it to each worker isolate.
-  factory IsolateBus.hub() = _HubBus;
+  factory hub() = _HubBus;
 
   /// Attaches the current isolate to the hub reachable through [connectPort]
   /// (the value read from [IsolateBus.hub]'s [connectPort] in the main isolate).
-  factory IsolateBus.connect(SendPort connectPort) = _WorkerBus;
+  factory connect(SendPort connectPort) = _WorkerBus;
 
   /// The [SendPort] a worker passes to [IsolateBus.connect]. Available only on
   /// the hub; a connection has no port to hand out and throws [StateError].
@@ -66,7 +66,7 @@ abstract class IsolateBus implements Bus {
 /// Fields and logic shared by both roles: the in-isolate delivery core, the
 /// closed flag, and the `subscribe`/validation contract.
 abstract class _IsolateBusBase extends IsolateBus {
-  _IsolateBusBase() : super._();
+  new() : super._();
 
   final LocalDelivery _delivery = LocalDelivery();
   bool _closed = false;
@@ -88,7 +88,7 @@ abstract class _IsolateBusBase extends IsolateBus {
 /// The hub side: owns the inbox that connections attach/publish to, and fans
 /// every message out to local subscribers plus every connection.
 final class _HubBus extends _IsolateBusBase {
-  _HubBus() {
+  new() {
     _inboxSub = _inbox.listen(_onMessage);
   }
 
@@ -146,13 +146,12 @@ final class _HubBus extends _IsolateBusBase {
 /// The connection side: publishes go to the hub (which echoes them back so this
 /// isolate's own subscribers see them too), and messages fanned out by the hub
 /// are delivered locally.
-final class _WorkerBus extends _IsolateBusBase {
-  _WorkerBus(this._hub) {
+final class _WorkerBus(final SendPort _hub) extends _IsolateBusBase {
+  this {
     _fromHubSub = _fromHub.listen(_onMessage);
     _hub.send(('attach', _fromHub.sendPort));
   }
 
-  final SendPort _hub;
   final ReceivePort _fromHub = ReceivePort();
   late final StreamSubscription<Object?> _fromHubSub;
 

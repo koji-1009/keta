@@ -53,10 +53,8 @@ List<Diagnostic> txOrderDiagnosticsUnit(
   return diagnostics;
 }
 
-class _CascadeVisitor extends RecursiveAstVisitor<void> {
-  _CascadeVisitor(this.report);
-  final void Function(int txOffset, int txLength) report;
-
+class _CascadeVisitor(final void Function(int txOffset, int txLength) report)
+    extends RecursiveAstVisitor<void> {
   @override
   void visitCascadeExpression(CascadeExpression node) {
     int? recoverOffset;

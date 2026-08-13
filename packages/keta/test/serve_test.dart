@@ -9,10 +9,7 @@ import 'dart:io';
 import 'package:keta/keta.dart';
 import 'package:test/test.dart';
 
-class Env implements HasLog, Disposable {
-  Env(this.log);
-  @override
-  final Log log;
+class Env(@override final Log log) implements HasLog, Disposable {
   bool closed = false;
 
   @override
@@ -87,11 +84,7 @@ void main() {
   });
 }
 
-class _RefusesToClose implements HasLog, Disposable {
-  _RefusesToClose(this.log);
-  @override
-  final Log log;
-
+class _RefusesToClose(@override final Log log) implements HasLog, Disposable {
   @override
   Future<void> close() async => throw StateError('pool drain failed');
 }

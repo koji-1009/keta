@@ -116,16 +116,13 @@ class Dto {
       expect(r.stdout, contains('keta_tx_outside_recover'));
     });
 
-    test(
-      'a finding carries the same stable id whether the file is addressed '
-      'absolutely (as the analyzer plugin supplies it) or relatively (as a '
-      'user invokes the CLI) — the item-1 portability guarantee, end to end',
-      () {
-        File(
-          p.join(dir.path, 'pubspec.yaml'),
-        ).writeAsStringSync('name: fixture\n');
-        const rel = 'lib/foo.dart';
-        write(rel, '''
+    test('a finding carries the same stable id whether the file is addressed '
+        'absolutely (as the analyzer plugin supplies it) or relatively (as a '
+        'user invokes the CLI) — the item-1 portability guarantee, end to end', () {
+      File(p.join(dir.path, 'pubspec.yaml'))
+          .writeAsStringSync('name: fixture\n');
+      const rel = 'lib/foo.dart';
+      write(rel, '''
 class Point {
   final int x;
   final int y;
@@ -135,28 +132,27 @@ class Point {
   Map<String, Object?> toJson() => {'x': x};
 }
 ''');
-        final abs = p.join(dir.path, rel);
-        // Run the CLI from INSIDE the fixture package both ways. The child
-        // process's own cwd resolves the relative path; the test process's cwd is
-        // never touched.
-        final relRun = Process.runSync(_dart, [
-          _script('check.dart'),
-          'canonical',
-          rel,
-        ], workingDirectory: dir.path);
-        final absRun = Process.runSync(_dart, [
-          _script('check.dart'),
-          'canonical',
-          abs,
-        ], workingDirectory: dir.path);
-        expect(relRun.exitCode, 1);
-        expect(absRun.exitCode, 1);
-        final relId = _idOf(relRun.stdout as String);
-        final absId = _idOf(absRun.stdout as String);
-        expect(relId, isNotNull);
-        expect(relId, absId);
-      },
-    );
+      final abs = p.join(dir.path, rel);
+      // Run the CLI from INSIDE the fixture package both ways. The child
+      // process's own cwd resolves the relative path; the test process's cwd is
+      // never touched.
+      final relRun = Process.runSync(_dart, [
+        _script('check.dart'),
+        'canonical',
+        rel,
+      ], workingDirectory: dir.path);
+      final absRun = Process.runSync(_dart, [
+        _script('check.dart'),
+        'canonical',
+        abs,
+      ], workingDirectory: dir.path);
+      expect(relRun.exitCode, 1);
+      expect(absRun.exitCode, 1);
+      final relId = _idOf(relRun.stdout as String);
+      final absId = _idOf(absRun.stdout as String);
+      expect(relId, isNotNull);
+      expect(relId, absId);
+    });
   });
 
   group('fix', () {

@@ -23,24 +23,29 @@ List<String> _checkedTags(List<String> tags) {
   return tags;
 }
 
-class UserDto {
-  const UserDto({
-    required this.id,
-    required this.name,
-    this.age,
-    required this.role,
-    required this.tags,
-    this.active,
-    this.balance,
-    this.createdAt,
-  });
+class const UserDto({
+  required final String id,
+  required final String name,
+  final int? age,
+  required final Role role,
+  required final List<String> tags,
 
+  /// Whether the account is enabled. Nullable in the DTO because a client may
+  /// omit it on create; the column carries the default.
+  final bool? active,
+
+  /// An exact decimal, as its digits. Never a `double`: see [UserDto.fromRow].
+  final String? balance,
+
+  /// ISO 8601, server-set at creation.
+  final String? createdAt,
+}) {
   // Kept as the canonical `=> UserDto(field: json['key'] as T, ...)` shape so
   // keta_lints' canonical checker still recognizes and round-trips it — the tag
   // validation rides in through the `tags:` argument's helper rather than a
   // hand-written block body, which would make the factory "hand-modified" and
   // silently disable the drift check (and the drift-demo test).
-  factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
+  factory fromJson(Map<String, Object?> json) => UserDto(
     id: json['id'] as String,
     name: json['name'] as String,
     age: json['age'] as int?,
@@ -65,7 +70,7 @@ class UserDto {
   /// is not one, since SQLite validates nothing here. A plain `as String?` on
   /// each would pass every SQLite test in this example and go wrong against
   /// PostgreSQL.
-  factory UserDto.fromRow(Map<String, Object?> row) {
+  factory fromRow(Map<String, Object?> row) {
     final tags = row['tags'] as String? ?? '';
     return UserDto(
       id: row['id'] as String,
@@ -78,21 +83,6 @@ class UserDto {
       createdAt: row.tryTimestampAt('created_at'),
     );
   }
-  final String id;
-  final String name;
-  final int? age;
-  final Role role;
-  final List<String> tags;
-
-  /// Whether the account is enabled. Nullable in the DTO because a client may
-  /// omit it on create; the column carries the default.
-  final bool? active;
-
-  /// An exact decimal, as its digits. Never a `double`: see [UserDto.fromRow].
-  final String? balance;
-
-  /// ISO 8601, server-set at creation.
-  final String? createdAt;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -143,17 +133,16 @@ const userDtoSchema = Schema('UserDto', {
 /// convention. keta_lints does not force it — a one-way projection (only a
 /// `toJson`) is a legitimate output shape it leaves unflagged — so the mirror
 /// here is a deliberate convention, not a tooling demand.
-class UserList {
-  const UserList({required this.items, required this.total});
-
-  factory UserList.fromJson(Map<String, Object?> json) => UserList(
+class const UserList({
+  required final List<UserDto> items,
+  required final int total,
+}) {
+  factory fromJson(Map<String, Object?> json) => UserList(
     items: (json['items'] as List)
         .map((e) => UserDto.fromJson(e as Map<String, Object?>))
         .toList(),
     total: json['total'] as int,
   );
-  final List<UserDto> items;
-  final int total;
 
   Map<String, Object?> toJson() => {
     'items': [for (final u in items) u.toJson()],

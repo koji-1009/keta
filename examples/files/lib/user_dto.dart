@@ -22,21 +22,19 @@ List<String> _checkedTags(List<String> tags) {
   return tags;
 }
 
-class UserDto {
-  const UserDto({
-    required this.id,
-    required this.name,
-    this.age,
-    required this.role,
-    required this.tags,
-  });
-
+class const UserDto({
+  required final String id,
+  required final String name,
+  final int? age,
+  required final Role role,
+  required final List<String> tags,
+}) {
   // Kept as the canonical `=> UserDto(field: json['key'] as T, ...)` shape so
   // keta_lints' canonical checker still recognizes and round-trips it — the tag
   // validation rides in through the `tags:` argument's helper rather than a
   // hand-written block body, which would make the factory "hand-modified" and
   // silently disable the drift check.
-  factory UserDto.fromJson(Map<String, Object?> json) => UserDto(
+  factory fromJson(Map<String, Object?> json) => UserDto(
     id: json['id'] as String,
     name: json['name'] as String,
     age: json['age'] as int?,
@@ -46,7 +44,7 @@ class UserDto {
 
   /// Constructs from a database row, where `tags` is a comma-joined column and
   /// `age` may be absent. Numeric-origin values are converted explicitly.
-  factory UserDto.fromRow(Map<String, Object?> row) {
+  factory fromRow(Map<String, Object?> row) {
     final tags = row['tags'] as String? ?? '';
     return UserDto(
       id: row['id'] as String,
@@ -56,11 +54,6 @@ class UserDto {
       tags: tags.isEmpty ? const [] : tags.split(','),
     );
   }
-  final String id;
-  final String name;
-  final int? age;
-  final Role role;
-  final List<String> tags;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -98,17 +91,16 @@ const userDtoSchema = Schema('UserDto', {
 /// shape: the list envelope mirrors [UserDto] and round-trips by this repo's
 /// canonical convention. keta_lints does not force it — a one-way projection
 /// (only a `toJson`) is a legitimate output shape it leaves unflagged.
-class UserList {
-  const UserList({required this.items, required this.total});
-
-  factory UserList.fromJson(Map<String, Object?> json) => UserList(
+class const UserList({
+  required final List<UserDto> items,
+  required final int total,
+}) {
+  factory fromJson(Map<String, Object?> json) => UserList(
     items: (json['items'] as List)
         .map((e) => UserDto.fromJson(e as Map<String, Object?>))
         .toList(),
     total: json['total'] as int,
   );
-  final List<UserDto> items;
-  final int total;
 
   Map<String, Object?> toJson() => {
     'items': [for (final u in items) u.toJson()],

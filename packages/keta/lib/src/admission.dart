@@ -105,21 +105,27 @@ Middleware<E> rateLimit<E>({
 /// The token-bucket engine behind [rateLimit]. Public within the package (so a
 /// white-box test can inject a clock and read [bucketCount]) but never exported;
 /// user code constructs it only through the [rateLimit] factory.
-class RateLimiter<E> {
+class RateLimiter<E>({
+  /// Maps a request to its bucket key, or `null` to exempt it. See [rateLimit].
+  required final Object? Function(Context<E> c) key,
+
+  /// The burst size: the most tokens a bucket ever holds.
+  required final int capacity,
+
+  /// The time to accrue one token (the steady-state rate).
+  required final Duration refillPeriod,
+  int Function()? clock,
+  int sweepThreshold = 1024,
+}) {
   /// Builds a limiter. [clock] returns a monotonically non-decreasing time in
   /// microseconds; it defaults to a freshly started [Stopwatch] and exists as a
   /// deterministic test seam. [sweepThreshold] is the initial live-bucket count
   /// that triggers the first eviction sweep; it too is a test/tuning seam and
   /// defaults to a value no real deployment needs to touch.
-  RateLimiter({
-    required this.key,
-    required this.capacity,
-    required this.refillPeriod,
-    int Function()? clock,
-    int sweepThreshold = 1024,
-  }) : _clock = clock ?? _startedStopwatchClock(),
-       _sweepAt = sweepThreshold,
-       _sweepFloor = sweepThreshold {
+  this
+    : _clock = clock ?? _startedStopwatchClock(),
+      _sweepAt = sweepThreshold,
+      _sweepFloor = sweepThreshold {
     if (capacity < 1) {
       throw ArgumentError.value(capacity, 'capacity', 'must be >= 1');
     }
@@ -131,15 +137,6 @@ class RateLimiter<E> {
       );
     }
   }
-
-  /// Maps a request to its bucket key, or `null` to exempt it. See [rateLimit].
-  final Object? Function(Context<E> c) key;
-
-  /// The burst size: the most tokens a bucket ever holds.
-  final int capacity;
-
-  /// The time to accrue one token (the steady-state rate).
-  final Duration refillPeriod;
 
   final int Function() _clock;
   final Map<Object, _Bucket> _buckets = {};
@@ -236,15 +233,13 @@ class RateLimiter<E> {
 
 /// One key's token bucket: a fractional token count and the clock reading at
 /// which it was last refilled. Package-private mutable state.
-class _Bucket {
-  _Bucket(this.tokens, this.lastRefill);
-
+class _Bucket(
   /// Tokens available, fractional so sub-token refill accrues exactly.
-  double tokens;
+  var double tokens,
 
   /// The [RateLimiter._clock] reading (microseconds) of the last refill.
-  int lastRefill;
-}
+  var int lastRefill,
+);
 
 /// Sheds load past a concurrency ceiling: at most [maxInFlight] requests may be
 /// in flight *through this middleware* at once; a request arriving while the cap
@@ -292,17 +287,17 @@ Middleware<E> concurrencyLimit<E>({required int maxInFlight}) => ordered(
 /// The in-flight counter behind [concurrencyLimit]. Public within the package
 /// (so a white-box test can read [inFlight]) but never exported; user code
 /// constructs it only through the [concurrencyLimit] factory.
-class ConcurrencyLimiter<E> {
+class ConcurrencyLimiter<E>({
+  /// The maximum number of requests processed concurrently through this
+  /// middleware.
+  required final int maxInFlight,
+}) {
   /// Builds a load-shedder admitting at most [maxInFlight] concurrent requests.
-  ConcurrencyLimiter({required this.maxInFlight}) {
+  this {
     if (maxInFlight < 1) {
       throw ArgumentError.value(maxInFlight, 'maxInFlight', 'must be >= 1');
     }
   }
-
-  /// The maximum number of requests processed concurrently through this
-  /// middleware.
-  final int maxInFlight;
 
   int _inFlight = 0;
 

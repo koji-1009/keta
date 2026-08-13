@@ -12,25 +12,23 @@ import 'db.dart';
 /// filename is documentation for humans browsing the directory; it is not
 /// carried here — the ledger, ordering, and drift detection key on [version]
 /// and [checksum] alone.
-class Migration {
-  const Migration(this.version, this.sql, this.checksum);
-  final String version;
-  final String sql;
+class const Migration(
+  final String version,
+  final String sql,
 
   /// FNV-1a 64-bit hex of the migration file's raw bytes, recorded in the
   /// ledger when the migration is applied so a later edit to an
   /// already-applied file can be detected at boot (see [_fnv1a64Hex] for why
   /// FNV and not a cryptographic hash).
-  final String checksum;
-}
+  final String checksum,
+);
 
 /// The outcome of a migration run: the versions applied this run and those
 /// already present.
-class MigrationResult {
-  const MigrationResult(this.applied, this.alreadyApplied);
-  final List<String> applied;
-  final List<String> alreadyApplied;
-}
+class const MigrationResult(
+  final List<String> applied,
+  final List<String> alreadyApplied,
+);
 
 /// Applies pending migrations from [directory] to [db] in ascending version
 /// order, recording each in the `_keta_migrations` table so it runs at most
@@ -187,7 +185,9 @@ Future<List<Map<String, Object?>>> _readLedgerForApply(Db db) async {
     await db.writer.execute(
       'alter table _keta_migrations add column checksum text',
     );
-    return db.writer.query('select version, checksum from _keta_migrations');
+    return await db.writer.query(
+      'select version, checksum from _keta_migrations',
+    );
   }
 }
 

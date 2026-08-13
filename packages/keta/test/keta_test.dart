@@ -628,14 +628,12 @@ void main() {
 
 /// A plain (non-Keta) failure, standing in for an I/O error on the body stream.
 class _IoBoom implements Exception {
-  const _IoBoom();
+  const new();
 }
 
 /// A fake transport request whose body is an arbitrary (here, erroring) stream.
-class _StreamBodyRequest implements TransportRequest {
-  _StreamBodyRequest(this._body);
-  final Stream<List<int>> _body;
-
+class _StreamBodyRequest(final Stream<List<int>> _body)
+    implements TransportRequest {
   @override
   String get method => 'POST';
   @override

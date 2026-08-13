@@ -297,44 +297,41 @@ void main() {
       );
     });
 
-    test(
-      'a killed connection does not break the hub (death not detected)',
-      () async {
-        final hub = IsolateBus.hub();
-        addTearDown(hub.close);
+    test('a killed connection does not break the hub (death not detected)', () async {
+      final hub = IsolateBus.hub();
+      addTearDown(hub.close);
 
-        final report = ReceivePort();
-        final ready = Completer<void>();
-        report.listen((msg) {
-          if (msg == 'ready' && !ready.isCompleted) ready.complete();
-        });
+      final report = ReceivePort();
+      final ready = Completer<void>();
+      report.listen((msg) {
+        if (msg == 'ready' && !ready.isCompleted) ready.complete();
+      });
 
-        final isolate = await Isolate.spawn(_readyWorker, (
-          hub.connectPort,
-          report.sendPort,
-        ));
-        addTearDown(report.close);
+      final isolate = await Isolate.spawn(_readyWorker, (
+        hub.connectPort,
+        report.sendPort,
+      ));
+      addTearDown(report.close);
 
-        await ready.future.timeout(const Duration(seconds: 20));
+      await ready.future.timeout(const Duration(seconds: 20));
 
-        // Kill abruptly: the worker's SendPort lingers in the hub's set, and Dart
-        // surfaces no error for sending to it — so the hub keeps working.
-        isolate.kill(priority: Isolate.immediate);
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Kill abruptly: the worker's SendPort lingers in the hub's set, and Dart
+      // surfaces no error for sending to it — so the hub keeps working.
+      isolate.kill(priority: Isolate.immediate);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-        final mainReceived = <Object?>[];
-        final sub = hub.subscribe('events').listen(mainReceived.add);
-        addTearDown(sub.cancel);
-        await pumpEventQueue();
+      final mainReceived = <Object?>[];
+      final sub = hub.subscribe('events').listen(mainReceived.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
 
-        expect(() => hub.publish('events', 'after-death'), returnsNormally);
-        await _until(
-          () => mainReceived.contains('after-death'),
-          const Duration(seconds: 10),
-        );
-        expect(mainReceived, ['after-death']);
-      },
-    );
+      expect(() => hub.publish('events', 'after-death'), returnsNormally);
+      await _until(
+        () => mainReceived.contains('after-death'),
+        const Duration(seconds: 10),
+      );
+      expect(mainReceived, ['after-death']);
+    });
   });
 }
 

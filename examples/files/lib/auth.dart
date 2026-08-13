@@ -1,4 +1,5 @@
 import 'package:keta/keta.dart';
+
 import 'env.dart';
 
 /// Who the request is. A verifier puts this in the request store; handlers read
@@ -8,11 +9,7 @@ import 'env.dart';
 final principal = Key<Principal>('principal');
 
 /// The authenticated caller.
-class Principal {
-  const Principal(this.id, {this.admin = false});
-  final String id;
-  final bool admin;
-}
+class const Principal(final String id, {final bool admin = false});
 
 /// The schemes a route gets when it declares nothing.
 ///

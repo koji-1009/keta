@@ -17,8 +17,8 @@ import 'support/harness.dart';
 /// view that keeps recording into the same store (the shape a real per-request
 /// logger has: `c.log` is `env.log.withFields({reqId, route})`).
 class RecordingLog implements Log {
-  RecordingLog() : this._(const {}, []);
-  RecordingLog._(this._baked, this.lines);
+  new() : this._(const {}, []);
+  new _(this._baked, this.lines);
   final Map<String, Object?> _baked;
 
   /// One map per emitted line: `msg` plus the baked and per-call fields.
@@ -66,20 +66,17 @@ Future<Map<String, Object?>> logLineFor(
 
 void main() {
   group('accessLog honesty (item 3a)', () {
-    test(
-      'an upgrade response is logged with upgrade:true (101 declared)',
-      () async {
-        final log = RecordingLog();
-        final c = testContext(Env(log));
-        final line = await logLineFor(c, log, Response.upgrade((_) {}));
-        // 101 is the *declared* status; the wire may still answer 426. The marker
-        // says "the handler asked to switch", not "the switch happened".
-        expect(line['status'], 101);
-        expect(line['upgrade'], isTrue);
-        // A declared-status upgrade is not a streamed body.
-        expect(line.containsKey('streaming'), isFalse);
-      },
-    );
+    test('an upgrade response is logged with upgrade:true (101 declared)', () async {
+      final log = RecordingLog();
+      final c = testContext(Env(log));
+      final line = await logLineFor(c, log, Response.upgrade((_) {}));
+      // 101 is the *declared* status; the wire may still answer 426. The marker
+      // says "the handler asked to switch", not "the switch happened".
+      expect(line['status'], 101);
+      expect(line['upgrade'], isTrue);
+      // A declared-status upgrade is not a streamed body.
+      expect(line.containsKey('streaming'), isFalse);
+    });
 
     test(
       'a streamed body is logged with streaming:true (ms is TTFB)',
