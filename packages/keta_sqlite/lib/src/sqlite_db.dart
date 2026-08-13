@@ -19,9 +19,9 @@ import 'package:sqlite3/sqlite3.dart';
 /// **Stated constraint**: sqlite3 calls are synchronous FFI on the serving
 /// isolate. A slow query blocks that isolate's entire event loop — every other
 /// request it is handling, DB-bound or not, stalls until the call returns.
-/// This is a property of embedding SQLite in-process, not a bug; the
-/// mitigations are `serve(isolates: n)` (so one slow query does not stall the
-/// whole process) and keeping queries indexed and small. [SqliteDb.open]'s
+/// This is a property of embedding SQLite in-process; the mitigations are
+/// `serve(isolates: n)` (so one slow query does not stall the whole process)
+/// and keeping queries indexed and small. [SqliteDb.open]'s
 /// [lockTimeout] doc states this constraint's sharpest edge: the
 /// `busy_timeout` PRAGMA's own retry is one such "slow query".
 class SqliteDb._(
@@ -345,9 +345,8 @@ const _uniquenessViolations = {
 /// Without this the app has to catch `SqliteException` and match code 1555 to
 /// answer 409 — which means importing package:sqlite3 into a handler, coupling
 /// it to this engine, and breaking the moment the same app runs on another one.
-/// The Db contract is driver-agnostic, so the driver's vocabulary stops here.
-/// This is the same move the lock timeout above already makes with [Unavailable];
-/// only uniqueness had been left untranslated.
+/// The Db contract is driver-agnostic, so the driver's vocabulary stops here —
+/// the same move the lock timeout above makes with [Unavailable].
 T _translating<T>(T Function() action) {
   try {
     return action();

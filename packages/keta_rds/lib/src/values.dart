@@ -15,9 +15,8 @@ Map<String, Object?> mapRow(ResultRow row) {
   final columns = row.schema.columns;
   final map = <String, Object?>{};
   for (final (i, col) in columns.indexed) {
-    // Mirror ResultRow.toColumnMap's naming of unnamed columns ('[$i]') so this
-    // schema-aware path stays a drop-in for the old toColumnMap()-based one; a
-    // later duplicate name overrides an earlier one, exactly as before.
+    // Mirror ResultRow.toColumnMap's naming of unnamed columns ('[$i]'); a
+    // later duplicate name overrides an earlier one, as it does there.
     map[col.columnName ?? '[$i]'] = mapValue(row[i], col.type);
   }
   return map;

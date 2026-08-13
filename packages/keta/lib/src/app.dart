@@ -288,14 +288,8 @@ class App<E> {
   /// isolate, so each worker constructs its own; it is how a configured
   /// transport reaches `serve(isolates: n)` at all.
   ///
-  /// That distinction is what makes TLS and `idleTimeout` usable in production.
-  /// `H1Transport` has carried `securityContext` and `idleTimeout` since they
-  /// were introduced, but the only way to pass either was [transport], which
-  /// `isolates > 1` refused — so the knob that bounds a slow-header hold was
-  /// unreachable in exactly the multi-isolate configuration a real deployment
-  /// runs, while the transport's own doc said a TLS listener shares the accept
-  /// queue across isolates "exactly as the plaintext one does". It does; there
-  /// was simply no way to ask for it. With a factory there is:
+  /// A factory is therefore the only way TLS and `idleTimeout` reach a
+  /// multi-isolate server:
   ///
   /// ```dart
   /// Transport tls() => H1Transport(
@@ -346,12 +340,11 @@ class App<E> {
     final Router<E> router;
     final TransportServer server;
     try {
-      // Both of these fail on ordinary misconfiguration — `compile` on a route
-      // conflict or a middleware-order violation (the documented boot-time
-      // fail-fast), `bind` on a port already in use. Neither used to release
-      // anything, so the very errors the framework raises to stop a bad start
-      // left the env open AND left `fallbackLog`'s periodic timer pinning the
-      // isolate: a process that caught the error to exit cleanly hung instead.
+      // Both fail on ordinary misconfiguration — `compile` on a route conflict
+      // or a middleware-order violation, `bind` on a port already in use — so
+      // the teardown below is load-bearing: without it the env stays open and
+      // `fallbackLog`'s periodic timer pins the isolate, and a process that
+      // caught the error to exit cleanly hangs instead.
       router = compile(env, maxBodyBytes: maxBodyBytes, log: fallbackLog);
       final t =
           transport ??
@@ -534,14 +527,9 @@ class Router<E>._(
     } on FormatException {
       // `uri.pathSegments` decodes lazily, so a percent-escape that is not
       // valid UTF-8 (`/%c0%af`) throws here — before the guard below, and
-      // before any middleware exists to see it. It used to escape dispatch
-      // entirely: `recover()` never ran, the core's own last-resort fallback
-      // never ran, and the request that a client got wrong came back as a 500
-      // with a stack trace on every hit, which is both the wrong status and a
-      // free way to flood the log ring with attacker-chosen noise.
-      //
-      // Answered here rather than inside the guard because there is no Context
-      // yet — building one needs the segments this just failed to produce.
+      // before any middleware exists to see it. Answered here rather than
+      // inside the guard because there is no Context yet: building one needs
+      // the segments this just failed to produce.
       return Response.json(const {
         'error': 'malformed percent-encoding in request path',
       }, status: 400);
@@ -572,9 +560,9 @@ class Router<E>._(
             method: request.method,
             uri: request.uri,
             headers: request.headers,
-            // Lazy: dispatch no longer eagerly reads the peer address (measured
-            // 10.6% of hot-path CPU on the H1 syscall). The resolver runs at most
-            // once, on first `c.remoteAddress`, and RequestCtx caches the result.
+            // Lazy so dispatch never pays the peer-address syscall unasked: the
+            // resolver runs at most once, on first `c.remoteAddress`, and
+            // RequestCtx caches the result.
             remoteAddress: () => request.remoteAddress,
             params: params,
             orderedCaptures: captured,
@@ -635,14 +623,9 @@ class Router<E>._(
 
   /// A 128-bit request id as 32 lowercase hex chars.
   ///
-  /// [Random.secure] stays: a request id feeds the log/trace correlation
-  /// dimension, and an id an attacker can predict or forge lets them collide or
-  /// spoof another request's series — the unpredictability judgment is recorded,
-  /// not weakened here. What got cheaper: four 32-bit CSPRNG draws instead of
-  /// sixteen single-byte ones, and one [Uint8List] rendered to hex in a single
-  /// pass (a per-word nibble walk) instead of a per-byte
-  /// `toRadixString`/`padLeft`/`join`. The output is byte-identical in shape: 32
-  /// lowercase hex chars carrying the same 128 uniformly-random bits.
+  /// [Random.secure] is required, not incidental: a request id feeds the
+  /// log/trace correlation dimension, and an id an attacker can predict or
+  /// forge lets them collide with or spoof another request's series.
   String _reqId() {
     const hex = '0123456789abcdef';
     final out = Uint8List(32);
@@ -688,9 +671,8 @@ class Router<E>._(
   if (literal != null) {
     final (route, methods) = _walk(literal, segments, i + 1, method, captured);
     if (route != null) return (route, methods);
-    // `allowed` is provably null on this first assignment (the capture branch
-    // below is the only other writer, and it runs after), so there is nothing to
-    // spread in — assign the branch's methods directly.
+    // `allowed` is provably null here — the capture branch below is the only
+    // other writer and it runs after — so nothing needs spreading in.
     if (methods != null) allowed = {...methods};
   }
   final capture = node.capture;
@@ -723,15 +705,12 @@ abstract interface class Server {
 ///
 /// Every path that stops owning the pair runs this: a startup that failed
 /// before binding, a failed worker spawn, either `Server.shutdown`, and a
-/// worker's own exit. It is a function rather than three lines copied five
-/// times because copied it was, and two of the copies were simply missing —
-/// silently, since the symptom is a process that will not exit rather than an
-/// error anyone sees.
+/// worker's own exit. Skipping it anywhere leaves a process that will not exit
+/// rather than an error anyone sees.
 ///
-/// The `finally` is the second half. `env.close()` can throw (a pool that fails
-/// to drain), and a throw used to skip the flush and the timer dispose that
-/// follow it — losing the log lines that explain the failure, at the one moment
-/// they are worth most, and hanging the process on the way out.
+/// The `finally` is load-bearing: `env.close()` can throw (a pool that fails to
+/// drain), and the flush and timer dispose must still run, or the log lines
+/// that explain the failure are lost and the process hangs on the way out.
 Future<void> _teardown<E>(E env, Log log) async {
   try {
     if (env is Disposable) await (env as Disposable).close();
@@ -757,12 +736,11 @@ class _Server<E>(
 /// port over which the isolate reports its own death.
 class _Worker(
   /// Carries the isolate's `onError` payload and its `onExit` signal. Held open
-  /// for the worker's whole life: closing it right after a successful spawn —
-  /// which is what used to happen — throws away the only channel on which a
-  /// worker can say it died. A `shared: true` listener that dies leaves the
-  /// accept set silently, so the process kept serving on N-1 isolates with
-  /// nothing logged, and shutdown then spent the full grace waiting for an ack
-  /// from an isolate that no longer existed.
+  /// for the worker's whole life: it is the only channel on which a worker can
+  /// say it died, and a `shared: true` listener leaves the accept set silently,
+  /// so without it the process serves on N-1 isolates with nothing logged and
+  /// shutdown spends the full grace awaiting an ack from an isolate that is
+  /// gone.
   final ReceivePort events,
 ) {
   late final Isolate isolate;

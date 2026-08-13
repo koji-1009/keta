@@ -281,8 +281,8 @@ class TestServer._(
   /// literal request line, headers, blank line, and body.
   ///
   /// Returns the empty string when the server answers nothing before [timeout]
-  /// — which is itself an assertable outcome, since "the request hung and held
-  /// its slot" is exactly the failure a truncated upload used to cause.
+  /// — itself an assertable outcome, since "the request hung and held its slot"
+  /// is the failure a truncated upload causes.
   Future<String> sendRaw(
     String request, {
     Duration timeout = const Duration(seconds: 2),

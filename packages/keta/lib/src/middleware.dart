@@ -123,13 +123,8 @@ Middleware<E> cors<E>({
 }) {
   final origins = allowOrigins.toSet();
   final wildcard = origins.contains('*');
-  // The Fetch spec forbids `Access-Control-Allow-Origin: *` together with
-  // `Access-Control-Allow-Credentials: true`, and every browser rejects the
-  // pair: a credentialed request must be answered with a specifically echoed
-  // origin, never the wildcard. Emitting it anyway is an authoring defect that
-  // only ever surfaces in a browser console, so — like every other authoring
-  // defect in this framework — it is refused loudly at construction rather than
-  // silently written onto the wire.
+  // An authoring defect that would otherwise surface only in a browser console,
+  // so it is refused at construction rather than written onto the wire.
   if (wildcard && allowCredentials) {
     throw ArgumentError.value(
       allowOrigins,
@@ -292,12 +287,9 @@ Middleware<E> etag<E>() => ordered((Context<E> c, Handler<E> next) {
     if (body is! String && body is! List<int>) return r;
     if (r.status != 200) return r;
 
-    // The hash input is pinned to a concrete Uint8List: the FNV loop over a
-    // static Uint8List compiles to unboxed byte loads under AOT (~30% faster
-    // than dispatching through the List<int> interface — measured). A String
-    // body encodes to one (utf8.encode), a handler-supplied Uint8List passes
-    // through, and the rare boxed List<int> pays one copy so the loop still
-    // runs typed.
+    // The hash input is pinned to a concrete Uint8List so the FNV loop compiles
+    // to unboxed byte loads under AOT instead of dispatching through the
+    // List<int> interface; the rare boxed List<int> pays one copy for it.
     final Uint8List bytes = body is String
         ? utf8.encode(body)
         : body is Uint8List
@@ -442,14 +434,9 @@ Middleware<E> gzip<E>({int threshold = 1024}) => ordered((
 /// uncompressed, because gzipping an incompressible body spends CPU for a body
 /// that does not shrink (often grows).
 ///
-/// The default for an unknown *or absent* content type is deliberately "do not
-/// compress". The gate exists precisely to stop wasting CPU on bodies that do
-/// not benefit; an unrecognized type is as likely to be opaque binary as text,
-/// and every response keta itself compresses (JSON, plain text, SVG, XML, JS)
-/// carries a `Content-Type` this allowlist names. The trade is asymmetric:
-/// failing to compress the rare unlabelled text type costs a little bandwidth,
-/// whereas compressing every opaque blob costs CPU on *every* such response —
-/// so the conservative default is an allowlist, not a denylist.
+/// An unknown *or absent* content type is not compressed: every response keta
+/// itself compresses carries a `Content-Type` this allowlist names, so the
+/// unlabelled case is as likely to be opaque binary as text.
 ///
 /// The compressible table, kept deliberately small:
 /// - `text/*`                     — HTML, CSS, plain, CSV, calendar, …
@@ -516,12 +503,12 @@ class const TraceContext(
 ) {
   /// Parses `version-traceId-parentId-flags` (W3C Trace Context §3.2), returning
   /// null on *any* violation so the caller treats a bad header as absent — never
-  /// as an error. A garbage header must never surface as a 500; and since
-  /// batching landed, a single malformed id that slipped through into an OTLP
-  /// batch is enough for a strict collector to reject the whole batch, not just
-  /// the one span, so this is deliberately strict rather than best-effort.
+  /// as an error. A garbage header must never surface as a 500, and one
+  /// malformed id that reaches an OTLP batch is enough for a strict collector to
+  /// reject the whole batch, not just the one span — hence strict, not
+  /// best-effort.
   ///
-  /// Every field is enforced, not just the two lengths the old code checked:
+  /// Every field is enforced:
   /// - version, traceId, parentId must be *lowercase* hex of their exact widths
   ///   (2/32/16) — the header is defined in lowercase, and echoing a mixed-case
   ///   or non-hex id (e.g. 32 `g`s) back downstream is exactly what a collector

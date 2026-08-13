@@ -193,9 +193,8 @@ List<String> _encodeCacheControl(CacheControl value) {
 
 /// The content codings a client will accept, with their q-values.
 ///
-/// This is the parse `gzip()` used to carry inline. `q=0` means *refused*, not
-/// merely unpreferred, which is the part an ad hoc `contains('gzip')` check
-/// gets wrong.
+/// `q=0` means *refused*, not merely unpreferred, which is the part an ad hoc
+/// `contains('gzip')` check gets wrong.
 final class const AcceptEncoding(
   /// Coding (lower-case, `*` included) to its q-value.
   final Map<String, double> qualities,

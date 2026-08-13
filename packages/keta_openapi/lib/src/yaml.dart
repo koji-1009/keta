@@ -106,11 +106,9 @@ final RegExp _control = RegExp(r'[\x00-\x1f\x7f]');
 // Every character a double-quoted scalar must escape, in one class: the two
 // structural characters (`\` and `"`) plus the whole C0/DEL control range. The
 // replacer in [_quoteIfNeeded] maps each to its named escape (`\n`, `\r`, `\t`,
-// `\\`, `\"`) or, for a control with no named form, to `\xHH`. A single pass
-// over this class replaces the former six chained scans; it is byte-identical
-// because each source character is rewritten exactly once, so the backslash a
-// named escape introduces is never itself re-escaped (the old first-pass
-// `\`→`\\` ordering guaranteed the same thing).
+// `\\`, `\"`) or, for a control with no named form, to `\xHH`. One pass is what
+// makes it correct: each source character is rewritten exactly once, so the
+// backslash a named escape introduces is never itself re-escaped.
 final RegExp _quotedEscape = RegExp(r'[\\"\x00-\x1f\x7f]');
 
 String _quoteIfNeeded(String value) {

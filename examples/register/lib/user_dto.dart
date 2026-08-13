@@ -150,15 +150,11 @@ class const UserList({
   };
 }
 
-/// The canonical `{"items", "total"}` envelope, built by [listSchema] instead
-/// of hand-written — this used to be a `const Schema` identical in shape to
-/// what [listSchema] produces, minus one thing: [listSchema] closes the
-/// object (`additionalProperties: false`), which the hand-written version left
-/// open. Adopting the tightening rather than fighting it, since an unknown key
-/// on a list envelope was never meant to be legal here, just never checked.
-/// [listSchema] builds a new [Schema] per call rather than reading a `const`,
-/// so — unlike the constant this replaces — `userListSchema` is a `final`, and
-/// every `RouteDoc` embedding it can no longer be `const` (see lib/routes.dart).
+/// The canonical `{"items", "total"}` envelope, built by [listSchema] rather
+/// than hand-written, so the envelope is closed (`additionalProperties: false`)
+/// like every other canonical shape. [listSchema] builds a new [Schema] per call
+/// rather than reading a `const`, so `userListSchema` is a `final` and every
+/// `RouteDoc` embedding it is non-`const` too (see lib/routes.dart).
 final userListSchema = listSchema(userDtoSchema);
 
 /// One event on the `/users/events` SSE feed — the JSON `data` payload of a
