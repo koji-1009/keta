@@ -105,4 +105,51 @@ void main() {
       expect(line['detail'], 'deadlock 40P01');
     },
   );
+
+  group('the sealed set is exhaustively matchable', () {
+    // This file is a different library from package:keta's own, so it sees
+    // exactly what a user sees. The switch below carries NO wildcard: if any
+    // member of the sealed set were unnameable from here, this would not
+    // compile, which is the property StatusException was made public for.
+    //
+    // The compile is the assertion. A wildcard here would make the whole test
+    // vacuous — it would pass no matter how many members became unreachable —
+    // so it must never be added to make a future failure go away.
+    String label(KetaException e) => switch (e) {
+      BadRequest() => 'bad request',
+      Unauthorized() => 'unauthorized',
+      Forbidden() => 'forbidden',
+      NotFound() => 'not found',
+      Conflict() => 'conflict',
+      PayloadTooLarge() => 'payload too large',
+      UnprocessableEntity() => 'unprocessable',
+      NotImplementedYet() => 'not implemented',
+      Unavailable() => 'unavailable',
+      TransientFailure() => 'transient',
+      GatewayTimeout() => 'gateway timeout',
+      StatusException() => 'status ${e.status}',
+    };
+
+    test('every named subtype matches its own case', () {
+      expect(label(const BadRequest('x')), 'bad request');
+      expect(label(const NotFound('x')), 'not found');
+      expect(label(const GatewayTimeout('x')), 'gateway timeout');
+    });
+
+    test('KetaException.status lands on StatusException, not a wildcard', () {
+      const e = KetaException.status(418, "I'm a teapot");
+      expect(e, isA<StatusException>());
+      expect(label(e), 'status 418');
+      expect(e.status, 418);
+      expect(e.message, "I'm a teapot");
+    });
+
+    test('a status exception carries detail like any other', () {
+      const e = KetaException.status(429, 'slow down', 'bucket empty');
+      expect(e.detail, 'bucket empty');
+      // recover() logs the detail and withholds it from the client, exactly as
+      // it does for a named subtype.
+      expect(e.status, 429);
+    });
+  });
 }

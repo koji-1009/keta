@@ -6,9 +6,9 @@ import 'dart:convert';
 import 'upgrade.dart';
 
 /// Stateless across calls (`convert` builds its own state each time), so one
-/// instance is shared. The default 256-byte buffer is kept on purpose: measured
-/// against 1KiB/4KiB/16KiB, a larger buffer gains ~3% on an 8.9KB body while
-/// costing ~49% on a 111-byte one, which is the shape most responses have.
+/// instance is shared. The default 256-byte buffer is kept on purpose: a larger
+/// one costs far more on the small bodies most responses have than it gains on
+/// the rare large one.
 final _jsonUtf8 = JsonUtf8Encoder();
 
 /// An HTTP response in semantic terms only: status, headers, and body.
@@ -123,13 +123,10 @@ class Response {
   /// the invariant it exists to hold is structural: a middleware that only means
   /// to touch the headers ([cors]) or the body ([gzip]) must never be able to
   /// *silently* strip a semantic field it did not name. A fresh `Response(...)`
-  /// drops whatever the constructor call omits — which is exactly how an
-  /// app-wide `cors` once answered a WebSocket handshake with 101 yet never
-  /// switched, because rebuilding the response for its merged headers left
-  /// [upgrade] behind. Routing every rebuild through here makes that class of
-  /// bug impossible by construction: any field added to [Response] in future is
-  /// preserved by default, so a new rebuild site cannot omit it out of ignorance
-  /// of its existence.
+  /// drops whatever the constructor call omits — an [upgrade] rebuilt that way
+  /// answers 101 and never switches. Routing every rebuild through here keeps
+  /// any field added to [Response] in future preserved by default, so a new
+  /// rebuild site cannot omit it out of ignorance of its existence.
   ///
   /// The header map can change in two mutually-exclusive ways. [headers]
   /// *replaces* the map wholesale — the historical contract, kept because it is
@@ -235,22 +232,15 @@ class Response {
   /// Rejects header names and values a wire cannot carry, on an
   /// already-normalized header map.
   ///
-  /// This gate used to reject control characters only, on the reasoning that
-  /// they alone are the response-splitting primitive. They alone are — but the
-  /// bundled transport is stricter, and the gap between "the semantic layer
-  /// accepts it" and "the wire accepts it" was not a harmless difference of
-  /// opinion. dart:io admits only `%x21-7E` in a field value (plus HTAB) and
-  /// only a token in a name; anything else makes the response write throw, the
-  /// transport's defensive catch turns that into a bare 500 frame, and the
-  /// client receives `200 OK` with `content-length: 0`. The body vanishes with
-  /// no error visible to the handler that produced it.
-  ///
-  /// That is reachable from ordinary data: echoing a display name into a header
-  /// empties the response for every user whose name is not ASCII. Accepting a
-  /// value only to have the wire refuse it is not permissiveness, it is a
-  /// silent data-loss path, so the gate now matches what a wire will actually
-  /// carry. Callers with non-ASCII to send must encode it (RFC 8187) — which is
-  /// what they had to do anyway for the byte to arrive intact.
+  /// The gate matches what a wire will actually carry, not just the
+  /// response-splitting primitive: dart:io admits only `%x21-7E` (plus HTAB) in
+  /// a field value and only a token in a name. Anything else makes the response
+  /// write throw, the transport's defensive catch turns that into a bare 500
+  /// frame, and the client receives `200 OK` with `content-length: 0` — the body
+  /// gone, with no error visible to the handler that produced it. That is
+  /// reachable from ordinary data (a display name echoed into a header), so a
+  /// value the wire would refuse is refused here instead. Callers with
+  /// non-ASCII to send must encode it (RFC 8187).
   static void _rejectUnwritableHeaders(Map<String, List<String>> headers) {
     for (final e in headers.entries) {
       if (e.key.isEmpty || !_isToken(e.key)) {
@@ -322,28 +312,28 @@ class Response {
 /// user-facing text; [detail] is optional structured context (such as a
 /// validation violation list) that a boundary may include or withhold.
 ///
-/// A `switch` over the named subtypes is NOT exhaustive on its own.
-/// [KetaException.status] builds an arbitrary-status member whose type is
-/// deliberately not public — there is no name to write a case for — so a
-/// total `switch` needs a wildcard:
+/// Every member is nameable, so a `switch` can be exhaustive without a
+/// wildcard. [StatusException] — what [KetaException.status] builds — is the
+/// case that covers a code with no named subtype:
 ///
 /// ```dart
 /// final label = switch (e) {
 ///   BadRequest() => 'bad request',
 ///   NotFound() => 'not found',
 ///   // …the other named subtypes…
-///   _ => 'status ${e.status}',   // KetaException.status(...) lands here
+///   StatusException() => 'status ${e.status}',
 /// };
 /// ```
 ///
-/// The wildcard is not a gap to be tolerated silently: an arbitrary-status
-/// exception carries a [status] and nothing more specific to match on, which is
-/// exactly what the wildcard branch should key on.
+/// Write it that way rather than reaching for `_`. A wildcard is what makes
+/// `sealed` stop paying: it silently absorbs any subtype added later, so the
+/// compile error that is the entire point of the sealed set never reaches the
+/// code that needed to see it.
 sealed class const KetaException(final String message, [final Object? detail])
     implements Exception {
   /// An arbitrary-status exception, for a code without a named subtype.
   const factory status(int status, String message, [Object? detail]) =
-      _StatusException;
+      StatusException;
 
   int get status;
 
@@ -447,7 +437,14 @@ final class const GatewayTimeout(super.message, [super.detail])
   int get status => 504;
 }
 
-final class const _StatusException(
+/// An exception carrying a status that has no named subtype — what
+/// [KetaException.status] builds.
+///
+/// Public so a `switch` over [KetaException] can name every case and be
+/// exhaustive without a wildcard. It adds nothing over [KetaException]: the
+/// [status] it was built with, and the inherited message/detail. Matching it is
+/// how a total switch says "any other status".
+final class const StatusException(
   @override final int status,
   super.message, [
   super.detail,
